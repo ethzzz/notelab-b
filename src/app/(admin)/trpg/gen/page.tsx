@@ -1,7 +1,6 @@
 "use client"
 // 剧本生成（antd 版）：轮询任务交互与 myapp 一致；新增「发布/取消发布」（B/C 拆分阶段2接口）
 import { useCallback, useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
 import { Button, Table, Tag, Space } from "antd"
 import { api, apiJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
@@ -11,12 +10,11 @@ import ScenarioPreview from "@/components/ScenarioPreview"
 import { confirmDialog } from "@/components/ui/confirm"
 import { FormField, TextInput, TextArea, FormActions } from "@/components/ui/form"
 import { TRPG_STYLES, TRPG_SCALES, randomSetup, type ScenarioRow, type ScenarioData } from "@/lib/trpg"
-import { Dices, Eye, Play, Plus, Trash2 } from "lucide-react"
+import { Dices, Eye, Plus, Trash2 } from "lucide-react"
 
 const EMPTY_FORM = { title: "", background: "", characters: "", places: "", event: "", style: "悬疑推理", scale: "中" }
 
 export default function TrpgGenPage() {
-  const router = useRouter()
   const [rows, setRows] = useState<ScenarioRow[]>([])
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
@@ -133,7 +131,6 @@ export default function TrpgGenPage() {
       render: (_: any, s: ScenarioRow) => (
         <Space size={4} wrap>
           <Button size="small" icon={<Eye size={12} />} onClick={() => view(s)}>预览</Button>
-          <Button size="small" type="primary" icon={<Play size={12} />} onClick={() => router.push(`/trpg/play?sid=${s.id}`)}>开玩</Button>
           <Button size="small" loading={pubBusyId === s.id}
             type={s.published ? "default" : "primary"} ghost={!!s.published}
             onClick={() => togglePublish(s)}>
@@ -200,7 +197,6 @@ export default function TrpgGenPage() {
           <ScenarioPreview scenario={viewing.scenario} />
           <div className="flex justify-end gap-2 mt-4">
             <Button onClick={() => setViewing(null)}>关闭</Button>
-            <Button type="primary" icon={<Play size={13} />} onClick={() => router.push(`/trpg/play?sid=${viewing.id}`)}>开始跑团</Button>
           </div>
         </Modal>
       )}
