@@ -1,15 +1,20 @@
 import Link from "next/link"
+import { Card, Button } from "antd"
 
+// 注册入口已关闭的静态说明页（保持与 myapp 一致的可访问性），朴素管理台风
 export default function RegisterPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-950 via-indigo-900 to-violet-900 p-4 relative overflow-hidden">
-      <div className="absolute -top-32 -right-24 h-96 w-96 rounded-full bg-violet-500/25 blur-3xl" />
-      <div className="relative bg-white/95 backdrop-blur rounded-3xl shadow-2xl shadow-indigo-950/40 p-8 w-full max-w-sm flex flex-col gap-3 text-center items-center">
-        <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-3xl shadow-lg shadow-indigo-500/30">🧪</span>
-        <h1 className="text-xl font-bold">注册入口已关闭</h1>
-        <p className="text-sm text-zinc-500">本系统不再开放自助注册。如需账号，请联系管理员在「权限管理」中创建。</p>
-        <Link href="/login" className="btn-primary w-full mt-2">返回登录</Link>
-      </div>
+    <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5] p-4">
+      <Card className="!w-full max-w-sm text-center shadow-md" styles={{ body: { padding: 28 } }}>
+        <span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-indigo-500 text-2xl text-white">🧪</span>
+        <h1 className="text-lg font-bold text-zinc-800 mt-3 mb-1">NoteLab 管理后台</h1>
+        <p className="text-sm text-zinc-500 leading-relaxed">
+          注册入口已关闭，账号由管理员在「账户管理」中统一创建。如已有账号，请直接登录。
+        </p>
+        <Link href="/login" className="block mt-4">
+          <Button type="primary" block>返回登录</Button>
+        </Link>
+      </Card>
     </div>
   )
 }

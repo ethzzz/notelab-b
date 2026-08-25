@@ -1,8 +1,8 @@
 "use client"
-// B 端登录页（antd 版）：逻辑与 myapp 一致 —— 进页先查登录态、登录成功回跳被拦截路由（菜单权限内）
+// B 端登录页（传统管理后台风）：逻辑与 myapp 一致 —— 进页先查登录态、登录成功回跳被拦截路由（菜单权限内）
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Form, Input, Button, Spin } from "antd"
+import { Form, Input, Button, Spin, Card } from "antd"
 import { User, Lock } from "lucide-react"
 import { apiJson, postJson, takeRedirectPath } from "@/lib/api"
 import { toast } from "@/lib/toast"
@@ -57,24 +57,22 @@ export default function LoginPage() {
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-950 via-indigo-900 to-violet-900 p-4">
-        <div className="flex flex-col items-center gap-3 text-indigo-200">
+      <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5]">
+        <div className="flex flex-col items-center gap-3 text-zinc-500">
           <Spin size="large" />
-          <span className="text-sm font-medium">正在检查登录状态…</span>
+          <span className="text-sm">正在检查登录状态…</span>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-950 via-indigo-900 to-violet-900 p-4 relative overflow-hidden">
-      <div className="absolute -top-32 -left-24 h-96 w-96 rounded-full bg-indigo-500/25 blur-3xl" />
-      <div className="absolute -bottom-40 -right-24 h-[28rem] w-[28rem] rounded-full bg-violet-500/25 blur-3xl" />
-      <div className="relative bg-white/95 backdrop-blur rounded-3xl shadow-2xl shadow-indigo-950/40 p-8 w-full max-w-sm flex flex-col gap-4">
-        <div className="flex flex-col items-center gap-2 mb-1">
-          <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-3xl shadow-lg shadow-indigo-500/30">🧪</span>
-          <div className="text-2xl font-bold">NoteLab</div>
-          <div className="text-xs text-zinc-400 tracking-wide">AI 试验后台 · B 端管理</div>
+    <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5] p-4">
+      <Card className="!w-full max-w-sm shadow-md" styles={{ body: { padding: 28 } }}>
+        <div className="flex flex-col items-center gap-1.5 mb-4">
+          <span className="grid h-12 w-12 place-items-center rounded-xl bg-indigo-500 text-2xl text-white">🧪</span>
+          <div className="text-xl font-bold text-zinc-800">NoteLab 管理后台</div>
+          <div className="text-xs text-zinc-400">AI 试验后台 · B 端</div>
         </div>
         <Form layout="vertical" onFinish={submit} requiredMark={false}>
           <Form.Item label="用户名" name="username" rules={[{ required: true, message: "请输入用户名" }]}>
@@ -88,8 +86,8 @@ export default function LoginPage() {
             {loading ? "登录中…" : "登 录"}
           </Button>
         </Form>
-        <p className="text-xs text-zinc-400 text-center">账号由管理员统一创建，如需开通请联系管理员</p>
-      </div>
+        <p className="text-xs text-zinc-400 text-center mt-3 mb-0">账号由管理员统一创建，如需开通请联系管理员</p>
+      </Card>
     </div>
   )
 }

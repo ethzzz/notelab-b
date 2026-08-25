@@ -152,8 +152,7 @@ export default function TrpgGenPage() {
       {/* 剧本表格 */}
       <Table rowKey="id" size="middle" columns={columns as any} dataSource={rows} pagination={false}
         locale={{ emptyText: "还没有剧本，点左上角「生成新剧本」开始创作" }}
-        scroll={{ x: 760 }}
-        className="card overflow-hidden [&_.ant-table]:bg-transparent" />
+        scroll={{ x: 760 }} />
 
       {/* 配置弹窗 */}
       <Modal open={open} onClose={() => { if (!busy) setOpen(false) }} title="🎬 剧本设定" maxW="max-w-lg">

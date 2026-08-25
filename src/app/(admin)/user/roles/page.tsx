@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
-import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space } from "antd"
+import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result } from "antd"
 import { Plus, ShieldCheck, Pencil } from "lucide-react"
 
 type Route = { code: string; path: string; method: string; kind: string; name: string }
@@ -83,7 +83,7 @@ export default function UserRolesPage() {
     setBusy(false)
   }
 
-  if (denied) return <div className="card p-8 text-center text-zinc-500">🔒 此页面仅超级管理员可见</div>
+  if (denied) return <Result status="403" title="403" subTitle="此页面仅超级管理员可见" />
   if (!ov) return <div className="text-zinc-500">加载中...</div>
 
   const pageRoutes = ov.routes.filter((r) => r.kind === "page")
@@ -187,8 +187,7 @@ export default function UserRolesPage() {
         <span className="text-xs text-zinc-400">共 {ov.roles.length} 个角色组 · 给角色分配路由组后，成员菜单即时生效</span>
       </div>
 
-      <Table rowKey="code" size="middle" columns={columns as any} dataSource={ov.roles} pagination={false}
-        className="card overflow-hidden [&_.ant-table]:bg-transparent" />
+      <Table rowKey="code" size="middle" columns={columns as any} dataSource={ov.roles} pagination={false} />
 
       {/* 创建角色组 */}
       <Modal open={createOpen} onCancel={() => { if (!busy) setCreateOpen(false) }} title="➕ 创建角色组"

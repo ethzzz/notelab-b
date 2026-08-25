@@ -1,7 +1,7 @@
 "use client"
 
 // 爬塔尖塔内容工坊（antd 版）：Tabs（卡片/角色/技能制作）+ Table + 类型化 Modal 表单
-// 保存后自定义内容即时生效于 /spire 游戏
+// 保存后自定义内容经「发布到 C 端」生效于 C 端游戏中心（B/C 拆分 P6 后 B 端不再有游玩页）
 import { useEffect, useMemo, useState } from "react"
 import {
   CARDS, applyCustomContent, sanitizeCard, sanitizeCharacter, cardDesc,
@@ -194,7 +194,7 @@ export default function SpireEditorPage() {
 
   if (!loaded) return <div className="text-zinc-500">加载中...</div>
 
-  const tableCls = "card overflow-hidden [&_.ant-table]:bg-transparent"
+  const tableCls = ""
   const actBtns = (onEdit: () => void, onDel: () => void, name: string) => (
     <Space size={4}>
       <Button size="small" type="text" onClick={onEdit}>编辑</Button>

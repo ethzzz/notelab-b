@@ -2,7 +2,7 @@
 // 权限管理（antd 版）：路由组总览 + C 端用户管理直达入口
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { Table, Tag, Button, Card } from "antd"
+import { Table, Tag, Button, Card, Result } from "antd"
 import { Users } from "lucide-react"
 import { apiJson } from "@/lib/api"
 
@@ -22,7 +22,7 @@ export default function PermPage() {
   }, [])
   useEffect(() => { load() }, [load])
 
-  if (denied) return <div className="card p-8 text-center text-zinc-500">🔒 此页面仅超级管理员可见。如需权限，请联系管理员。</div>
+  if (denied) return <Result status="403" title="403" subTitle="此页面仅超级管理员可见，如需权限请联系管理员。" />
   if (!ov) return <div className="text-zinc-500">加载中...</div>
 
   const pageRoutes = ov.routes.filter((r) => r.kind === "page")

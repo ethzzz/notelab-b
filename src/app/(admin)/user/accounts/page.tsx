@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
-import { Table, Modal, Form, Input, Select, Button, Tag, Popconfirm, Space } from "antd"
+import { Table, Modal, Form, Input, Select, Button, Tag, Popconfirm, Space, Result } from "antd"
 import { Plus, Pencil, KeyRound } from "lucide-react"
 
 type Role = { code: string; name: string; route_codes: string[] }
@@ -132,7 +132,7 @@ export default function UserAccountsPage() {
     catch (e: any) { toast.error(e.message || "删除失败") }
   }
 
-  if (denied) return <div className="card p-8 text-center text-zinc-500">🔒 此页面仅超级管理员可见</div>
+  if (denied) return <Result status="403" title="403" subTitle="此页面仅超级管理员可见" />
   if (!ov) return <div className="text-zinc-500">加载中...</div>
 
   const columns = [
@@ -180,7 +180,6 @@ export default function UserAccountsPage() {
       </div>
 
       <Table rowKey="id" size="middle" columns={columns as any} dataSource={users} loading={loading}
-        className="card overflow-hidden [&_.ant-table]:bg-transparent"
         pagination={{
           current: page, pageSize, total,
           showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100],
