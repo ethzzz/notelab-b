@@ -1,10 +1,10 @@
 "use client"
+// 智能对话（传统管理后台风）：SSE 流式逻辑与契约不变，外壳样式中性 antd 化
 import { useEffect, useRef, useState } from "react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { X } from "lucide-react"
-import { confirmDialog } from "@/components/ui/confirm"
-import Select from "@/components/ui/select"
+import { Button, Card, Input, Modal, Select } from "antd"
 import TypingText, { SkeletonText } from "@/components/TypingText"
 
 type Conv = { id: number; title: string; model: string; updated_at: string }
@@ -57,12 +57,19 @@ export default function ChatPage() {
     await selectConv(j.id, list)
   }
 
-  async function deleteConv(id: number) {
-    const ok = await confirmDialog({ title: "删除对话", message: "删除后该对话及其消息不可恢复，确定删除？", confirmText: "删除" })
-    if (!ok) return
-    await api(`/api/conversations/${id}`, { method: "DELETE" }).catch(() => {})
-    if (currentId === id) { setCurrentId(null); setMessages([]) }
-    await loadConvs(false).catch(() => {})
+  function deleteConv(id: number) {
+    Modal.confirm({
+      title: "删除对话",
+      content: "删除后该对话及其消息不可恢复，确定删除？",
+      okText: "删除",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        await api(`/api/conversations/${id}`, { method: "DELETE" }).catch(() => {})
+        if (currentId === id) { setCurrentId(null); setMessages([]) }
+        await loadConvs(false).catch(() => {})
+      },
+    })
   }
 
   async function changeModel(m: string) {
@@ -133,57 +140,60 @@ export default function ChatPage() {
     <div className="flex gap-4 h-[calc(100vh-6.5rem)]">
       {/* 会话列表 */}
       <div className="w-56 shrink-0 flex flex-col gap-2">
-        <button onClick={newConv} className="btn-primary">＋ 新对话</button>
-        <div className="flex-1 overflow-y-auto card p-2 flex flex-col gap-1">
-          {convs.length === 0 && <div className="text-zinc-500 text-sm text-center py-6">暂无对话</div>}
-          {convs.map((c) => (
-            <div key={c.id} onClick={() => selectConv(c.id)}
-              className={`group flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer text-sm transition-colors ${c.id === currentId ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-sm" : "text-zinc-600 hover:bg-white/70"}`}>
-              <span className="flex-1 truncate">{c.title || "新对话"}</span>
-              <button onClick={(e) => { e.stopPropagation(); deleteConv(c.id) }}
-                className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500"><X size={14} /></button>
-            </div>
-          ))}
-        </div>
+        <Button type="primary" block onClick={newConv}>＋ 新对话</Button>
+        <Card size="small" className="flex-1 overflow-y-auto" styles={{ body: { padding: 8 } }}>
+          {convs.length === 0 && <div className="text-zinc-400 text-sm text-center py-6">暂无对话</div>}
+          <div className="flex flex-col gap-0.5">
+            {convs.map((c) => (
+              <div key={c.id} onClick={() => selectConv(c.id)}
+                className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors ${c.id === currentId ? "bg-indigo-50 text-indigo-600 font-medium" : "text-zinc-600 hover:bg-zinc-50"}`}>
+                <span className="flex-1 truncate">{c.title || "新对话"}</span>
+                <button onClick={(e) => { e.stopPropagation(); deleteConv(c.id) }}
+                  className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500"><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
 
       {/* 对话区 */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-sm text-zinc-600">模型</span>
-          <Select value={model} onChange={changeModel} className="w-64" placeholder="选择模型"
-            options={models.map((m) => ({ value: m, label: m, icon: "🤖" }))} />
+          <span className="text-sm text-zinc-500">模型</span>
+          <Select value={model || undefined} onChange={changeModel} style={{ width: 280 }} placeholder="选择模型"
+            options={models.map((m) => ({ value: m, label: `🤖 ${m}` }))} />
         </div>
-        <div className="flex-1 overflow-y-auto card p-4 flex flex-col gap-3">
-          {messages.length === 0 && <div className="text-zinc-500 text-sm text-center py-10">开始一段新对话吧</div>}
-          {messages.map((m, i) => {
-            // 本轮正在生成的 AI 回复：等待期骨架屏 → 流式文本打字机
-            const liveAssistant = i === messages.length - 1 && m.role === "assistant" && (busy || typingTail)
-            return (
-              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words ${m.role === "user" ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-600/15" : "bg-white/65 backdrop-blur-md border border-white/70 text-zinc-900 shadow-sm"}`}>
-                  {m.role === "user"
-                    ? m.content
-                    : liveAssistant
-                      ? (!m.content
-                          ? <SkeletonText lines={3} />
-                          : <TypingText text={m.content} done={!busy} onFinished={() => setTypingTail(false)} onTick={handleTypingTick} />)
-                      : m.content}
+        <Card size="small" className="flex-1 overflow-y-auto" styles={{ body: { padding: 16 } }}>
+          <div className="flex flex-col gap-3">
+            {messages.length === 0 && <div className="text-zinc-400 text-sm text-center py-10">开始一段新对话吧</div>}
+            {messages.map((m, i) => {
+              // 本轮正在生成的 AI 回复：等待期骨架屏 → 流式文本打字机
+              const liveAssistant = i === messages.length - 1 && m.role === "assistant" && (busy || typingTail)
+              return (
+                <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm whitespace-pre-wrap break-words ${m.role === "user" ? "bg-indigo-500 text-white" : "bg-zinc-50 border border-zinc-200 text-zinc-800"}`}>
+                    {m.role === "user"
+                      ? m.content
+                      : liveAssistant
+                        ? (!m.content
+                            ? <SkeletonText lines={3} />
+                            : <TypingText text={m.content} done={!busy} onFinished={() => setTypingTail(false)} onTick={handleTypingTick} />)
+                        : m.content}
+                  </div>
                 </div>
-              </div>
-            )
-          })}
-          <div ref={bottomRef} />
-        </div>
+              )
+            })}
+            <div ref={bottomRef} />
+          </div>
+        </Card>
         <div className="flex gap-2 mt-3">
-          <textarea value={input} onChange={(e) => setInput(e.target.value)}
+          <Input.TextArea value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-            className="flex-1 input resize-none h-[70px]" />
-          <button onClick={send} disabled={busy || !input.trim()}
-            className="btn-primary self-stretch">
+            className="flex-1 resize-none" rows={3} />
+          <Button type="primary" className="self-stretch !h-auto" onClick={send} loading={busy} disabled={!input.trim()}>
             {busy ? "回答中" : "发送"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

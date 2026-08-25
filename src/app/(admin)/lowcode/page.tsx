@@ -1,7 +1,8 @@
 "use client"
+// 低代码平台（传统管理后台风）：antd Tabs + Card；交互规范不变（设计稿存浏览器本地、可导出）
 import { useEffect, useState } from "react"
-import { confirmDialog } from "@/components/ui/confirm"
-import Select from "@/components/ui/select"
+import { Button, Card, Input, InputNumber, Modal, Select, Switch, Tabs, Checkbox, Radio, DatePicker, Table } from "antd"
+import { CopyOutlined, DeleteOutlined } from "@ant-design/icons"
 
 // ================= 通用工具 =================
 const LS = {
@@ -18,10 +19,10 @@ const LS = {
 function CopyBtn({ text }: { text: string }) {
   const [ok, setOk] = useState(false)
   return (
-    <button className="btn-ghost text-xs"
+    <Button size="small" icon={<CopyOutlined />}
       onClick={() => { navigator.clipboard.writeText(text).catch(() => {}); setOk(true); setTimeout(() => setOk(false), 1500) }}>
-      {ok ? "✓ 已复制" : "📋 复制"}
-    </button>
+      {ok ? "已复制" : "复制"}
+    </Button>
   )
 }
 
@@ -61,36 +62,22 @@ function formToSchema(fields: Field[]) {
 
 function FormPreviewControl({ f, value, onChange }: { f: Field; value: any; onChange: (v: any) => void }) {
   switch (f.type) {
-    case "textarea": return <textarea className="input resize-none" rows={3} placeholder={f.placeholder} value={value || ""} onChange={(e) => onChange(e.target.value)} />
-    case "number": return <input type="number" className="input" placeholder={f.placeholder} value={value || ""} onChange={(e) => onChange(e.target.value)} />
-    case "date": return <input type="date" className="input" value={value || ""} onChange={(e) => onChange(e.target.value)} />
+    case "textarea": return <Input.TextArea rows={3} placeholder={f.placeholder} value={value || ""} onChange={(e) => onChange(e.target.value)} />
+    case "number": return <InputNumber className="!w-full" placeholder={f.placeholder} value={value === "" || value == null ? null : Number(value)} onChange={(v) => onChange(v ?? "")} />
+    case "date": return <DatePicker className="!w-full" onChange={(_d, ds) => onChange(Array.isArray(ds) ? ds[0] : ds)} />
     case "select": return (
-      <Select value={value || ""} onChange={onChange} placeholder="请选择"
+      <Select className="w-full" value={value || undefined} onChange={onChange} placeholder="请选择"
         options={(f.options || []).map((o) => ({ value: o, label: o }))} />)
     case "radio": return (
-      <div className="flex flex-wrap gap-3">
-        {(f.options || []).map((o) => (
-          <label key={o} className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer">
-            <input type="radio" checked={value === o} onChange={() => onChange(o)} />{o}
-          </label>))}
-      </div>)
+      <Radio.Group value={value} onChange={(e) => onChange(e.target.value)}>
+        {(f.options || []).map((o) => <Radio key={o} value={o}>{o}</Radio>)}
+      </Radio.Group>)
     case "checkbox": {
       const arr: string[] = Array.isArray(value) ? value : []
-      return (
-        <div className="flex flex-wrap gap-3">
-          {(f.options || []).map((o) => (
-            <label key={o} className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer">
-              <input type="checkbox" checked={arr.includes(o)}
-                onChange={(e) => onChange(e.target.checked ? [...arr, o] : arr.filter((x) => x !== o))} />{o}
-            </label>))}
-        </div>)
+      return <Checkbox.Group options={f.options || []} value={arr} onChange={(v) => onChange(v as string[])} />
     }
-    case "switch": return (
-      <button onClick={() => onChange(!value)}
-        className={`w-11 h-6 rounded-full transition-colors relative ${value ? "bg-indigo-500" : "bg-zinc-300"}`}>
-        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${value ? "left-[22px]" : "left-0.5"}`} />
-      </button>)
-    default: return <input className="input" placeholder={f.placeholder} value={value || ""} onChange={(e) => onChange(e.target.value)} />
+    case "switch": return <Switch checked={!!value} onChange={(v) => onChange(v)} />
+    default: return <Input placeholder={f.placeholder} value={value || ""} onChange={(e) => onChange(e.target.value)} />
   }
 }
 
@@ -100,7 +87,7 @@ function FormDesigner() {
   const [preview, setPreview] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [formValues, setFormValues] = useState<Record<string, any>>({})
-  const [submitted, setSubmitted] = useState<string>("")
+  const [submitted, setSubmitted] = useState("")
 
   useEffect(() => { setFields(LS.get("b_notelab.lowcode.form", [])) }, [])
   useEffect(() => { LS.set("b_notelab.lowcode.form", fields) }, [fields])
@@ -139,27 +126,26 @@ function FormDesigner() {
   return (
     <div className="flex gap-4 items-start">
       {/* 组件库 */}
-      <div className="w-48 shrink-0 card p-3">
+      <Card size="small" className="w-48 shrink-0" styles={{ body: { padding: 12 } }}>
         <SectionTitle>组件库</SectionTitle>
         <div className="grid grid-cols-1 gap-1.5">
           {FIELD_DEFS.map((d) => (
-            <button key={d.type} onClick={() => addField(d.type)}
-              className="flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-zinc-600 bg-white/60 border border-black/5 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm transition-all text-left">
+            <Button key={d.type} block className="!text-left !flex !items-center !gap-2" onClick={() => addField(d.type)}>
               <span>{d.icon}</span>{d.name}
-            </button>
+            </Button>
           ))}
         </div>
-        <p className="text-[11px] text-zinc-400 mt-3 leading-relaxed">点击组件添加到画布；设计稿自动保存在浏览器本地。</p>
-      </div>
+        <p className="text-[11px] text-zinc-400 mt-3 mb-0 leading-relaxed">点击组件添加到画布；设计稿自动保存在浏览器本地。</p>
+      </Card>
 
       {/* 画布 */}
-      <div className="flex-1 min-w-0 card p-4">
+      <Card size="small" className="flex-1 min-w-0" styles={{ body: { padding: 16 } }}>
         <div className="flex items-center gap-2 mb-3">
           <SectionTitle>画布（{fields.length} 个字段）</SectionTitle>
           <div className="ml-auto flex gap-2">
-            <button className="btn-ghost text-xs" onClick={() => { setPreview(!preview); setSubmitted("") }}>{preview ? "🛠 回到设计" : "👁 预览"}</button>
-            <button className="btn-ghost text-xs" onClick={() => setShowExport(true)} disabled={fields.length === 0}>📤 导出 Schema</button>
-            <button className="btn-ghost text-xs text-red-500" onClick={async () => { if (await confirmDialog({ message: "清空所有字段？", confirmText: "清空" })) { setFields([]); setSelectedId(null) } }} disabled={fields.length === 0}>🗑 清空</button>
+            <Button size="small" onClick={() => { setPreview(!preview); setSubmitted("") }}>{preview ? "🛠 回到设计" : "👁 预览"}</Button>
+            <Button size="small" onClick={() => setShowExport(true)} disabled={fields.length === 0}>📤 导出 Schema</Button>
+            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: "清空所有字段？", okText: "清空", okButtonProps: { danger: true }, onOk: () => { setFields([]); setSelectedId(null) } })} disabled={fields.length === 0}>清空</Button>
           </div>
         </div>
 
@@ -172,16 +158,16 @@ function FormDesigner() {
               const active = selectedId === f.id
               return (
                 <div key={f.id} onClick={() => setSelectedId(f.id)}
-                  className={`group rounded-xl border px-3 py-2.5 cursor-pointer transition-all ${active ? "border-indigo-400 bg-indigo-50/70 shadow-sm" : "border-black/5 bg-white/60 hover:border-indigo-200"}`}>
+                  className={`group rounded-lg border px-3 py-2.5 cursor-pointer transition-all bg-white ${active ? "border-indigo-400" : "border-zinc-200 hover:border-indigo-300"}`}>
                   <div className="flex items-center gap-2">
                     <span>{def.icon}</span>
                     <span className="text-sm font-medium text-zinc-800">{f.label}</span>
                     {f.required && <span className="text-red-500 text-xs">*必填</span>}
                     <span className="text-[11px] text-zinc-400">{def.name}</span>
                     <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                      <button className="btn-ghost text-xs px-1.5" title="上移" onClick={() => moveField(f.id, -1)}>↑</button>
-                      <button className="btn-ghost text-xs px-1.5" title="下移" onClick={() => moveField(f.id, 1)}>↓</button>
-                      <button className="btn-ghost text-xs px-1.5 text-red-500" title="删除" onClick={() => removeField(f.id)}>✕</button>
+                      <Button size="small" title="上移" onClick={() => moveField(f.id, -1)}>↑</Button>
+                      <Button size="small" title="下移" onClick={() => moveField(f.id, 1)}>↓</Button>
+                      <Button size="small" danger title="删除" onClick={() => removeField(f.id)}>✕</Button>
                     </div>
                   </div>
                 </div>
@@ -196,56 +182,46 @@ function FormDesigner() {
                 <FormPreviewControl f={f} value={formValues[f.id]} onChange={(v) => setFormValues((prev) => ({ ...prev, [f.id]: v }))} />
               </div>
             ))}
-            <button className="btn-primary self-start" onClick={() => setSubmitted(JSON.stringify(formToSchema(fields) && formValues, null, 2))}>提交（演示）</button>
-            {submitted && <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-xl p-3 overflow-x-auto">{submitted}</pre>}
+            <Button type="primary" className="self-start" onClick={() => setSubmitted(JSON.stringify(formToSchema(fields) && formValues, null, 2))}>提交（演示）</Button>
+            {submitted && <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-lg p-3 overflow-x-auto">{submitted}</pre>}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* 属性面板 */}
-      <div className="w-60 shrink-0 card p-3">
+      <Card size="small" className="w-60 shrink-0" styles={{ body: { padding: 12 } }}>
         <SectionTitle>属性</SectionTitle>
         {!selected && <div className="text-zinc-400 text-sm py-6 text-center">选中画布中的字段进行配置</div>}
         {selected && (
           <div className="flex flex-col gap-3">
             <div>
               <label className="text-xs text-zinc-500">标题</label>
-              <input className="input mt-1" value={selected.label} onChange={(e) => patchField(selected.id, { label: e.target.value })} />
+              <Input className="mt-1" value={selected.label} onChange={(e) => patchField(selected.id, { label: e.target.value })} />
             </div>
             {selected.type !== "switch" && (
               <div>
                 <label className="text-xs text-zinc-500">占位提示</label>
-                <input className="input mt-1" value={selected.placeholder || ""} onChange={(e) => patchField(selected.id, { placeholder: e.target.value })} />
+                <Input className="mt-1" value={selected.placeholder || ""} onChange={(e) => patchField(selected.id, { placeholder: e.target.value })} />
               </div>
             )}
-            <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer">
-              <input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} />
-              必填
-            </label>
+            <Checkbox checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })}>必填</Checkbox>
             {(selected.type === "select" || selected.type === "radio" || selected.type === "checkbox") && (
               <div>
                 <label className="text-xs text-zinc-500">选项（每行一个）</label>
-                <textarea className="input mt-1 resize-none" rows={4} value={(selected.options || []).join("\n")}
+                <Input.TextArea className="mt-1" rows={4} value={(selected.options || []).join("\n")}
                   onChange={(e) => patchField(selected.id, { options: e.target.value.split("\n").filter((x) => x.trim() !== "") })} />
               </div>
             )}
-            <button className="btn-ghost text-xs text-red-500 self-start" onClick={() => removeField(selected.id)}>🗑 删除该字段</button>
+            <Button size="small" danger className="self-start" onClick={() => removeField(selected.id)}>🗑 删除该字段</Button>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* 导出弹窗 */}
-      {showExport && (
-        <div className="fixed inset-0 bg-black/35 backdrop-blur-[2px] z-[70] flex items-center justify-center p-4" onClick={() => setShowExport(false)}>
-          <div className="bg-white rounded-2xl p-5 w-full max-w-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold">导出 JSON Schema</h3>
-              <div className="flex gap-2"><CopyBtn text={JSON.stringify(formToSchema(fields), null, 2)} /><button className="btn-ghost text-xs" onClick={() => setShowExport(false)}>关闭</button></div>
-            </div>
-            <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-xl p-4 overflow-x-auto">{JSON.stringify(formToSchema(fields), null, 2)}</pre>
-          </div>
-        </div>
-      )}
+      <Modal open={showExport} onCancel={() => setShowExport(false)} title="导出 JSON Schema" width={680}
+        footer={[<CopyBtn key="copy" text={JSON.stringify(formToSchema(fields), null, 2)} />, <Button key="close" onClick={() => setShowExport(false)}>关闭</Button>]}>
+        <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-lg p-4 overflow-x-auto max-h-[60vh] overflow-y-auto">{JSON.stringify(formToSchema(fields), null, 2)}</pre>
+      </Modal>
     </div>
   )
 }
@@ -263,11 +239,12 @@ const FLOW_DEFS: { kind: FlowKind; type: string; name: string; icon: string; par
   { kind: "action", type: "data", name: "写入数据", icon: "💾", params: ["目标表", "数据 JSON"] },
   { kind: "delay", type: "wait", name: "延时等待", icon: "⏳", params: ["时长（秒）"] },
 ]
+/** 中性配色：节点类型图标底色 */
 const KIND_COLOR: Record<FlowKind, string> = {
-  trigger: "from-emerald-500 to-teal-500",
-  condition: "from-amber-500 to-orange-500",
-  action: "from-indigo-500 to-violet-500",
-  delay: "from-zinc-400 to-zinc-500",
+  trigger: "bg-emerald-50 text-emerald-600",
+  condition: "bg-amber-50 text-amber-600",
+  action: "bg-indigo-50 text-indigo-600",
+  delay: "bg-zinc-100 text-zinc-500",
 }
 
 function FlowDesigner() {
@@ -298,31 +275,33 @@ function FlowDesigner() {
   }
 
   const AddMenu = ({ at }: { at: number }) => (
-    <div className="card p-2 flex flex-col gap-1 w-56">
-      {FLOW_DEFS.map((d, di) => (
-        <button key={d.type} onClick={() => addNode(di, at)}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-600 hover:bg-indigo-50 hover:text-indigo-600 text-left">
-          <span>{d.icon}</span>{d.name}
-          <span className="ml-auto text-[10px] text-zinc-400">{{ trigger: "触发", condition: "条件", action: "动作", delay: "延时" }[d.kind]}</span>
-        </button>
-      ))}
-    </div>
+    <Card size="small" className="w-56 shadow-md" styles={{ body: { padding: 6 } }}>
+      <div className="flex flex-col gap-0.5">
+        {FLOW_DEFS.map((d, di) => (
+          <button key={d.type} onClick={() => addNode(di, at)}
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-indigo-50 hover:text-indigo-600 text-left">
+            <span>{d.icon}</span>{d.name}
+            <span className="ml-auto text-[10px] text-zinc-400">{{ trigger: "触发", condition: "条件", action: "动作", delay: "延时" }[d.kind]}</span>
+          </button>
+        ))}
+      </div>
+    </Card>
   )
 
   return (
     <div className="flex gap-4 items-start">
       {/* 流程画布 */}
-      <div className="flex-1 min-w-0 card p-4">
+      <Card size="small" className="flex-1 min-w-0" styles={{ body: { padding: 16 } }}>
         <div className="flex items-center mb-3">
           <SectionTitle>流程画布（{nodes.length} 个节点）</SectionTitle>
           <div className="ml-auto flex gap-2">
-            <button className="btn-ghost text-xs" onClick={() => setShowExport(true)} disabled={nodes.length === 0}>📤 导出 JSON</button>
-            <button className="btn-ghost text-xs text-red-500" onClick={async () => { if (await confirmDialog({ message: "清空流程？", confirmText: "清空" })) { setNodes([]); setSelectedId(null) } }} disabled={nodes.length === 0}>🗑 清空</button>
+            <Button size="small" onClick={() => setShowExport(true)} disabled={nodes.length === 0}>📤 导出 JSON</Button>
+            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: "清空流程？", okText: "清空", okButtonProps: { danger: true }, onOk: () => { setNodes([]); setSelectedId(null) } })} disabled={nodes.length === 0}>清空</Button>
           </div>
         </div>
 
         <div className="flex flex-col items-center gap-0 max-w-xl mx-auto py-2">
-          <div className="px-4 py-1.5 rounded-full bg-gradient-to-r from-zinc-700 to-zinc-800 text-white text-xs font-medium shadow">▶ 开始</div>
+          <div className="px-4 py-1.5 rounded-full bg-zinc-700 text-white text-xs font-medium">▶ 开始</div>
 
           {nodes.map((n, i) => {
             const def = FLOW_DEFS.find((d) => d.type === n.type)!
@@ -331,9 +310,9 @@ function FlowDesigner() {
               <div key={n.id} className="flex flex-col items-center w-full">
                 <div className="w-px h-5 bg-zinc-300" />
                 <div onClick={() => setSelectedId(n.id)}
-                  className={`group w-full rounded-2xl border px-4 py-3 cursor-pointer transition-all bg-white/70 ${active ? "border-indigo-400 shadow-md shadow-indigo-500/10" : "border-black/5 hover:border-indigo-200"}`}>
+                  className={`group w-full rounded-lg border px-4 py-3 cursor-pointer transition-all bg-white ${active ? "border-indigo-400" : "border-zinc-200 hover:border-indigo-300"}`}>
                   <div className="flex items-center gap-2">
-                    <span className={`grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br ${KIND_COLOR[def.kind]} text-sm shadow-sm`}>{def.icon}</span>
+                    <span className={`grid h-7 w-7 place-items-center rounded-md text-sm ${KIND_COLOR[def.kind]}`}>{def.icon}</span>
                     <div className="min-w-0">
                       <div className="text-sm font-medium text-zinc-800">{def.name}</div>
                       {def.params.length > 0 && (
@@ -342,8 +321,8 @@ function FlowDesigner() {
                         </div>
                       )}
                     </div>
-                    <button className="ml-auto btn-ghost text-xs px-1.5 text-red-500 opacity-0 group-hover:opacity-100"
-                      onClick={(e) => { e.stopPropagation(); removeNode(n.id) }}>✕</button>
+                    <Button size="small" danger className="ml-auto opacity-0 group-hover:opacity-100"
+                      onClick={(e) => { e.stopPropagation(); removeNode(n.id) }}>✕</Button>
                   </div>
                 </div>
                 <div className="relative flex flex-col items-center">
@@ -366,18 +345,18 @@ function FlowDesigner() {
           )}
 
           <div className="w-px h-5 bg-zinc-300" />
-          <div className="px-4 py-1.5 rounded-full bg-gradient-to-r from-zinc-700 to-zinc-800 text-white text-xs font-medium shadow">■ 结束</div>
+          <div className="px-4 py-1.5 rounded-full bg-zinc-700 text-white text-xs font-medium">■ 结束</div>
         </div>
-      </div>
+      </Card>
 
       {/* 节点配置 */}
-      <div className="w-64 shrink-0 card p-3">
+      <Card size="small" className="w-64 shrink-0" styles={{ body: { padding: 12 } }}>
         <SectionTitle>节点配置</SectionTitle>
         {!selected && <div className="text-zinc-400 text-sm py-6 text-center">点击流程中的节点进行配置</div>}
         {selected && selectedDef && (
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2">
-              <span className={`grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br ${KIND_COLOR[selectedDef.kind]} text-base`}>{selectedDef.icon}</span>
+              <span className={`grid h-8 w-8 place-items-center rounded-md text-base ${KIND_COLOR[selectedDef.kind]}`}>{selectedDef.icon}</span>
               <div>
                 <div className="text-sm font-medium text-zinc-800">{selectedDef.name}</div>
                 <div className="text-[11px] text-zinc-400">{{ trigger: "触发器", condition: "条件节点", action: "动作节点", delay: "延时节点" }[selectedDef.kind]}</div>
@@ -386,26 +365,19 @@ function FlowDesigner() {
             {selectedDef.params.map((p) => (
               <div key={p}>
                 <label className="text-xs text-zinc-500">{p}</label>
-                <input className="input mt-1" value={selected.params[p] || ""} onChange={(e) => patchParams(selected.id, p, e.target.value)} />
+                <Input className="mt-1" value={selected.params[p] || ""} onChange={(e) => patchParams(selected.id, p, e.target.value)} />
               </div>
             ))}
             {selectedDef.params.length === 0 && <div className="text-xs text-zinc-400">该节点无需配置</div>}
-            <button className="btn-ghost text-xs text-red-500 self-start" onClick={() => removeNode(selected.id)}>🗑 删除节点</button>
+            <Button size="small" danger className="self-start" onClick={() => removeNode(selected.id)}>🗑 删除节点</Button>
           </div>
         )}
-      </div>
+      </Card>
 
-      {showExport && (
-        <div className="fixed inset-0 bg-black/35 backdrop-blur-[2px] z-[70] flex items-center justify-center p-4" onClick={() => setShowExport(false)}>
-          <div className="bg-white rounded-2xl p-5 w-full max-w-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold">导出流程 JSON</h3>
-              <div className="flex gap-2"><CopyBtn text={JSON.stringify({ nodes }, null, 2)} /><button className="btn-ghost text-xs" onClick={() => setShowExport(false)}>关闭</button></div>
-            </div>
-            <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-xl p-4 overflow-x-auto">{JSON.stringify({ nodes }, null, 2)}</pre>
-          </div>
-        </div>
-      )}
+      <Modal open={showExport} onCancel={() => setShowExport(false)} title="导出流程 JSON" width={680}
+        footer={[<CopyBtn key="copy" text={JSON.stringify({ nodes }, null, 2)} />, <Button key="close" onClick={() => setShowExport(false)}>关闭</Button>]}>
+        <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-lg p-4 overflow-x-auto max-h-[60vh] overflow-y-auto">{JSON.stringify({ nodes }, null, 2)}</pre>
+      </Modal>
     </div>
   )
 }
@@ -445,94 +417,65 @@ function DataModeler() {
   const sql = modelToSql(name, fields)
   const schema = JSON.stringify(modelToSchema(name, fields), null, 2)
 
+  const modelColumns = [
+    { title: "字段名", render: (_: any, f: ModelField, i: number) => <Input size="small" placeholder="field_name" value={f.name} onChange={(e) => patch(i, { name: e.target.value })} /> },
+    { title: "类型", width: 130, render: (_: any, f: ModelField, i: number) => <Select size="small" className="!w-full" value={f.type} onChange={(v) => patch(i, { type: v })} options={MODEL_TYPES.map((t) => ({ value: t, label: t }))} /> },
+    { title: "必填", width: 70, align: "center" as const, render: (_: any, f: ModelField, i: number) => <Checkbox checked={f.required} onChange={(e) => patch(i, { required: e.target.checked })} /> },
+    { title: "默认值", width: 140, render: (_: any, f: ModelField, i: number) => <Input size="small" placeholder="可选" value={f.def} onChange={(e) => patch(i, { def: e.target.value })} /> },
+    { title: "备注", render: (_: any, f: ModelField, i: number) => <Input size="small" placeholder="字段说明" value={f.note} onChange={(e) => patch(i, { note: e.target.value })} /> },
+    { title: "", width: 60, align: "center" as const, render: (_: any, _f: ModelField, i: number) => <Button size="small" danger onClick={() => setFields((prev) => prev.filter((_x, j) => j !== i))}>✕</Button> },
+  ]
+
   return (
     <div className="flex gap-4 items-start">
-      <div className="flex-1 min-w-0 card p-4">
+      <Card size="small" className="flex-1 min-w-0" styles={{ body: { padding: 16 } }}>
         <SectionTitle>模型定义</SectionTitle>
         <div className="flex items-center gap-2 mb-3">
           <span className="text-sm text-zinc-500 shrink-0">模型名</span>
-          <input className="input max-w-[240px]" placeholder="如 orders" value={name} onChange={(e) => setName(e.target.value)} />
-          <button className="btn-ghost text-xs ml-auto" onClick={() => setFields((prev) => [...prev, { name: "", type: "string", required: false, def: "", note: "" }])}>＋ 添加字段</button>
-          <button className="btn-ghost text-xs text-red-500" onClick={async () => { if (await confirmDialog({ message: "清空模型？", confirmText: "清空" })) { setFields([]); setName("") } }} disabled={fields.length === 0}>🗑 清空</button>
+          <Input className="max-w-[240px]" placeholder="如 orders" value={name} onChange={(e) => setName(e.target.value)} />
+          <Button size="small" className="ml-auto" onClick={() => setFields((prev) => [...prev, { name: "", type: "string", required: false, def: "", note: "" }])}>＋ 添加字段</Button>
+          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: "清空模型？", okText: "清空", okButtonProps: { danger: true }, onOk: () => { setFields([]); setName("") } })} disabled={fields.length === 0}>清空</Button>
         </div>
         {fields.length === 0 && <div className="text-zinc-400 text-sm text-center py-10">点击「添加字段」开始定义数据模型</div>}
         {fields.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-zinc-400">
-                  <th className="py-1.5 pr-2 font-medium">字段名</th>
-                  <th className="py-1.5 pr-2 font-medium">类型</th>
-                  <th className="py-1.5 pr-2 font-medium">必填</th>
-                  <th className="py-1.5 pr-2 font-medium">默认值</th>
-                  <th className="py-1.5 pr-2 font-medium">备注</th>
-                  <th className="py-1.5 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {fields.map((f, i) => (
-                  <tr key={i} className="border-t border-black/5">
-                    <td className="py-1.5 pr-2"><input className="input py-1 text-xs" placeholder="field_name" value={f.name} onChange={(e) => patch(i, { name: e.target.value })} /></td>
-                    <td className="py-1.5 pr-2">
-                      <Select size="sm" value={f.type} onChange={(v) => patch(i, { type: v })} options={MODEL_TYPES} className="w-24" />
-                    </td>
-                    <td className="py-1.5 pr-2 text-center"><input type="checkbox" checked={f.required} onChange={(e) => patch(i, { required: e.target.checked })} /></td>
-                    <td className="py-1.5 pr-2"><input className="input py-1 text-xs" placeholder="可选" value={f.def} onChange={(e) => patch(i, { def: e.target.value })} /></td>
-                    <td className="py-1.5 pr-2"><input className="input py-1 text-xs" placeholder="字段说明" value={f.note} onChange={(e) => patch(i, { note: e.target.value })} /></td>
-                    <td className="py-1.5"><button className="btn-ghost text-xs px-1.5 text-red-500" onClick={() => setFields((prev) => prev.filter((_, j) => j !== i))}>✕</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table rowKey={(_r, i) => String(i)} size="small" columns={modelColumns as any}
+            dataSource={fields} pagination={false} />
         )}
-      </div>
+      </Card>
 
       <div className="w-[42%] shrink-0 flex flex-col gap-4">
-        <div className="card p-3">
+        <Card size="small" styles={{ body: { padding: 12 } }}>
           <div className="flex items-center justify-between mb-2">
             <SectionTitle>生成 SQL DDL</SectionTitle>
             <CopyBtn text={sql} />
           </div>
-          <pre className="text-[11px] bg-zinc-900 text-sky-300 rounded-xl p-3 overflow-x-auto max-h-56 overflow-y-auto">{sql}</pre>
-        </div>
-        <div className="card p-3">
+          <pre className="text-[11px] bg-zinc-900 text-sky-300 rounded-lg p-3 overflow-x-auto max-h-56 overflow-y-auto">{sql}</pre>
+        </Card>
+        <Card size="small" styles={{ body: { padding: 12 } }}>
           <div className="flex items-center justify-between mb-2">
             <SectionTitle>生成 JSON Schema</SectionTitle>
             <CopyBtn text={schema} />
           </div>
-          <pre className="text-[11px] bg-zinc-900 text-emerald-300 rounded-xl p-3 overflow-x-auto max-h-56 overflow-y-auto">{schema}</pre>
-        </div>
+          <pre className="text-[11px] bg-zinc-900 text-emerald-300 rounded-lg p-3 overflow-x-auto max-h-56 overflow-y-auto">{schema}</pre>
+        </Card>
       </div>
     </div>
   )
 }
 
 // ================= 页面外壳 =================
-const TABS = [
-  { key: "form", name: "表单设计器", icon: "📋" },
-  { key: "flow", name: "流程编排", icon: "🔀" },
-  { key: "model", name: "数据模型", icon: "🗃️" },
-]
-
 export default function LowCodePage() {
-  const [tab, setTab] = useState("form")
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex gap-1.5 card p-1.5">
-          {TABS.map((t) => (
-            <button key={t.key} onClick={() => setTab(t.key)}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${tab === t.key ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-600/20" : "text-zinc-600 hover:bg-white/70"}`}>
-              {t.icon} {t.name}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-zinc-400">可视化搭建 · 设计稿保存在浏览器本地 · 支持导出标准格式</span>
-      </div>
-      {tab === "form" && <FormDesigner />}
-      {tab === "flow" && <FlowDesigner />}
-      {tab === "model" && <DataModeler />}
+    <div className="flex flex-col gap-2">
+      <Tabs
+        defaultActiveKey="form"
+        items={[
+          { key: "form", label: "📋 表单设计器", children: <FormDesigner /> },
+          { key: "flow", label: "🔀 流程编排", children: <FlowDesigner /> },
+          { key: "model", label: "🗃️ 数据模型", children: <DataModeler /> },
+        ]}
+      />
+      <div className="text-xs text-zinc-400 -mt-2">可视化搭建 · 设计稿保存在浏览器本地 · 支持导出标准格式</div>
     </div>
   )
 }

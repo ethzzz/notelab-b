@@ -17,13 +17,13 @@ export default function ScenarioPreview({ scenario }: { scenario: ScenarioData }
       {(scenario.characters || []).length > 0 && (
         <div className="flex gap-2 flex-wrap">
           {(scenario.characters || []).map((c) => (
-            <span key={c.name} title={c.desc} className="text-xs bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-100 text-indigo-700 rounded-full px-2.5 py-1">👤 {c.name}</span>
+            <span key={c.name} title={c.desc} className="text-xs bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-full px-2.5 py-1">👤 {c.name}</span>
           ))}
         </div>
       )}
       <div className="flex flex-col gap-1 mt-1 max-h-72 overflow-y-auto pr-1">
         {nodes.map((n, i) => (
-          <div key={n.id} className="flex items-center gap-2 text-xs text-zinc-500 bg-white/50 rounded-lg px-2.5 py-1.5">
+          <div key={n.id} className="flex items-center gap-2 text-xs text-zinc-500 bg-zinc-50 border border-zinc-100 rounded-lg px-2.5 py-1.5">
             <span className="text-zinc-400 w-5 shrink-0">{i + 1}.</span>
             <span className="font-medium text-zinc-700 truncate">{n.title}</span>
             {n.ending

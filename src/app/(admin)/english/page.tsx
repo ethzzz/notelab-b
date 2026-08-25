@@ -3,8 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { api, apiJson, postJson, BASE_PATH } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { X } from "lucide-react"
-import { confirmDialog } from "@/components/ui/confirm"
-import Modal from "@/components/ui/modal"
+import { Button, Card, Input, Modal } from "antd"
 
 type Scenario = { id: string; name: string; en: string; desc: string }
 type Conv = { id: number; title: string; scenario: string; scenario_name: string; updated_at: string }
@@ -220,12 +219,19 @@ export default function EnglishPage() {
     await loadConvs(false)
     await selectConv(j.id)
   }
-  async function deleteConv(id: number) {
-    const ok = await confirmDialog({ title: "删除英语对话", message: "删除后该对话及其记录不可恢复，确定删除？", confirmText: "删除" })
-    if (!ok) return
-    await api(`/api/english/conversations/${id}`, { method: "DELETE" }).catch(() => {})
-    if (currentId === id) { setCurrentId(null); setMessages([]); setScenarioName("") }
-    await loadConvs(false).catch(() => {})
+  function deleteConv(id: number) {
+    Modal.confirm({
+      title: "删除英语对话",
+      content: "删除后该对话及其记录不可恢复，确定删除？",
+      okText: "删除",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        await api(`/api/english/conversations/${id}`, { method: "DELETE" }).catch(() => {})
+        if (currentId === id) { setCurrentId(null); setMessages([]); setScenarioName("") }
+        await loadConvs(false).catch(() => {})
+      },
+    })
   }
 
   useEffect(() => {
@@ -387,25 +393,28 @@ export default function EnglishPage() {
     <div className="flex gap-4 h-[calc(100vh-6.5rem)]">
       {/* 会话列表 */}
       <div className="w-56 shrink-0 flex flex-col gap-2">
-        <button onClick={() => setShowPicker(true)} className="btn-primary">＋ 新对话（选场景）</button>
-        <div className="flex-1 overflow-y-auto card p-2 flex flex-col gap-1">
-          {convs.length === 0 && <div className="text-zinc-500 text-sm text-center py-6">暂无对话</div>}
-          {convs.map((c) => (
-            <div key={c.id} onClick={() => selectConv(c.id)}
-              className={`group flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer text-sm transition-colors ${c.id === currentId ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-sm" : "text-zinc-600 hover:bg-white/70"}`}>
-              <span className="flex-1 truncate">{c.scenario_name}</span>
-              <button onClick={(e) => { e.stopPropagation(); deleteConv(c.id) }}
-                className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500"><X size={14} /></button>
-            </div>
-          ))}
-        </div>
+        <Button type="primary" block onClick={() => setShowPicker(true)}>＋ 新对话（选场景）</Button>
+        <Card size="small" className="flex-1 overflow-y-auto" styles={{ body: { padding: 8 } }}>
+          {convs.length === 0 && <div className="text-zinc-400 text-sm text-center py-6">暂无对话</div>}
+          <div className="flex flex-col gap-0.5">
+            {convs.map((c) => (
+              <div key={c.id} onClick={() => selectConv(c.id)}
+                className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors ${c.id === currentId ? "bg-indigo-50 text-indigo-600 font-medium" : "text-zinc-600 hover:bg-zinc-50"}`}>
+                <span className="flex-1 truncate">{c.scenario_name}</span>
+                <button onClick={(e) => { e.stopPropagation(); deleteConv(c.id) }}
+                  className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500"><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
 
       {/* 对话区 */}
       <div className="flex-1 flex flex-col min-w-0">
         {scenarioName && <div className="mb-2"><span className="bg-indigo-50 text-indigo-700 text-xs font-medium px-3 py-1 rounded-full">场景：{scenarioName}</span></div>}
-        <div ref={listRef} className="flex-1 overflow-y-auto card p-4 flex flex-col gap-4">
-          {messages.length === 0 && <div className="text-zinc-500 text-sm text-center py-10">选一个场景，开始练口语吧</div>}
+        <div className="flex-1 min-h-0 rounded-lg border border-zinc-200 bg-white p-4">
+          <div ref={listRef} className="h-full overflow-y-auto flex flex-col gap-4">
+            {messages.length === 0 && <div className="text-zinc-400 text-sm text-center py-10">选一个场景，开始练口语吧</div>}
           {messages.map((m, i) => {
             const isTyping = streamingIdx !== null && i === messages.length - 1 && m.role === "assistant"
             const skeleton = isTyping && busy && !m.content // 等待首个分片：骨架流光气泡
@@ -415,7 +424,7 @@ export default function EnglishPage() {
               <div className={`w-full flex items-center gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
                 {m.role === "user" && <SpeakBtn state={speakStateOf(`u${i}`)} onToggle={() => speak(m.content, `u${i}`)} />}
                 {/* 打字中 min-w-[200px]：防止气泡从骨架骤缩到几十字符宽再逐字撑大（宽度跳变＝视觉抖动），也避免首帧内容比气泡宽被裁切 */}
-                <div className={`max-w-[70%] ${isTyping ? "min-w-[200px]" : "min-w-0"} overflow-hidden rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${m.role === "user" ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-600/15" : "bg-white/65 backdrop-blur-md border border-white/70 text-zinc-900 shadow-sm"}`}>
+                <div className={`max-w-[70%] ${isTyping ? "min-w-[200px]" : "min-w-0"} overflow-hidden rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${m.role === "user" ? "bg-indigo-500 text-white" : "bg-zinc-50 border border-zinc-200 text-zinc-800"}`}>
                   {skeleton ? (
                     <div className="skeleton-bubble"><div className="skeleton-line" /><div className="skeleton-line" /><div className="skeleton-line" /></div>
                   ) : (
@@ -428,7 +437,7 @@ export default function EnglishPage() {
                 <div className="w-52 mt-1"><TtsBar phase={ttsPhase} progress={progress} /></div>
               )}
               {m.role === "user" && m.correction && (m.correction !== m.content || m.error_note) && (
-                <div className="max-w-[70%] bg-amber-50/85 backdrop-blur-sm border border-amber-200/90 rounded-xl px-3 py-2 text-xs flex flex-col gap-1.5">
+                <div className="max-w-[70%] bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs flex flex-col gap-1.5">
                   <div className="font-semibold text-amber-700">{m.correction !== m.content ? "✏️ 语法修正" : "✅ 语法检查"}</div>
                   {m.correction !== m.content && (
                     <div className="flex flex-col gap-1">
@@ -447,29 +456,30 @@ export default function EnglishPage() {
             </div>
             )
           })}
+          </div>
         </div>
         <div className="flex gap-2 mt-3 items-stretch">
-          <button onClick={toggleMic} title="语音输入"
-            className={`w-12 rounded-xl text-lg ${listening ? "bg-red-500 text-white animate-pulse shadow-md shadow-red-500/25" : "bg-white border border-zinc-300 text-zinc-500 hover:border-indigo-400 hover:text-indigo-500"}`}>
+          <Button onClick={toggleMic} title="语音输入"
+            className="!w-12 !h-auto !text-lg"
+            danger={listening} type={listening ? "primary" : "default"}>
             {listening ? "⏹" : "🎤"}
-          </button>
-          <textarea value={input} onChange={(e) => setInput(e.target.value)}
+          </Button>
+          <Input.TextArea value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
             placeholder="Type your English here...（Enter 发送）"
-            className="flex-1 input resize-none h-[64px]" />
-          <button onClick={send} disabled={busy || !input.trim()}
-            className="btn-primary">
-            {busy ? "..." : "发送"}
-          </button>
+            className="flex-1 resize-none" rows={2} />
+          <Button type="primary" className="!h-auto" onClick={send} loading={busy} disabled={!input.trim()}>
+            发送
+          </Button>
         </div>
       </div>
 
-      {/* 场景选择弹窗（antd Modal） */}
-      <Modal open={showPicker} onClose={() => setShowPicker(false)} title="选择对话场景" maxW="max-w-lg">
+      {/* 场景选择弹窗 */}
+      <Modal open={showPicker} onCancel={() => setShowPicker(false)} title="选择对话场景" footer={null} width={520} destroyOnHidden>
         <div className="grid grid-cols-2 gap-3">
           {scenarios.map((s) => (
             <button key={s.id} onClick={() => createConv(s.id)}
-              className="border border-zinc-200 hover:border-indigo-400 hover:bg-indigo-50/70 hover:shadow-md rounded-2xl p-4 text-left transition-all">
+              className="border border-zinc-200 hover:border-indigo-400 hover:bg-indigo-50 rounded-lg p-4 text-left transition-all">
               <div className="font-semibold text-sm">{s.en}</div>
               <div className="text-xs text-zinc-500 mt-1">{s.name}</div>
             </button>
