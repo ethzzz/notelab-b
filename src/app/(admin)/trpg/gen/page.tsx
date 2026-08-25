@@ -143,7 +143,7 @@ export default function TrpgGenPage() {
         <Space size={4} wrap>
           <Button size="small" icon={<Eye size={12} />} onClick={() => view(s)}>预览</Button>
           <Button size="small" loading={pubBusyId === s.id}
-            type={s.published ? "default" : "primary"} ghost={!!s.published}
+            type={s.published ? "default" : "primary"} danger={!!s.published}
             onClick={() => togglePublish(s)}>
             {s.published ? "取消发布" : "发布到 C 端"}
           </Button>
