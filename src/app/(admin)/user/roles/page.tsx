@@ -84,7 +84,7 @@ export default function UserRolesPage() {
   }
 
   if (denied) return <Result status="403" title="403" subTitle="此页面仅超级管理员可见" />
-  if (!ov) return <div className="text-zinc-500">加载中...</div>
+  if (!ov) return <div className="text-zinc-500 dark:text-zinc-400">加载中...</div>
 
   const pageRoutes = ov.routes.filter((r) => r.kind === "page")
   const apiRoutes = ov.routes.filter((r) => r.kind === "api")
@@ -102,7 +102,7 @@ export default function UserRolesPage() {
         const r = pageByPath.get(it.path)
         if (r) {
           consumedPage.add(r.code)
-          nodes.push({ title: <span><span className="text-sm text-zinc-700">{r.name}</span><span className="text-[11px] text-zinc-400 font-mono ml-1.5">{r.path}</span></span>, key: r.code, selectable: false })
+          nodes.push({ title: <span><span className="text-sm text-zinc-700 dark:text-zinc-200">{r.name}</span><span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono ml-1.5">{r.path}</span></span>, key: r.code, selectable: false })
         }
       }
     }
@@ -111,7 +111,7 @@ export default function UserRolesPage() {
   const consumedPage = new Set<string>()
   const menuGroupNodes = menuNodes(menu)
   const orphanPages = pageRoutes.filter((r) => !consumedPage.has(r.code)).map((r) => ({
-    title: <span><span className="text-sm text-zinc-700">{r.name}</span><span className="text-[11px] text-zinc-400 font-mono ml-1.5">{r.path}</span></span>,
+    title: <span><span className="text-sm text-zinc-700 dark:text-zinc-200">{r.name}</span><span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono ml-1.5">{r.path}</span></span>,
     key: r.code, selectable: false,
   }))
   if (orphanPages.length) menuGroupNodes.push({ title: "📦 未挂菜单的页面", key: "grp:page:orphan", selectable: false, children: orphanPages })
@@ -128,7 +128,7 @@ export default function UserRolesPage() {
   const apiGroupNodes = [...apiGroups.entries()].map(([g, rs]) => ({
     title: `${g === "_base" ? "⚙️ 系统基础" : "📦 " + (apiModuleName[g] || g)} · ${rs.length} 条`, key: `grp:api:${g}`, selectable: false,
     children: rs.map((r) => ({
-      title: <span className="text-xs text-zinc-500 font-mono">{r.method} {r.path}</span>, key: r.code, selectable: false,
+      title: <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">{r.method} {r.path}</span>, key: r.code, selectable: false,
     })),
   }))
 
@@ -143,8 +143,8 @@ export default function UserRolesPage() {
       render: (_: any, r: Role) => (
         <Space size={6}>
           <span>{r.code === "super_admin" ? "👑" : r.code === "user" ? "🙋" : "🛡️"}</span>
-          <span className="font-medium text-zinc-800">{r.name}</span>
-          <span className="text-[11px] text-zinc-400 font-mono">{r.code}</span>
+          <span className="font-medium text-zinc-800 dark:text-zinc-100">{r.name}</span>
+          <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono">{r.code}</span>
           {(r.code === "super_admin" || r.code === "user") && <Tag>内置</Tag>}
         </Space>
       ),
@@ -159,8 +159,8 @@ export default function UserRolesPage() {
     {
       title: "说明", dataIndex: "code",
       render: (code: string) => code === "super_admin"
-        ? <span className="text-xs text-zinc-400">默认拥有全部路由（含未来自动注册的新路由），无需分配</span>
-        : <span className="text-xs text-zinc-400">分配路由组后，成员菜单即时生效</span>,
+        ? <span className="text-xs text-zinc-400 dark:text-zinc-500">默认拥有全部路由（含未来自动注册的新路由），无需分配</span>
+        : <span className="text-xs text-zinc-400 dark:text-zinc-500">分配路由组后，成员菜单即时生效</span>,
     },
     {
       title: "操作", align: "right" as const, width: 240,
@@ -184,7 +184,7 @@ export default function UserRolesPage() {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>创建角色组</Button>
-        <span className="text-xs text-zinc-400">共 {ov.roles.length} 个角色组 · 给角色分配路由组后，成员菜单即时生效</span>
+        <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {ov.roles.length} 个角色组 · 给角色分配路由组后，成员菜单即时生效</span>
       </div>
 
       <Table rowKey="code" size="middle" columns={columns as any} dataSource={ov.roles} pagination={false} />
@@ -225,7 +225,7 @@ export default function UserRolesPage() {
                 const arr = Array.isArray(keys) ? keys : keys.checked
                 setDraft(arr.filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:")) as string[])
               }} />
-            <div className="mt-2 text-xs text-zinc-400">共 {ov.routes.length} 条路由 · 已勾选 {draft.length} 条；勾选分组节点可整组选/取消</div>
+            <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">共 {ov.routes.length} 条路由 · 已勾选 {draft.length} 条；勾选分组节点可整组选/取消</div>
           </div>
         </Modal>
       )}

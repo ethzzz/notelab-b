@@ -47,19 +47,19 @@ export default function UiConfigPage() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold mb-0">界面配置</h1>
-      <p className="text-zinc-500 text-sm -mt-2 mb-0">配置菜单展示与全局背景，保存后即时生效。</p>
+      <p className="text-zinc-500 dark:text-zinc-400 text-sm -mt-2 mb-0">配置菜单展示与全局背景，保存后即时生效。</p>
 
       {/* B/C 拆分阶段4：C 端背景说明 —— 此处保存的 background 即 C 端匿名拉取的全局背景 */}
-      <Card size="small" className="!border-indigo-200 !bg-indigo-50/40">
+      <Card size="small" className="!border-indigo-200 !bg-indigo-50/40 dark:!border-indigo-500/30 dark:!bg-indigo-500/10">
         <div className="font-semibold text-sm text-indigo-700 mb-2">🌐 C 端背景说明</div>
-        <p className="text-xs text-zinc-600 leading-relaxed mb-2">
+        <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed mb-2">
           本页保存的「主题风格 / 自定义背景」会写入 ui_config.background，
           C 端游戏中心（/）启动时会匿名调用 <span className="font-mono">GET /api/c/config/background</span> 拉取同一份配置作为全局背景 ——
           也就是说，<b>在这里切换主题，C 端用户看到的背景会同步变化</b>（无需 C 端登录）。
         </p>
         <div className="flex items-center gap-3">
-          <div className="h-16 w-28 rounded-lg border border-zinc-200 shrink-0" style={{ ...resolveBgStyle(bg), backgroundAttachment: "scroll" }} />
-          <div className="text-xs text-zinc-500">
+          <div className="h-16 w-28 rounded-lg border border-zinc-200 dark:border-zinc-700 shrink-0" style={{ ...resolveBgStyle(bg), backgroundAttachment: "scroll" }} />
+          <div className="text-xs text-zinc-500 dark:text-zinc-400">
             当前背景预览：{bg.theme ? `主题「${themeById(bg.theme)?.name}」` : bg.type === "image" ? "自定义背景图" : `自定义颜色 ${bg.color || "#f6f7f9"}`}
           </div>
         </div>
@@ -69,12 +69,12 @@ export default function UiConfigPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           {THEMES.map((t) => (
             <button key={t.id} onClick={() => pickTheme(t.id)} title={t.desc}
-              className={`rounded-lg border p-2 text-left transition-all ${bg.theme === t.id ? "border-indigo-500 ring-2 ring-indigo-100" : "border-zinc-200 hover:border-indigo-300 hover:shadow-sm"}`}>
-              <div className="h-14 rounded-md border border-zinc-200/70" style={{ ...t.style, backgroundAttachment: "scroll" }} />
-              <div className="mt-1.5 text-xs font-medium text-zinc-700 flex items-center gap-1">
+              className={`rounded-lg border p-2 text-left transition-all ${bg.theme === t.id ? "border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-500/30" : "border-zinc-200 dark:border-zinc-700 hover:border-indigo-300 hover:shadow-sm"}`}>
+              <div className="h-14 rounded-md border border-zinc-200/70 dark:border-zinc-700" style={{ ...t.style, backgroundAttachment: "scroll" }} />
+              <div className="mt-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200 flex items-center gap-1">
                 <span>{t.emoji}</span>
                 <span className="truncate">{t.name}</span>
-                {bg.theme === t.id && <span className="ml-auto text-indigo-600 font-bold">✓</span>}
+                {bg.theme === t.id && <span className="ml-auto text-indigo-600 dark:text-indigo-300 font-bold">✓</span>}
               </div>
             </button>
           ))}
@@ -93,7 +93,7 @@ export default function UiConfigPage() {
           {!bg.theme && customMode === "color" && (
             <div className="flex items-center gap-3">
               <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(bg.color) ? bg.color : "#f6f7f9"}
-                onChange={(e) => setCustomColor(e.target.value)} className="w-11 h-9 rounded-md cursor-pointer border border-zinc-300" />
+                onChange={(e) => setCustomColor(e.target.value)} className="w-11 h-9 rounded-md cursor-pointer border border-zinc-300 dark:border-zinc-600" />
               <Input value={bg.color || ""} onChange={(e) => setCustomColor(e.target.value)} placeholder="#f6f7f9" className="max-w-40" />
             </div>
           )}
@@ -101,7 +101,7 @@ export default function UiConfigPage() {
             <Input value={bg.image_url || ""} onChange={(e) => setCustomImage(e.target.value)}
               placeholder="背景图 URL，如 https://.../bg.jpg" />
           )}
-          {bg.theme && <div className="text-xs text-zinc-400">当前使用主题「{themeById(bg.theme)?.name}」；选择上方背景色/背景图可切换为自定义。</div>}
+          {bg.theme && <div className="text-xs text-zinc-400 dark:text-zinc-500">当前使用主题「{themeById(bg.theme)?.name}」；选择上方背景色/背景图可切换为自定义。</div>}
         </div>
       </Card>
 
@@ -112,7 +112,7 @@ export default function UiConfigPage() {
             const c = config.menus?.[key] || {}
             return (
               <div key={key} className="flex items-center gap-2">
-                <span className="w-24 text-xs text-zinc-400 font-mono shrink-0">{key}</span>
+                <span className="w-24 text-xs text-zinc-400 dark:text-zinc-500 font-mono shrink-0">{key}</span>
                 <Input value={c.icon !== undefined ? c.icon : (d.icon || "")} onChange={(e) => setMenu(key, { icon: e.target.value })}
                   placeholder="icon" className="!w-16 text-center !text-base" />
                 <Input value={c.name !== undefined ? c.name : (d.name || "")} onChange={(e) => setMenu(key, { name: e.target.value })}

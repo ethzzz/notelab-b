@@ -79,7 +79,7 @@ export default function ArenaPage() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">模型竞技场</h1>
-      <p className="text-zinc-600 text-sm">同一个问题并行发给多个模型，谁先答完谁先显示，直观对比不同模型。</p>
+      <p className="text-zinc-600 dark:text-zinc-300 text-sm">同一个问题并行发给多个模型，谁先答完谁先显示，直观对比不同模型。</p>
 
       <Card size="small" className="shadow-sm">
         <div className="flex flex-col gap-3">
@@ -92,7 +92,7 @@ export default function ArenaPage() {
           <div className="flex flex-wrap gap-1.5">
             {models.map((m) => (
               <Tag.CheckableTag key={m} checked={selected.includes(m)} onChange={() => toggleModel(m)}
-                className="!border !rounded-full !px-3 !py-1 !text-xs border-zinc-300/70">
+                className="!border !rounded-full !px-3 !py-1 !text-xs border-zinc-300/70 dark:border-zinc-600">
                 {m}
               </Tag.CheckableTag>
             ))}
@@ -111,12 +111,12 @@ export default function ArenaPage() {
             <Card key={i} size="small" className="shadow-sm"
               title={<span className="font-semibold text-sm">{r.model}</span>}
               extra={
-                r.loading ? <span className="text-xs text-zinc-400 inline-flex items-center gap-1.5"><Spin size="small" />思考中</span>
+                r.loading ? <span className="text-xs text-zinc-400 dark:text-zinc-500 inline-flex items-center gap-1.5"><Spin size="small" />思考中</span>
                 : r.error ? <Tag color="error">失败</Tag>
                 : <Tag color="success">完成</Tag>
               }>
               {r.loading ? (
-                <div className="text-sm text-zinc-400">等待模型响应...</div>
+                <div className="text-sm text-zinc-400 dark:text-zinc-500">等待模型响应...</div>
               ) : r.error ? (
                 <div className="text-sm text-red-500 whitespace-pre-wrap break-words">{r.error}</div>
               ) : (

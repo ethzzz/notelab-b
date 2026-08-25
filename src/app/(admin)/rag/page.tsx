@@ -61,7 +61,7 @@ export default function RagPage() {
       {/* 左：上传与文档 */}
       <div className="lg:w-1/2 flex flex-col gap-4">
         <h1 className="text-2xl font-bold">文档问答 RAG</h1>
-        <p className="text-zinc-600 text-sm">上传文档后提问，AI 依据文档作答并标注引用；文档里没有的会如实说明。</p>
+        <p className="text-zinc-600 dark:text-zinc-300 text-sm">上传文档后提问，AI 依据文档作答并标注引用；文档里没有的会如实说明。</p>
         <Card size="small" className="shadow-sm" title="① 上传文档（.txt / 粘贴文本）">
           <div className="flex flex-col gap-3">
             <Upload.Dragger accept=".txt,.md" showUploadList={false} beforeUpload={beforeUpload} className="!bg-transparent">
@@ -80,7 +80,7 @@ export default function RagPage() {
           {docs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文档" /> : (
             <div className="flex flex-col gap-2">
               {docs.map((d) => (
-                <div key={d.name} className="flex items-center justify-between text-sm bg-zinc-50 rounded-xl px-3 py-2 border border-zinc-200/70">
+                <div key={d.name} className="flex items-center justify-between text-sm bg-zinc-50 dark:bg-zinc-800/60 rounded-xl px-3 py-2 border border-zinc-200/70 dark:border-zinc-700">
                   <span><FileTextOutlined className="mr-1.5 text-indigo-500" />{d.name}</span>
                   <Tag>{d.chunks} 个切片</Tag>
                 </div>
@@ -102,16 +102,16 @@ export default function RagPage() {
           </div>
         </Card>
         {(answer || citations.length > 0) && (
-          <Card size="small" className="shadow-sm" title={<span className="text-indigo-600">回答</span>}>
+          <Card size="small" className="shadow-sm" title={<span className="text-indigo-600 dark:text-indigo-300">回答</span>}>
             <div className="flex flex-col gap-3">
               <div className="text-sm whitespace-pre-wrap break-words">{answer}</div>
               {citations.length > 0 && (
-                <div className="border-t border-zinc-100 pt-3">
+                <div className="border-t border-zinc-100 dark:border-zinc-800 pt-3">
                   <div className="font-semibold text-sm mb-2">引用（检索到的片段）</div>
                   <div className="flex flex-col gap-2">
                     {citations.map((c, i) => (
-                      <div key={i} className="bg-zinc-50 rounded-xl px-3 py-2 border border-zinc-200/70 text-xs text-zinc-600">
-                        <span className="text-indigo-600 font-medium">[{i + 1}] {c.doc}</span>
+                      <div key={i} className="bg-zinc-50 dark:bg-zinc-800/60 rounded-xl px-3 py-2 border border-zinc-200/70 dark:border-zinc-700 text-xs text-zinc-600 dark:text-zinc-300">
+                        <span className="text-indigo-600 dark:text-indigo-300 font-medium">[{i + 1}] {c.doc}</span>
                         <div className="mt-1 whitespace-pre-wrap">{c.text}</div>
                       </div>
                     ))}

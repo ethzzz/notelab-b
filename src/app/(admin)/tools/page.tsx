@@ -94,15 +94,15 @@ export default function ToolsPage() {
     } catch (e: any) { toast.error(e.message || "删除失败") }
   }
 
-  if (denied) return <Card className="text-center text-zinc-500 py-8">🔒 工具库管理仅超级管理员可用。</Card>
+  if (denied) return <Card className="text-center text-zinc-500 dark:text-zinc-400 py-8">🔒 工具库管理仅超级管理员可用。</Card>
 
   const columns = [
     {
       title: "工具", dataIndex: "name", width: 220,
       render: (_: any, t: Tool) => (
         <div className="flex items-center gap-2.5">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-indigo-50 border border-indigo-100 text-lg">{t.icon || "🔧"}</span>
-          <span className={`font-medium truncate ${t.enabled ? "text-zinc-800" : "text-zinc-400"}`}>{t.name}</span>
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-indigo-50 dark:bg-indigo-500/15 border border-indigo-100 dark:border-indigo-500/30 text-lg">{t.icon || "🔧"}</span>
+          <span className={`font-medium truncate ${t.enabled ? "text-zinc-800 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500"}`}>{t.name}</span>
         </div>
       ),
     },
@@ -113,11 +113,11 @@ export default function ToolsPage() {
     },
     {
       title: "描述", dataIndex: "description",
-      render: (v: string) => <span className="text-sm text-zinc-500 line-clamp-2">{v || "（暂无描述）"}</span>,
+      render: (v: string) => <span className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2">{v || "（暂无描述）"}</span>,
     },
     {
       title: "端点", dataIndex: "endpoint", width: 180,
-      render: (v: string) => v ? <span className="font-mono text-xs text-zinc-400 truncate block" title={v}>🔗 {v}</span> : <span className="text-zinc-300">—</span>,
+      render: (v: string) => v ? <span className="font-mono text-xs text-zinc-400 dark:text-zinc-500 truncate block" title={v}>🔗 {v}</span> : <span className="text-zinc-300">—</span>,
     },
     {
       title: "启用", dataIndex: "enabled", width: 80, align: "center" as const,
@@ -144,7 +144,7 @@ export default function ToolsPage() {
         <Tag color="indigo">{tools.length} 个工具 · {tools.filter((t) => t.enabled).length} 个启用</Tag>
         <Button type="primary" onClick={openNew} className="ml-auto">＋ 添加工具</Button>
       </div>
-      <p className="text-zinc-500 text-sm -mt-1 mb-0">登记与管理可被各 AI 功能引用的增强能力（搜索 / 生成 / 语音 / MCP / 自定义 API）。启停与配置修改即时生效。</p>
+      <p className="text-zinc-500 dark:text-zinc-400 text-sm -mt-1 mb-0">登记与管理可被各 AI 功能引用的增强能力（搜索 / 生成 / 语音 / MCP / 自定义 API）。启停与配置修改即时生效。</p>
 
       {/* 分类筛选 */}
       <Radio.Group value={filter} onChange={(e) => setFilter(e.target.value)} optionType="button" buttonStyle="solid"

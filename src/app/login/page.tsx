@@ -57,8 +57,8 @@ export default function LoginPage() {
 
   if (checking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5]">
-        <div className="flex flex-col items-center gap-3 text-zinc-500">
+      <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5] dark:bg-[#141414]">
+        <div className="flex flex-col items-center gap-3 text-zinc-500 dark:text-zinc-400">
           <Spin size="large" />
           <span className="text-sm">正在检查登录状态…</span>
         </div>
@@ -67,26 +67,26 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5] p-4">
+    <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5] dark:bg-[#141414] p-4">
       <Card className="!w-full max-w-sm shadow-md" styles={{ body: { padding: 28 } }}>
         <div className="flex flex-col items-center gap-1.5 mb-4">
           <span className="grid h-12 w-12 place-items-center rounded-xl bg-indigo-500 text-2xl text-white">🧪</span>
-          <div className="text-xl font-bold text-zinc-800">NoteLab 管理后台</div>
-          <div className="text-xs text-zinc-400">AI 试验后台 · B 端</div>
+          <div className="text-xl font-bold text-zinc-800 dark:text-zinc-100">NoteLab 管理后台</div>
+          <div className="text-xs text-zinc-400 dark:text-zinc-500">AI 试验后台 · B 端</div>
         </div>
         <Form layout="vertical" onFinish={submit} requiredMark={false}>
           <Form.Item label="用户名" name="username" rules={[{ required: true, message: "请输入用户名" }]}>
-            <Input size="large" prefix={<User size={14} className="text-zinc-400" />} placeholder="请输入用户名" autoFocus />
+            <Input size="large" prefix={<User size={14} className="text-zinc-400 dark:text-zinc-500" />} placeholder="请输入用户名" autoFocus />
           </Form.Item>
           <Form.Item label="密码" name="password" rules={[{ required: true, message: "请输入密码" }]}>
-            <Input.Password size="large" prefix={<Lock size={14} className="text-zinc-400" />} placeholder="请输入密码"
+            <Input.Password size="large" prefix={<Lock size={14} className="text-zinc-400 dark:text-zinc-500" />} placeholder="请输入密码"
               onPressEnter={(e) => (e.currentTarget.closest("form") as HTMLFormElement)?.requestSubmit()} />
           </Form.Item>
           <Button type="primary" htmlType="submit" size="large" block loading={loading}>
             {loading ? "登录中…" : "登 录"}
           </Button>
         </Form>
-        <p className="text-xs text-zinc-400 text-center mt-3 mb-0">账号由管理员统一创建，如需开通请联系管理员</p>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500 text-center mt-3 mb-0">账号由管理员统一创建，如需开通请联系管理员</p>
       </Card>
     </div>
   )

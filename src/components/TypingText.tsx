@@ -73,7 +73,7 @@ export function SkeletonText({ lines = 3, className = "" }: { lines?: number; cl
     <div className={`flex flex-col gap-2 py-1 w-48 ${className}`} aria-busy="true" aria-label="AI 正在思考">
       {Array.from({ length: lines }).map((_, i) => (
         <div key={i}
-          className={`h-3 rounded-full bg-zinc-300/80 animate-pulse ${widths[i % widths.length]}`}
+          className={`h-3 rounded-full bg-zinc-300/80 dark:bg-zinc-600/70 animate-pulse ${widths[i % widths.length]}`}
           style={{ animationDelay: `${i * 130}ms` }} />
       ))}
     </div>

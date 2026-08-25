@@ -1,8 +1,16 @@
 @import "tailwindcss";
 
+/* 深色主题变体：以 <html> 上的 .dark class 为准（AntdProvider 切换 + 根 layout 内联脚本首帧防闪烁） */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #f0f2f5;
   --foreground: #18181b;
+}
+.dark {
+  /* antd 深色惯例色：页面底 #141414，容器 #1f1f1f */
+  --background: #141414;
+  --foreground: #e4e4e7;
 }
 
 @layer base {
@@ -48,6 +56,7 @@
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
   cursor: pointer;
 }
+.dark .speak-btn { background: #2a2a2e; border-color: rgba(129, 132, 255, 0.4); }
 .speak-btn svg { width: 0.95rem; height: 0.95rem; }
 .speak-btn:hover { transform: scale(1.12); border-color: rgba(99, 102, 241, 0.55); box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3); }
 .speak-btn-playing {
@@ -55,6 +64,7 @@
   border-color: transparent; color: #fff;
   box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
 }
+.dark .speak-btn-playing { background: linear-gradient(135deg, #10b981, #22c55e); border-color: transparent; }
 .speak-btn-playing:hover { border-color: transparent; box-shadow: 0 2px 10px rgba(16, 185, 129, 0.55); }
 .speak-spin { animation: speak-rotate .9s linear infinite; color: #a1a1aa; }
 @keyframes speak-rotate { to { transform: rotate(360deg); } }
@@ -70,6 +80,7 @@
   background-size: 200% 100%;
   animation: tts-shimmer 1.2s ease-in-out infinite;
 }
+.dark .tts-shimmer { background: linear-gradient(90deg, #3f3f46 25%, #52525b 50%, #3f3f46 75%); background-size: 200% 100%; }
 @keyframes tts-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 /* —— AI 回复等待骨架：气泡内三条流光占位行，表示正在等待回复 —— */
 /* 骨架内容宽度与打字态气泡 min-w-[200px]+px-4 对齐，避免骨架→文字切换时气泡宽度骤缩 */
@@ -80,6 +91,7 @@
   background-size: 200% 100%;
   animation: tts-shimmer 1.2s ease-in-out infinite;
 }
+.dark .skeleton-line { background: linear-gradient(90deg, #3f3f46 25%, #52525b 50%, #3f3f46 75%); background-size: 200% 100%; }
 .skeleton-line:nth-child(2) { width: 88%; animation-delay: .12s; }
 .skeleton-line:nth-child(3) { width: 58%; animation-delay: .24s; }
 /* —— AI 回复打字机光标 —— */

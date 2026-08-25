@@ -33,7 +33,7 @@ export default function ToolboxPage() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-bold">文本工具箱</h1>
-      <p className="text-zinc-600 text-sm">同一个模型、同一个接口，靠不同的提示词干不同的活。输入一段文本，点任意按钮试试。</p>
+      <p className="text-zinc-600 dark:text-zinc-300 text-sm">同一个模型、同一个接口，靠不同的提示词干不同的活。输入一段文本，点任意按钮试试。</p>
       <Input.TextArea value={text} onChange={(e) => setText(e.target.value)}
         placeholder="在这里输入一段文本..." autoSize={{ minRows: 5, maxRows: 12 }} />
       <Space wrap>
@@ -44,7 +44,7 @@ export default function ToolboxPage() {
         ))}
       </Space>
       {actionName && (
-        <Card size="small" className="shadow-sm" title={<span className="text-indigo-600">{busy ? `${actionName} 处理中...` : `${actionName} 结果`}</span>}>
+        <Card size="small" className="shadow-sm" title={<span className="text-indigo-600 dark:text-indigo-300">{busy ? `${actionName} 处理中...` : `${actionName} 结果`}</span>}>
           <div className="text-sm whitespace-pre-wrap break-words min-h-[1.5rem]">{result || (busy ? "…" : "")}</div>
         </Card>
       )}

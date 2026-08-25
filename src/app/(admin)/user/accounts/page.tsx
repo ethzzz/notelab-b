@@ -133,7 +133,7 @@ export default function UserAccountsPage() {
   }
 
   if (denied) return <Result status="403" title="403" subTitle="此页面仅超级管理员可见" />
-  if (!ov) return <div className="text-zinc-500">加载中...</div>
+  if (!ov) return <div className="text-zinc-500 dark:text-zinc-400">加载中...</div>
 
   const columns = [
     { title: "ID", dataIndex: "id", width: 70 },
@@ -141,18 +141,18 @@ export default function UserAccountsPage() {
       title: "用户名", dataIndex: "username",
       render: (_: any, u: User) => (
         <Space size={6}>
-          <span className="font-medium text-zinc-800">{u.username}</span>
+          <span className="font-medium text-zinc-800 dark:text-zinc-100">{u.username}</span>
           {u.id === ov.me.id && <Tag color="processing">我</Tag>}
           {u.role === "super_admin" && <Tag color="gold">👑 超管</Tag>}
         </Space>
       ),
     },
-    { title: "邮箱", dataIndex: "email", render: (v: string | null) => <span className="text-zinc-500">{v || "—"}</span> },
+    { title: "邮箱", dataIndex: "email", render: (v: string | null) => <span className="text-zinc-500 dark:text-zinc-400">{v || "—"}</span> },
     {
       title: "角色", dataIndex: "role", width: 170,
       render: (_: any, u: User) => <Select size="small" value={u.role} onChange={(v) => confirmChangeRole(u, v)} options={roleOptions} className="w-36" />,
     },
-    { title: "创建时间", dataIndex: "created_at", render: (v: string) => <span className="text-zinc-400 text-xs">{String(v || "").slice(0, 16)}</span> },
+    { title: "创建时间", dataIndex: "created_at", render: (v: string) => <span className="text-zinc-400 dark:text-zinc-500 text-xs">{String(v || "").slice(0, 16)}</span> },
     {
       title: "操作", align: "right" as const, width: 200,
       render: (_: any, u: User) => (
@@ -176,7 +176,7 @@ export default function UserAccountsPage() {
           onSearch={(v) => { setQ(v); setPage(1) }} />
         <Select placeholder="角色筛选" allowClear style={{ width: 150 }} value={roleFilter || undefined}
           onChange={(v) => { setRoleFilter(v || ""); setPage(1) }} options={roleOptions} />
-        <span className="text-xs text-zinc-400">共 {total} 个账户 · 注册入口已关闭，统一由此建号</span>
+        <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {total} 个账户 · 注册入口已关闭，统一由此建号</span>
       </div>
 
       <Table rowKey="id" size="middle" columns={columns as any} dataSource={users} loading={loading}

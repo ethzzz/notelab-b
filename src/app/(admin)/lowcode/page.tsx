@@ -27,7 +27,7 @@ function CopyBtn({ text }: { text: string }) {
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">{children}</div>
+  return <div className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-2">{children}</div>
 }
 
 // ================= 表单设计器 =================
@@ -135,7 +135,7 @@ function FormDesigner() {
             </Button>
           ))}
         </div>
-        <p className="text-[11px] text-zinc-400 mt-3 mb-0 leading-relaxed">点击组件添加到画布；设计稿自动保存在浏览器本地。</p>
+        <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-3 mb-0 leading-relaxed">点击组件添加到画布；设计稿自动保存在浏览器本地。</p>
       </Card>
 
       {/* 画布 */}
@@ -149,7 +149,7 @@ function FormDesigner() {
           </div>
         </div>
 
-        {fields.length === 0 && <div className="text-zinc-400 text-sm text-center py-12">从左侧点击组件，开始搭建表单</div>}
+        {fields.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm text-center py-12">从左侧点击组件，开始搭建表单</div>}
 
         {!preview ? (
           <div className="flex flex-col gap-2">
@@ -158,12 +158,12 @@ function FormDesigner() {
               const active = selectedId === f.id
               return (
                 <div key={f.id} onClick={() => setSelectedId(f.id)}
-                  className={`group rounded-lg border px-3 py-2.5 cursor-pointer transition-all bg-white ${active ? "border-indigo-400" : "border-zinc-200 hover:border-indigo-300"}`}>
+                  className={`group rounded-lg border px-3 py-2.5 cursor-pointer transition-all bg-white dark:bg-[#1f1f1f] ${active ? "border-indigo-400" : "border-zinc-200 dark:border-zinc-700 hover:border-indigo-300"}`}>
                   <div className="flex items-center gap-2">
                     <span>{def.icon}</span>
-                    <span className="text-sm font-medium text-zinc-800">{f.label}</span>
+                    <span className="text-sm font-medium text-zinc-800 dark:text-zinc-100">{f.label}</span>
                     {f.required && <span className="text-red-500 text-xs">*必填</span>}
-                    <span className="text-[11px] text-zinc-400">{def.name}</span>
+                    <span className="text-[11px] text-zinc-400 dark:text-zinc-500">{def.name}</span>
                     <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                       <Button size="small" title="上移" onClick={() => moveField(f.id, -1)}>↑</Button>
                       <Button size="small" title="下移" onClick={() => moveField(f.id, 1)}>↓</Button>
@@ -178,7 +178,7 @@ function FormDesigner() {
           <div className="flex flex-col gap-4 max-w-lg">
             {fields.map((f) => (
               <div key={f.id} className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-zinc-700">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</label>
+                <label className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</label>
                 <FormPreviewControl f={f} value={formValues[f.id]} onChange={(v) => setFormValues((prev) => ({ ...prev, [f.id]: v }))} />
               </div>
             ))}
@@ -191,23 +191,23 @@ function FormDesigner() {
       {/* 属性面板 */}
       <Card size="small" className="w-60 shrink-0" styles={{ body: { padding: 12 } }}>
         <SectionTitle>属性</SectionTitle>
-        {!selected && <div className="text-zinc-400 text-sm py-6 text-center">选中画布中的字段进行配置</div>}
+        {!selected && <div className="text-zinc-400 dark:text-zinc-500 text-sm py-6 text-center">选中画布中的字段进行配置</div>}
         {selected && (
           <div className="flex flex-col gap-3">
             <div>
-              <label className="text-xs text-zinc-500">标题</label>
+              <label className="text-xs text-zinc-500 dark:text-zinc-400">标题</label>
               <Input className="mt-1" value={selected.label} onChange={(e) => patchField(selected.id, { label: e.target.value })} />
             </div>
             {selected.type !== "switch" && (
               <div>
-                <label className="text-xs text-zinc-500">占位提示</label>
+                <label className="text-xs text-zinc-500 dark:text-zinc-400">占位提示</label>
                 <Input className="mt-1" value={selected.placeholder || ""} onChange={(e) => patchField(selected.id, { placeholder: e.target.value })} />
               </div>
             )}
             <Checkbox checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })}>必填</Checkbox>
             {(selected.type === "select" || selected.type === "radio" || selected.type === "checkbox") && (
               <div>
-                <label className="text-xs text-zinc-500">选项（每行一个）</label>
+                <label className="text-xs text-zinc-500 dark:text-zinc-400">选项（每行一个）</label>
                 <Input.TextArea className="mt-1" rows={4} value={(selected.options || []).join("\n")}
                   onChange={(e) => patchField(selected.id, { options: e.target.value.split("\n").filter((x) => x.trim() !== "") })} />
               </div>
@@ -241,10 +241,10 @@ const FLOW_DEFS: { kind: FlowKind; type: string; name: string; icon: string; par
 ]
 /** 中性配色：节点类型图标底色 */
 const KIND_COLOR: Record<FlowKind, string> = {
-  trigger: "bg-emerald-50 text-emerald-600",
-  condition: "bg-amber-50 text-amber-600",
-  action: "bg-indigo-50 text-indigo-600",
-  delay: "bg-zinc-100 text-zinc-500",
+  trigger: "bg-emerald-50 text-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-400",
+  condition: "bg-amber-50 text-amber-600 dark:bg-amber-400/10 dark:text-amber-400",
+  action: "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300",
+  delay: "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400",
 }
 
 function FlowDesigner() {
@@ -279,9 +279,9 @@ function FlowDesigner() {
       <div className="flex flex-col gap-0.5">
         {FLOW_DEFS.map((d, di) => (
           <button key={d.type} onClick={() => addNode(di, at)}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-indigo-50 hover:text-indigo-600 text-left">
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-600 dark:text-zinc-300 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-500/10 dark:hover:text-indigo-300 text-left">
             <span>{d.icon}</span>{d.name}
-            <span className="ml-auto text-[10px] text-zinc-400">{{ trigger: "触发", condition: "条件", action: "动作", delay: "延时" }[d.kind]}</span>
+            <span className="ml-auto text-[10px] text-zinc-400 dark:text-zinc-500">{{ trigger: "触发", condition: "条件", action: "动作", delay: "延时" }[d.kind]}</span>
           </button>
         ))}
       </div>
@@ -308,15 +308,15 @@ function FlowDesigner() {
             const active = selectedId === n.id
             return (
               <div key={n.id} className="flex flex-col items-center w-full">
-                <div className="w-px h-5 bg-zinc-300" />
+                <div className="w-px h-5 bg-zinc-300 dark:bg-zinc-600" />
                 <div onClick={() => setSelectedId(n.id)}
-                  className={`group w-full rounded-lg border px-4 py-3 cursor-pointer transition-all bg-white ${active ? "border-indigo-400" : "border-zinc-200 hover:border-indigo-300"}`}>
+                  className={`group w-full rounded-lg border px-4 py-3 cursor-pointer transition-all bg-white dark:bg-[#1f1f1f] ${active ? "border-indigo-400" : "border-zinc-200 dark:border-zinc-700 hover:border-indigo-300"}`}>
                   <div className="flex items-center gap-2">
                     <span className={`grid h-7 w-7 place-items-center rounded-md text-sm ${KIND_COLOR[def.kind]}`}>{def.icon}</span>
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-zinc-800">{def.name}</div>
+                      <div className="text-sm font-medium text-zinc-800 dark:text-zinc-100">{def.name}</div>
                       {def.params.length > 0 && (
-                        <div className="text-[11px] text-zinc-400 truncate max-w-[260px]">
+                        <div className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate max-w-[260px]">
                           {def.params.map((p) => n.params[p]).filter(Boolean).join(" · ") || "未配置"}
                         </div>
                       )}
@@ -326,9 +326,9 @@ function FlowDesigner() {
                   </div>
                 </div>
                 <div className="relative flex flex-col items-center">
-                  <div className="w-px h-5 bg-zinc-300" />
+                  <div className="w-px h-5 bg-zinc-300 dark:bg-zinc-600" />
                   <button onClick={() => setAddingAt(addingAt === i ? null : i)}
-                    className="grid h-5 w-5 place-items-center rounded-full bg-white border border-zinc-300 text-zinc-400 text-xs hover:border-indigo-400 hover:text-indigo-500 transition-colors">＋</button>
+                    className="grid h-5 w-5 place-items-center rounded-full bg-white dark:bg-[#1f1f1f] border border-zinc-300 dark:border-zinc-600 text-zinc-400 dark:text-zinc-500 text-xs hover:border-indigo-400 hover:text-indigo-500 transition-colors">＋</button>
                   {addingAt === i && <div className="absolute top-6 z-20"><AddMenu at={i + 1} /></div>}
                 </div>
               </div>
@@ -338,13 +338,13 @@ function FlowDesigner() {
           {nodes.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-4">
               <button onClick={() => setAddingAt(addingAt === -1 ? null : -1)}
-                className="grid h-8 w-8 place-items-center rounded-full bg-white border border-dashed border-zinc-300 text-zinc-400 hover:border-indigo-400 hover:text-indigo-500">＋</button>
+                className="grid h-8 w-8 place-items-center rounded-full bg-white dark:bg-[#1f1f1f] border border-dashed border-zinc-300 dark:border-zinc-600 text-zinc-400 dark:text-zinc-500 hover:border-indigo-400 hover:text-indigo-500">＋</button>
               {addingAt === -1 && <AddMenu at={0} />}
-              <span className="text-zinc-400 text-sm">点击 ＋ 添加第一个节点（建议先加触发器）</span>
+              <span className="text-zinc-400 dark:text-zinc-500 text-sm">点击 ＋ 添加第一个节点（建议先加触发器）</span>
             </div>
           )}
 
-          <div className="w-px h-5 bg-zinc-300" />
+          <div className="w-px h-5 bg-zinc-300 dark:bg-zinc-600" />
           <div className="px-4 py-1.5 rounded-full bg-zinc-700 text-white text-xs font-medium">■ 结束</div>
         </div>
       </Card>
@@ -352,23 +352,23 @@ function FlowDesigner() {
       {/* 节点配置 */}
       <Card size="small" className="w-64 shrink-0" styles={{ body: { padding: 12 } }}>
         <SectionTitle>节点配置</SectionTitle>
-        {!selected && <div className="text-zinc-400 text-sm py-6 text-center">点击流程中的节点进行配置</div>}
+        {!selected && <div className="text-zinc-400 dark:text-zinc-500 text-sm py-6 text-center">点击流程中的节点进行配置</div>}
         {selected && selectedDef && (
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2">
               <span className={`grid h-8 w-8 place-items-center rounded-md text-base ${KIND_COLOR[selectedDef.kind]}`}>{selectedDef.icon}</span>
               <div>
-                <div className="text-sm font-medium text-zinc-800">{selectedDef.name}</div>
-                <div className="text-[11px] text-zinc-400">{{ trigger: "触发器", condition: "条件节点", action: "动作节点", delay: "延时节点" }[selectedDef.kind]}</div>
+                <div className="text-sm font-medium text-zinc-800 dark:text-zinc-100">{selectedDef.name}</div>
+                <div className="text-[11px] text-zinc-400 dark:text-zinc-500">{{ trigger: "触发器", condition: "条件节点", action: "动作节点", delay: "延时节点" }[selectedDef.kind]}</div>
               </div>
             </div>
             {selectedDef.params.map((p) => (
               <div key={p}>
-                <label className="text-xs text-zinc-500">{p}</label>
+                <label className="text-xs text-zinc-500 dark:text-zinc-400">{p}</label>
                 <Input className="mt-1" value={selected.params[p] || ""} onChange={(e) => patchParams(selected.id, p, e.target.value)} />
               </div>
             ))}
-            {selectedDef.params.length === 0 && <div className="text-xs text-zinc-400">该节点无需配置</div>}
+            {selectedDef.params.length === 0 && <div className="text-xs text-zinc-400 dark:text-zinc-500">该节点无需配置</div>}
             <Button size="small" danger className="self-start" onClick={() => removeNode(selected.id)}>🗑 删除节点</Button>
           </div>
         )}
@@ -431,12 +431,12 @@ function DataModeler() {
       <Card size="small" className="flex-1 min-w-0" styles={{ body: { padding: 16 } }}>
         <SectionTitle>模型定义</SectionTitle>
         <div className="flex items-center gap-2 mb-3">
-          <span className="text-sm text-zinc-500 shrink-0">模型名</span>
+          <span className="text-sm text-zinc-500 dark:text-zinc-400 shrink-0">模型名</span>
           <Input className="max-w-[240px]" placeholder="如 orders" value={name} onChange={(e) => setName(e.target.value)} />
           <Button size="small" className="ml-auto" onClick={() => setFields((prev) => [...prev, { name: "", type: "string", required: false, def: "", note: "" }])}>＋ 添加字段</Button>
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: "清空模型？", okText: "清空", okButtonProps: { danger: true }, onOk: () => { setFields([]); setName("") } })} disabled={fields.length === 0}>清空</Button>
         </div>
-        {fields.length === 0 && <div className="text-zinc-400 text-sm text-center py-10">点击「添加字段」开始定义数据模型</div>}
+        {fields.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm text-center py-10">点击「添加字段」开始定义数据模型</div>}
         {fields.length > 0 && (
           <Table rowKey={(_r, i) => String(i)} size="small" columns={modelColumns as any}
             dataSource={fields} pagination={false} />
@@ -475,7 +475,7 @@ export default function LowCodePage() {
           { key: "model", label: "🗃️ 数据模型", children: <DataModeler /> },
         ]}
       />
-      <div className="text-xs text-zinc-400 -mt-2">可视化搭建 · 设计稿保存在浏览器本地 · 支持导出标准格式</div>
+      <div className="text-xs text-zinc-400 dark:text-zinc-500 -mt-2">可视化搭建 · 设计稿保存在浏览器本地 · 支持导出标准格式</div>
     </div>
   )
 }

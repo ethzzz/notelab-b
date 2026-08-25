@@ -142,14 +142,14 @@ export default function ChatPage() {
       <div className="w-56 shrink-0 flex flex-col gap-2">
         <Button type="primary" block onClick={newConv}>＋ 新对话</Button>
         <Card size="small" className="flex-1 overflow-y-auto" styles={{ body: { padding: 8 } }}>
-          {convs.length === 0 && <div className="text-zinc-400 text-sm text-center py-6">暂无对话</div>}
+          {convs.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm text-center py-6">暂无对话</div>}
           <div className="flex flex-col gap-0.5">
             {convs.map((c) => (
               <div key={c.id} onClick={() => selectConv(c.id)}
-                className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors ${c.id === currentId ? "bg-indigo-50 text-indigo-600 font-medium" : "text-zinc-600 hover:bg-zinc-50"}`}>
+                className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors ${c.id === currentId ? "bg-indigo-50 text-indigo-600 font-medium dark:bg-indigo-500/15 dark:text-indigo-300" : "text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/60"}`}>
                 <span className="flex-1 truncate">{c.title || "新对话"}</span>
                 <button onClick={(e) => { e.stopPropagation(); deleteConv(c.id) }}
-                  className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500"><X size={14} /></button>
+                  className="opacity-0 group-hover:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-red-500"><X size={14} /></button>
               </div>
             ))}
           </div>
@@ -159,19 +159,19 @@ export default function ChatPage() {
       {/* 对话区 */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-sm text-zinc-500">模型</span>
+          <span className="text-sm text-zinc-500 dark:text-zinc-400">模型</span>
           <Select value={model || undefined} onChange={changeModel} style={{ width: 280 }} placeholder="选择模型"
             options={models.map((m) => ({ value: m, label: `🤖 ${m}` }))} />
         </div>
         <Card size="small" className="flex-1 overflow-y-auto" styles={{ body: { padding: 16 } }}>
           <div className="flex flex-col gap-3">
-            {messages.length === 0 && <div className="text-zinc-400 text-sm text-center py-10">开始一段新对话吧</div>}
+            {messages.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm text-center py-10">开始一段新对话吧</div>}
             {messages.map((m, i) => {
               // 本轮正在生成的 AI 回复：等待期骨架屏 → 流式文本打字机
               const liveAssistant = i === messages.length - 1 && m.role === "assistant" && (busy || typingTail)
               return (
                 <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm whitespace-pre-wrap break-words ${m.role === "user" ? "bg-indigo-500 text-white" : "bg-zinc-50 border border-zinc-200 text-zinc-800"}`}>
+                  <div className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm whitespace-pre-wrap break-words ${m.role === "user" ? "bg-indigo-500 text-white" : "bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-100"}`}>
                     {m.role === "user"
                       ? m.content
                       : liveAssistant

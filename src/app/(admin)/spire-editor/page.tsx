@@ -192,7 +192,7 @@ export default function SpireEditorPage() {
     setSkillDraft(null)
   }
 
-  if (!loaded) return <div className="text-zinc-500">加载中...</div>
+  if (!loaded) return <div className="text-zinc-500 dark:text-zinc-400">加载中...</div>
 
   const tableCls = ""
   const actBtns = (onEdit: () => void, onDel: () => void, name: string) => (
@@ -206,11 +206,11 @@ export default function SpireEditorPage() {
 
   // ---------------- 卡片表 ----------------
   const cardColumns = [
-    { title: "卡片", dataIndex: "name", render: (_: any, c: CardDef) => <span className="font-medium text-zinc-800">{c.icon} {c.name}</span> },
+    { title: "卡片", dataIndex: "name", render: (_: any, c: CardDef) => <span className="font-medium text-zinc-800 dark:text-zinc-100">{c.icon} {c.name}</span> },
     { title: "类型", dataIndex: "category", width: 90, render: (v: CardCategory) => <Tag color={catColor[v]}>{CATEGORY_LABEL[v]}</Tag> },
     { title: "费用", dataIndex: "cost", width: 70 },
     { title: "稀有度", dataIndex: "rarity", width: 90, render: (v: number) => <Tag>{RARITY_NAME[v]}</Tag> },
-    { title: "效果描述", dataIndex: "id", render: (_: any, c: CardDef) => <span className="text-xs text-zinc-500">{cardDesc(c)}</span> },
+    { title: "效果描述", dataIndex: "id", render: (_: any, c: CardDef) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{cardDesc(c)}</span> },
     { title: "抽取池", dataIndex: "spawnOnly", width: 100, render: (v: boolean) => v ? <Tag>仅生成</Tag> : <Tag color="green">可抽取</Tag> },
     {
       title: "操作", align: "right" as const, width: 140,
@@ -220,10 +220,10 @@ export default function SpireEditorPage() {
 
   // ---------------- 角色表 ----------------
   const charColumns = [
-    { title: "角色", dataIndex: "name", render: (_: any, c: CharacterDef) => <span className="font-medium text-zinc-800">{c.icon} {c.name}</span> },
+    { title: "角色", dataIndex: "name", render: (_: any, c: CharacterDef) => <span className="font-medium text-zinc-800 dark:text-zinc-100">{c.icon} {c.name}</span> },
     { title: "生命上限", dataIndex: "maxHp", width: 100, render: (v: number) => <>❤️ {v}</> },
-    { title: "被动技能", dataIndex: "passives", render: (ps: CharacterDef["passives"]) => <span className="text-xs text-zinc-500">{ps.map((p) => `${p.icon}${p.name}`).join("、") || "—"}</span> },
-    { title: "主动技能", dataIndex: "skill", render: (s: CharacterDef["skill"]) => <span className="text-xs text-zinc-500">{s.icon} {s.name}</span> },
+    { title: "被动技能", dataIndex: "passives", render: (ps: CharacterDef["passives"]) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{ps.map((p) => `${p.icon}${p.name}`).join("、") || "—"}</span> },
+    { title: "主动技能", dataIndex: "skill", render: (s: CharacterDef["skill"]) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{s.icon} {s.name}</span> },
     { title: "初始卡组", dataIndex: "startDeck", width: 100, render: (d: string[]) => `${d.length} 张` },
     {
       title: "操作", align: "right" as const, width: 140,
@@ -233,27 +233,27 @@ export default function SpireEditorPage() {
 
   // ---------------- 技能表 ----------------
   const skillColumns = [
-    { title: "技能", dataIndex: "name", render: (_: any, s: SkillTpl) => <span className="font-medium text-zinc-800">{s.icon} {s.name}</span> },
+    { title: "技能", dataIndex: "name", render: (_: any, s: SkillTpl) => <span className="font-medium text-zinc-800 dark:text-zinc-100">{s.icon} {s.name}</span> },
     { title: "类型", dataIndex: "stype", width: 90, render: (v: string) => v === "active" ? <Tag color="orange">主动</Tag> : <Tag color="blue">被动</Tag> },
-    { title: "机制", dataIndex: "kind", render: (_: any, s: SkillTpl) => <span className="text-xs text-zinc-500">{kindLabel(s)}</span> },
+    { title: "机制", dataIndex: "kind", render: (_: any, s: SkillTpl) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{kindLabel(s)}</span> },
     { title: "数值", dataIndex: "value", width: 70 },
     { title: "冷却", dataIndex: "cooldown", width: 90, render: (v: number, s: SkillTpl) => s.stype === "active" ? `${v} 回合` : "—" },
-    { title: "描述", dataIndex: "desc", render: (v: string) => <span className="text-xs text-zinc-500">{v || "—"}</span> },
+    { title: "描述", dataIndex: "desc", render: (v: string) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{v || "—"}</span> },
     {
       title: "操作", align: "right" as const, width: 140,
       render: (_: any, s: SkillTpl) => actBtns(() => setSkillDraft({ ...s }), () => setSkills((l) => l.filter((x) => x.id !== s.id)), s.name),
     },
   ]
 
-  const emptyCard = <div className="py-6 text-center text-sm text-zinc-400">暂无自定义卡片，点右上角「新建卡片」开始制作</div>
-  const emptyChar = <div className="py-6 text-center text-sm text-zinc-400">暂无自定义角色，点右上角「新建角色」开始制作</div>
-  const emptySkill = <div className="py-6 text-center text-sm text-zinc-400">暂无技能模板，点右上角「新建技能」开始制作（角色制作时可从技能库引用）</div>
+  const emptyCard = <div className="py-6 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无自定义卡片，点右上角「新建卡片」开始制作</div>
+  const emptyChar = <div className="py-6 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无自定义角色，点右上角「新建角色」开始制作</div>
+  const emptySkill = <div className="py-6 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无技能模板，点右上角「新建技能」开始制作（角色制作时可从技能库引用）</div>
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-2xl font-bold">爬塔尖塔 · 内容工坊</h1>
-        <span className="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full">自定义内容保存后在「爬塔尖塔」游戏中生效</span>
+        <span className="text-xs bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300 px-2.5 py-1 rounded-full">自定义内容保存后在「爬塔尖塔」游戏中生效</span>
         <div className="ml-auto flex items-center gap-2">
           {published === true && <Tag color="success">已发布到 C 端</Tag>}
           {published === false && <Tag>未发布</Tag>}
@@ -349,7 +349,7 @@ export default function SpireEditorPage() {
                     <InputNumber size="small" min={0} max={99} title="数值" value={e.amount} onChange={(v) => setEff(i, { amount: v ?? 0 })} />
                     {e.type === "damage"
                       ? <InputNumber size="small" min={1} max={9} title="段数" value={e.hits ?? 1} onChange={(v) => setEff(i, { hits: v ?? 1 })} />
-                      : <span className="text-center text-[10px] text-zinc-400">—</span>}
+                      : <span className="text-center text-[10px] text-zinc-400 dark:text-zinc-500">—</span>}
                     <Select size="small" value={e.target === "self" ? "self" : "enemy"} onChange={(v) => setEff(i, { target: v as "self" | "enemy" })}
                       options={[{ value: "enemy", label: "敌方" }, { value: "self", label: "自身" }]} />
                     <Button size="small" type="text" danger onClick={() => setCardDraft({ ...cardDraft, effects: cardDraft.effects.filter((_, j) => j !== i) })}>✕</Button>
@@ -360,7 +360,7 @@ export default function SpireEditorPage() {
 
             <div className="flex items-center gap-4">
               <SpireCardView def={sanitizeCard(cardDraft) || cardDraft} small />
-              <span className="text-xs text-zinc-400">实时预览：卡面样式与游戏内一致</span>
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">实时预览：卡面样式与游戏内一致</span>
             </div>
           </Form>
         </Modal>
@@ -391,7 +391,7 @@ export default function SpireEditorPage() {
             )}>
               <div className="flex flex-col gap-2">
                 {charDraft.passives.map((p, i) => (
-                  <div key={i} className="rounded-xl border border-black/5 bg-black/[0.02] p-2">
+                  <div key={i} className="rounded-xl border border-black/5 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.04] p-2">
                     <div className="grid grid-cols-[1fr_110px_70px_32px] items-center gap-1.5">
                       <Select size="small" value={p.kind} onChange={(v) => {
                         setCharDraft({ ...charDraft, passives: charDraft.passives.map((x, j) => j === i ? { ...x, kind: v as PassiveKind, name: x.name || PASSIVE_KIND_LABEL[v as PassiveKind].split("（")[0] } : x) })
@@ -419,7 +419,7 @@ export default function SpireEditorPage() {
                 )}
               </span>
             )}>
-              <div className="rounded-xl border border-black/5 bg-black/[0.02] p-2 grid grid-cols-2 gap-1.5">
+              <div className="rounded-xl border border-black/5 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.04] p-2 grid grid-cols-2 gap-1.5">
                 <Select size="small" value={charDraft.skill.kind} onChange={(v) => setCharDraft({ ...charDraft, skill: { ...charDraft.skill, kind: v as SkillKind } })}
                   options={SKILL_KINDS.map((k) => ({ value: k, label: SKILL_KIND_LABEL[k] }))} />
                 <Input size="small" placeholder="技能名" value={charDraft.skill.name} onChange={(e) => setCharDraft({ ...charDraft, skill: { ...charDraft.skill, name: e.target.value } })} />

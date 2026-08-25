@@ -119,15 +119,15 @@ export default function TrpgGenPage() {
   const columns = [
     {
       title: "剧本", dataIndex: "title",
-      render: (_: any, s: ScenarioRow) => <span className="font-medium text-zinc-800 whitespace-nowrap">📜 {s.title} <span className="text-[10px] text-zinc-400 font-normal">#{s.id}</span></span>,
+      render: (_: any, s: ScenarioRow) => <span className="font-medium text-zinc-800 dark:text-zinc-100 whitespace-nowrap">📜 {s.title} <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-normal">#{s.id}</span></span>,
     },
     {
       title: "风格", dataIndex: "genre", width: 110,
-      render: (g: string) => g ? <Tag color="purple">{g}</Tag> : <span className="text-zinc-400">—</span>,
+      render: (g: string) => g ? <Tag color="purple">{g}</Tag> : <span className="text-zinc-400 dark:text-zinc-500">—</span>,
     },
     {
       title: "简介", dataIndex: "summary",
-      render: (v: string) => <span className="text-xs text-zinc-500 line-clamp-1 block max-w-[300px]">{v || "—"}</span>,
+      render: (v: string) => <span className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-1 block max-w-[300px]">{v || "—"}</span>,
     },
     {
       title: "发布状态", width: 100,
@@ -135,7 +135,7 @@ export default function TrpgGenPage() {
     },
     {
       title: "创建时间", dataIndex: "created_at", width: 140,
-      render: (v: string) => <span className="text-xs text-zinc-400 whitespace-nowrap">{String(v || "").slice(0, 16)}</span>,
+      render: (v: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">{String(v || "").slice(0, 16)}</span>,
     },
     {
       title: "操作", align: "right" as const, width: 330,
@@ -157,7 +157,7 @@ export default function TrpgGenPage() {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 flex-wrap">
         <Button type="primary" icon={<Plus size={15} />} onClick={() => setOpen(true)}>生成新剧本</Button>
-        <span className="text-xs text-zinc-400">共 {rows.length} 个剧本 · 生成通常需要 1-3 分钟 · 发布后 C 端「剧本列表」可见</span>
+        <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {rows.length} 个剧本 · 生成通常需要 1-3 分钟 · 发布后 C 端「剧本列表」可见</span>
       </div>
 
       {/* 剧本表格 */}
@@ -199,7 +199,7 @@ export default function TrpgGenPage() {
               <Select value={form.scale} onChange={(v) => patch("scale", v)} options={TRPG_SCALES} />
             </Form.Item>
           </div>
-          {busy && <div className="text-xs text-zinc-400 text-center leading-relaxed">AI 正在构建故事线、分支与结局，通常需要 1-3 分钟，请耐心等待…（生成中请勿关闭）</div>}
+          {busy && <div className="text-xs text-zinc-400 dark:text-zinc-500 text-center leading-relaxed">AI 正在构建故事线、分支与结局，通常需要 1-3 分钟，请耐心等待…（生成中请勿关闭）</div>}
         </Form>
       </Modal>
 

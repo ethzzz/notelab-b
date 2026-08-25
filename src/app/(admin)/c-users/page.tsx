@@ -114,12 +114,12 @@ export default function CUsersPage() {
     { title: "ID", dataIndex: "id", width: 70 },
     {
       title: "用户名", dataIndex: "username", width: 160,
-      render: (v: string) => <span className="font-medium text-zinc-800">{v}</span>,
+      render: (v: string) => <span className="font-medium text-zinc-800 dark:text-zinc-100">{v}</span>,
     },
-    { title: "昵称", dataIndex: "nickname", render: (v: string) => v || <span className="text-zinc-400">—</span> },
+    { title: "昵称", dataIndex: "nickname", render: (v: string) => v || <span className="text-zinc-400 dark:text-zinc-500">—</span> },
     {
       title: "用户组", dataIndex: "group_code", width: 140,
-      render: (v: string) => <Tag>{groupName(v)}<span className="text-zinc-400 font-mono text-[10px] ml-1">{v}</span></Tag>,
+      render: (v: string) => <Tag>{groupName(v)}<span className="text-zinc-400 dark:text-zinc-500 font-mono text-[10px] ml-1">{v}</span></Tag>,
     },
     {
       title: "状态", dataIndex: "status", width: 90,
@@ -127,7 +127,7 @@ export default function CUsersPage() {
     },
     {
       title: "创建时间", dataIndex: "created_at", width: 150,
-      render: (v: string) => <span className="text-xs text-zinc-400">{String(v || "").slice(0, 16)}</span>,
+      render: (v: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500">{String(v || "").slice(0, 16)}</span>,
     },
     {
       title: "操作", align: "right" as const, width: 210,
@@ -197,7 +197,7 @@ export default function CUsersPage() {
     { title: "成员数", dataIndex: "member_count", width: 110, render: (n: number) => <Tag>👤 {n} 名</Tag> },
     {
       title: "创建时间", dataIndex: "created_at", width: 150,
-      render: (v: string) => <span className="text-xs text-zinc-400">{String(v || "").slice(0, 16)}</span>,
+      render: (v: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500">{String(v || "").slice(0, 16)}</span>,
     },
     {
       title: "操作", align: "right" as const, width: 170,
@@ -219,7 +219,7 @@ export default function CUsersPage() {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 flex-wrap">
         <h1 className="text-2xl font-bold">C 端用户管理</h1>
-        <span className="text-xs text-zinc-400">管理游戏中心（C 端）账号 · 接口 /api/c-admin/*</span>
+        <span className="text-xs text-zinc-400 dark:text-zinc-500">管理游戏中心（C 端）账号 · 接口 /api/c-admin/*</span>
       </div>
 
       <Card size="small" className="shadow-sm">
