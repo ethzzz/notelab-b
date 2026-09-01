@@ -84,7 +84,6 @@ function FormPreviewControl({ f, value, onChange }: { f: Field; value: any; onCh
 function FormDesigner() {
   const [fields, setFields] = useState<Field[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [preview, setPreview] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [formValues, setFormValues] = useState<Record<string, any>>({})
   const [submitted, setSubmitted] = useState("")
@@ -113,12 +112,10 @@ function FormDesigner() {
     const f = makeField(type)
     setFields((prev) => [...prev, f])
     setSelectedId(f.id)
-    setPreview(false)
   }
   function insertField(f: Field, at: number) {
     setFields((prev) => { const c = [...prev]; c.splice(Math.min(at, prev.length), 0, f); return c })
     setSelectedId(f.id)
-    setPreview(false)
   }
   function moveFieldTo(id: string, target: number) {
     setFields((prev) => {
@@ -188,7 +185,6 @@ function FormDesigner() {
         <div className="flex items-center gap-2 mb-3">
           <SectionTitle>画布（{fields.length} 个字段）</SectionTitle>
           <div className="ml-auto flex gap-2">
-            <Button size="small" onClick={() => { setPreview(!preview); setSubmitted("") }}>{preview ? "🛠 回到设计" : "👁 预览"}</Button>
             <Button size="small" onClick={() => setShowExport(true)} disabled={fields.length === 0}>📤 导出 Schema</Button>
             <Button size="small" danger icon={<DeleteOutlined />} onClick={() => Modal.confirm({ title: "清空所有字段？", okText: "清空", okButtonProps: { danger: true }, onOk: () => { setFields([]); setSelectedId(null) } })} disabled={fields.length === 0}>清空</Button>
           </div>
@@ -201,8 +197,7 @@ function FormDesigner() {
           </div>
         )}
 
-        {!preview ? (
-          <div ref={canvasRef} onDragOver={handleDragOver} onDrop={handleDrop} className="flex flex-col gap-2">
+        <div ref={canvasRef} onDragOver={handleDragOver} onDrop={handleDrop} className="flex flex-col gap-2">
             {fields.map((f, i) => {
               const def = FIELD_DEFS.find((d) => d.type === f.type)!
               const active = selectedId === f.id
@@ -231,24 +226,13 @@ function FormDesigner() {
               )
             })}
             {dropIndex === fields.length && dragging && <div className="h-0.5 rounded bg-indigo-400" />}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-4 max-w-lg">
-            {fields.map((f) => (
-              <div key={f.id} className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</label>
-                <FormPreviewControl f={f} value={formValues[f.id]} onChange={(v) => setFormValues((prev) => ({ ...prev, [f.id]: v }))} />
-              </div>
-            ))}
-            <Button type="primary" className="self-start" onClick={() => setSubmitted(JSON.stringify(formToSchema(fields) && formValues, null, 2))}>提交（演示）</Button>
-            {submitted && <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-lg p-3 overflow-x-auto">{submitted}</pre>}
-          </div>
-        )}
+        </div>
       </Card>
 
-      {/* 属性面板 */}
-      <Card size="small" className="w-60 shrink-0" styles={{ body: { padding: 12 } }}>
-        <SectionTitle>属性</SectionTitle>
+      {/* 右栏：属性 + 实时预览 */}
+      <div className="w-72 shrink-0 flex flex-col gap-4">
+        <Card size="small" styles={{ body: { padding: 12 } }}>
+          <SectionTitle>属性</SectionTitle>
         {!selected && <div className="text-zinc-400 dark:text-zinc-500 text-sm py-6 text-center">选中画布中的字段进行配置</div>}
         {selected && (
           <div className="flex flex-col gap-3">
@@ -273,7 +257,28 @@ function FormDesigner() {
             <Button size="small" danger className="self-start" onClick={() => removeField(selected.id)}>🗑 删除该字段</Button>
           </div>
         )}
-      </Card>
+        </Card>
+
+        <Card size="small" styles={{ body: { padding: 12 } }}>
+          <div className="flex items-center justify-between">
+            <SectionTitle>实时预览</SectionTitle>
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">随画布即时更新</span>
+          </div>
+          {fields.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm py-6 text-center">添加字段后此处显示表单效果</div>}
+          {fields.length > 0 && (
+            <div className="flex flex-col gap-4">
+              {fields.map((f) => (
+                <div key={f.id} className="flex flex-col gap-1.5">
+                  <label className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</label>
+                  <FormPreviewControl f={f} value={formValues[f.id]} onChange={(v) => setFormValues((prev) => ({ ...prev, [f.id]: v }))} />
+                </div>
+              ))}
+              <Button type="primary" className="self-start" onClick={() => setSubmitted(JSON.stringify(formValues, null, 2))}>提交（演示）</Button>
+              {submitted && <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-lg p-3 overflow-x-auto">{submitted}</pre>}
+            </div>
+          )}
+        </Card>
+      </div>
 
       {/* 导出弹窗 */}
       <Modal open={showExport} onCancel={() => setShowExport(false)} title="导出 JSON Schema" width={680}
