@@ -1,6 +1,6 @@
 "use client"
 // 低代码平台（传统管理后台风）：antd Tabs + Card；交互规范不变（设计稿存浏览器本地、可导出）
-import { useEffect, useState } from "react"
+import { Fragment, useEffect, useRef, useState, type DragEvent } from "react"
 import { Button, Card, Input, InputNumber, Modal, Select, Switch, Tabs, Checkbox, Radio, DatePicker, Table } from "antd"
 import { CopyOutlined, DeleteOutlined } from "@ant-design/icons"
 
@@ -88,25 +88,66 @@ function FormDesigner() {
   const [showExport, setShowExport] = useState(false)
   const [formValues, setFormValues] = useState<Record<string, any>>({})
   const [submitted, setSubmitted] = useState("")
+  const [dropIndex, setDropIndex] = useState<number | null>(null)      // 拖拽插入位置指示
+  const [dragging, setDragging] = useState(false)                      // 拖拽进行中（显示指示线）
+  const [dragFieldId, setDragFieldId] = useState<string | null>(null)  // 正在拖拽的画布字段（样式变淡）
+  const canvasRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { setFields(LS.get("b_notelab.lowcode.form", [])) }, [])
   useEffect(() => { LS.set("b_notelab.lowcode.form", fields) }, [fields])
 
   const selected = fields.find((f) => f.id === selectedId) || null
 
-  function addField(type: FieldType) {
+  function makeField(type: FieldType): Field {
     const def = FIELD_DEFS.find((d) => d.type === type)!
-    const f: Field = {
-      id: "f" + Date.now().toString(36),
+    return {
+      id: "f" + Date.now().toString(36) + Math.floor(Math.random() * 36).toString(36),
       type,
       label: def.name,
       placeholder: "",
       required: false,
       options: type === "select" || type === "radio" || type === "checkbox" ? ["选项一", "选项二"] : undefined,
     }
+  }
+  function addField(type: FieldType) {
+    const f = makeField(type)
     setFields((prev) => [...prev, f])
     setSelectedId(f.id)
     setPreview(false)
+  }
+  function insertField(f: Field, at: number) {
+    setFields((prev) => { const c = [...prev]; c.splice(Math.min(at, prev.length), 0, f); return c })
+    setSelectedId(f.id)
+    setPreview(false)
+  }
+  function moveFieldTo(id: string, target: number) {
+    setFields((prev) => {
+      const from = prev.findIndex((f) => f.id === id)
+      if (from < 0) return prev
+      const c = [...prev]; const [x] = c.splice(from, 1)
+      c.splice(from < target ? target - 1 : target, 0, x); return c
+    })
+    setSelectedId(id)
+  }
+  // 按鼠标 Y 相对字段卡片中点计算插入下标（原生 HTML5 DnD，无额外依赖）
+  function handleDragOver(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const cards = Array.from(canvasRef.current?.querySelectorAll("[data-field-id]") || []) as HTMLElement[]
+    let idx = cards.length
+    for (let i = 0; i < cards.length; i++) {
+      const r = cards[i].getBoundingClientRect()
+      if (e.clientY < r.top + r.height / 2) { idx = i; break }
+    }
+    if (idx !== dropIndex) setDropIndex(idx)
+  }
+  function handleDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const at = dropIndex ?? fields.length
+    const newType = e.dataTransfer.getData("text/x-new-field")
+    const fieldId = e.dataTransfer.getData("text/x-field-id")
+    setDropIndex(null); setDragging(false); setDragFieldId(null)
+    if (newType) insertField(makeField(newType as FieldType), at)
+    else if (fieldId) moveFieldTo(fieldId, at)
   }
   function patchField(id: string, patch: Partial<Field>) {
     setFields((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)))
@@ -130,12 +171,16 @@ function FormDesigner() {
         <SectionTitle>组件库</SectionTitle>
         <div className="grid grid-cols-1 gap-1.5">
           {FIELD_DEFS.map((d) => (
-            <Button key={d.type} block className="!text-left !flex !items-center !gap-2" onClick={() => addField(d.type)}>
+            <div key={d.type} draggable
+              onDragStart={(e) => { e.dataTransfer.setData("text/x-new-field", d.type); e.dataTransfer.effectAllowed = "copy"; setDragging(true) }}
+              onDragEnd={() => { setDragging(false); setDropIndex(null) }}
+              onClick={() => addField(d.type)}
+              className="flex items-center gap-2 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-[#1f1f1f] px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-300 cursor-grab select-none hover:border-indigo-300">
               <span>{d.icon}</span>{d.name}
-            </Button>
+            </div>
           ))}
         </div>
-        <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-3 mb-0 leading-relaxed">点击组件添加到画布；设计稿自动保存在浏览器本地。</p>
+        <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-3 mb-0 leading-relaxed">拖拽组件到画布指定位置（或点击添加到末尾）；设计稿自动保存在浏览器本地。</p>
       </Card>
 
       {/* 画布 */}
@@ -149,30 +194,43 @@ function FormDesigner() {
           </div>
         </div>
 
-        {fields.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm text-center py-12">从左侧点击组件，开始搭建表单</div>}
+        {fields.length === 0 && (
+          <div onDragOver={(e) => { e.preventDefault(); if (dropIndex !== 0) setDropIndex(0) }} onDrop={handleDrop}
+            className="text-zinc-400 dark:text-zinc-500 text-sm text-center py-12 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700">
+            从左侧拖拽组件到这里，开始搭建表单{dropIndex === 0 && dragging && <div className="h-0.5 mt-2 rounded bg-indigo-400" />}
+          </div>
+        )}
 
         {!preview ? (
-          <div className="flex flex-col gap-2">
-            {fields.map((f) => {
+          <div ref={canvasRef} onDragOver={handleDragOver} onDrop={handleDrop} className="flex flex-col gap-2">
+            {fields.map((f, i) => {
               const def = FIELD_DEFS.find((d) => d.type === f.type)!
               const active = selectedId === f.id
               return (
-                <div key={f.id} onClick={() => setSelectedId(f.id)}
-                  className={`group rounded-lg border px-3 py-2.5 cursor-pointer transition-all bg-white dark:bg-[#1f1f1f] ${active ? "border-indigo-400" : "border-zinc-200 dark:border-zinc-700 hover:border-indigo-300"}`}>
-                  <div className="flex items-center gap-2">
-                    <span>{def.icon}</span>
-                    <span className="text-sm font-medium text-zinc-800 dark:text-zinc-100">{f.label}</span>
-                    {f.required && <span className="text-red-500 text-xs">*必填</span>}
-                    <span className="text-[11px] text-zinc-400 dark:text-zinc-500">{def.name}</span>
-                    <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                      <Button size="small" title="上移" onClick={() => moveField(f.id, -1)}>↑</Button>
-                      <Button size="small" title="下移" onClick={() => moveField(f.id, 1)}>↓</Button>
-                      <Button size="small" danger title="删除" onClick={() => removeField(f.id)}>✕</Button>
+                <Fragment key={f.id}>
+                  {dropIndex === i && dragging && <div className="h-0.5 rounded bg-indigo-400" />}
+                  <div data-field-id={f.id} draggable
+                    onDragStart={(e) => { e.dataTransfer.setData("text/x-field-id", f.id); e.dataTransfer.effectAllowed = "move"; setDragging(true); setDragFieldId(f.id) }}
+                    onDragEnd={() => { setDragging(false); setDropIndex(null); setDragFieldId(null) }}
+                    onClick={() => setSelectedId(f.id)}
+                    className={`group rounded-lg border px-3 py-2.5 cursor-grab transition-all bg-white dark:bg-[#1f1f1f] ${dragFieldId === f.id ? "opacity-40" : ""} ${active ? "border-indigo-400" : "border-zinc-200 dark:border-zinc-700 hover:border-indigo-300"}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-300 dark:text-zinc-600" title="拖拽排序">⠿</span>
+                      <span>{def.icon}</span>
+                      <span className="text-sm font-medium text-zinc-800 dark:text-zinc-100">{f.label}</span>
+                      {f.required && <span className="text-red-500 text-xs">*必填</span>}
+                      <span className="text-[11px] text-zinc-400 dark:text-zinc-500">{def.name}</span>
+                      <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                        <Button size="small" title="上移" onClick={() => moveField(f.id, -1)}>↑</Button>
+                        <Button size="small" title="下移" onClick={() => moveField(f.id, 1)}>↓</Button>
+                        <Button size="small" danger title="删除" onClick={() => removeField(f.id)}>✕</Button>
+                      </div>
                     </div>
                   </div>
-                </div>
+                </Fragment>
               )
             })}
+            {dropIndex === fields.length && dragging && <div className="h-0.5 rounded bg-indigo-400" />}
           </div>
         ) : (
           <div className="flex flex-col gap-4 max-w-lg">
@@ -252,6 +310,9 @@ function FlowDesigner() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [addingAt, setAddingAt] = useState<number | null>(null) // 在第 N 个位置后插入
   const [showExport, setShowExport] = useState(false)
+  const [dropIndex, setDropIndex] = useState<number | null>(null) // 拖拽插入位置指示
+  const [dragging, setDragging] = useState(false)
+  const canvasRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { setNodes(LS.get("b_notelab.lowcode.flow", [])) }, [])
   useEffect(() => { LS.set("b_notelab.lowcode.flow", nodes) }, [nodes])
@@ -265,6 +326,24 @@ function FlowDesigner() {
     setNodes((prev) => { const c = [...prev]; c.splice(at, 0, n); return c })
     setSelectedId(n.id)
     setAddingAt(null)
+  }
+  // 按鼠标 Y 相对节点卡片中点计算插入下标（原生 HTML5 DnD）
+  function flowDragOver(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const cards = Array.from(canvasRef.current?.querySelectorAll("[data-node-id]") || []) as HTMLElement[]
+    let idx = cards.length
+    for (let i = 0; i < cards.length; i++) {
+      const r = cards[i].getBoundingClientRect()
+      if (e.clientY < r.top + r.height / 2) { idx = i; break }
+    }
+    if (idx !== dropIndex) setDropIndex(idx)
+  }
+  function flowDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const defIdxStr = e.dataTransfer.getData("text/x-flow-type")
+    const at = dropIndex ?? nodes.length
+    setDropIndex(null); setDragging(false)
+    if (defIdxStr !== "") addNode(Number(defIdxStr), at)
   }
   function patchParams(id: string, key: string, value: string) {
     setNodes((prev) => prev.map((n) => (n.id === id ? { ...n, params: { ...n.params, [key]: value } } : n)))
@@ -290,6 +369,24 @@ function FlowDesigner() {
 
   return (
     <div className="flex gap-4 items-start">
+      {/* 节点库 */}
+      <Card size="small" className="w-48 shrink-0" styles={{ body: { padding: 12 } }}>
+        <SectionTitle>节点库</SectionTitle>
+        <div className="flex flex-col gap-1.5">
+          {FLOW_DEFS.map((d, di) => (
+            <div key={d.type} draggable
+              onDragStart={(e) => { e.dataTransfer.setData("text/x-flow-type", String(di)); e.dataTransfer.effectAllowed = "copy"; setDragging(true) }}
+              onDragEnd={() => { setDragging(false); setDropIndex(null) }}
+              onClick={() => addNode(di, nodes.length)}
+              className="flex items-center gap-2 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-[#1f1f1f] px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-300 cursor-grab select-none hover:border-indigo-300">
+              <span>{d.icon}</span>{d.name}
+              <span className="ml-auto text-[10px] text-zinc-400 dark:text-zinc-500">{{ trigger: "触发", condition: "条件", action: "动作", delay: "延时" }[d.kind]}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-3 mb-0 leading-relaxed">拖拽节点到画布指定位置（或点击添加到末尾）。</p>
+      </Card>
+
       {/* 流程画布 */}
       <Card size="small" className="flex-1 min-w-0" styles={{ body: { padding: 16 } }}>
         <div className="flex items-center mb-3">
@@ -300,15 +397,16 @@ function FlowDesigner() {
           </div>
         </div>
 
-        <div className="flex flex-col items-center gap-0 max-w-xl mx-auto py-2">
+        <div ref={canvasRef} onDragOver={flowDragOver} onDrop={flowDrop} className="flex flex-col items-center gap-0 max-w-xl mx-auto py-2">
           <div className="px-4 py-1.5 rounded-full bg-zinc-700 text-white text-xs font-medium">▶ 开始</div>
 
           {nodes.map((n, i) => {
             const def = FLOW_DEFS.find((d) => d.type === n.type)!
             const active = selectedId === n.id
             return (
-              <div key={n.id} className="flex flex-col items-center w-full">
+              <div key={n.id} data-node-id={n.id} className="flex flex-col items-center w-full">
                 <div className="w-px h-5 bg-zinc-300 dark:bg-zinc-600" />
+                {dropIndex === i && dragging && <div className="w-full h-0.5 rounded bg-indigo-400 my-0.5" />}
                 <div onClick={() => setSelectedId(n.id)}
                   className={`group w-full rounded-lg border px-4 py-3 cursor-pointer transition-all bg-white dark:bg-[#1f1f1f] ${active ? "border-indigo-400" : "border-zinc-200 dark:border-zinc-700 hover:border-indigo-300"}`}>
                   <div className="flex items-center gap-2">
@@ -337,13 +435,19 @@ function FlowDesigner() {
 
           {nodes.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-4">
-              <button onClick={() => setAddingAt(addingAt === -1 ? null : -1)}
-                className="grid h-8 w-8 place-items-center rounded-full bg-white dark:bg-[#1f1f1f] border border-dashed border-zinc-300 dark:border-zinc-600 text-zinc-400 dark:text-zinc-500 hover:border-indigo-400 hover:text-indigo-500">＋</button>
-              {addingAt === -1 && <AddMenu at={0} />}
-              <span className="text-zinc-400 dark:text-zinc-500 text-sm">点击 ＋ 添加第一个节点（建议先加触发器）</span>
+              {dragging && <div className="w-full h-0.5 rounded bg-indigo-400" />}
+              {!dragging && (
+                <>
+                  <button onClick={() => setAddingAt(addingAt === -1 ? null : -1)}
+                    className="grid h-8 w-8 place-items-center rounded-full bg-white dark:bg-[#1f1f1f] border border-dashed border-zinc-300 dark:border-zinc-600 text-zinc-400 dark:text-zinc-500 hover:border-indigo-400 hover:text-indigo-500">＋</button>
+                  {addingAt === -1 && <AddMenu at={0} />}
+                  <span className="text-zinc-400 dark:text-zinc-500 text-sm">从左侧拖拽节点到这里（或点击 ＋ 添加，建议先加触发器）</span>
+                </>
+              )}
             </div>
           )}
 
+          {dropIndex === nodes.length && dragging && nodes.length > 0 && <div className="w-full h-0.5 rounded bg-indigo-400 my-0.5" />}
           <div className="w-px h-5 bg-zinc-300 dark:bg-zinc-600" />
           <div className="px-4 py-1.5 rounded-full bg-zinc-700 text-white text-xs font-medium">■ 结束</div>
         </div>
