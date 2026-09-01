@@ -229,10 +229,30 @@ function FormDesigner() {
         </div>
       </Card>
 
-      {/* 右栏：属性 + 实时预览 */}
-      <div className="w-72 shrink-0 flex flex-col gap-4">
-        <Card size="small" styles={{ body: { padding: 12 } }}>
-          <SectionTitle>属性</SectionTitle>
+      {/* 实时预览：与画布并列居中，随画布即时更新 */}
+      <Card size="small" className="flex-1 min-w-0" styles={{ body: { padding: 16 } }}>
+        <div className="flex items-center gap-2 mb-3">
+          <SectionTitle>实时预览</SectionTitle>
+          <span className="ml-auto text-[11px] text-zinc-400 dark:text-zinc-500">随画布即时更新</span>
+        </div>
+        {fields.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm py-6 text-center">添加字段后此处显示表单效果</div>}
+        {fields.length > 0 && (
+          <div className="flex flex-col gap-4">
+            {fields.map((f) => (
+              <div key={f.id} className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</label>
+                <FormPreviewControl f={f} value={formValues[f.id]} onChange={(v) => setFormValues((prev) => ({ ...prev, [f.id]: v }))} />
+              </div>
+            ))}
+            <Button type="primary" className="self-start" onClick={() => setSubmitted(JSON.stringify(formValues, null, 2))}>提交（演示）</Button>
+            {submitted && <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-lg p-3 overflow-x-auto">{submitted}</pre>}
+          </div>
+        )}
+      </Card>
+
+      {/* 属性：最右侧 */}
+      <Card size="small" className="w-64 shrink-0" styles={{ body: { padding: 12 } }}>
+        <SectionTitle>属性</SectionTitle>
         {!selected && <div className="text-zinc-400 dark:text-zinc-500 text-sm py-6 text-center">选中画布中的字段进行配置</div>}
         {selected && (
           <div className="flex flex-col gap-3">
@@ -257,28 +277,7 @@ function FormDesigner() {
             <Button size="small" danger className="self-start" onClick={() => removeField(selected.id)}>🗑 删除该字段</Button>
           </div>
         )}
-        </Card>
-
-        <Card size="small" styles={{ body: { padding: 12 } }}>
-          <div className="flex items-center justify-between">
-            <SectionTitle>实时预览</SectionTitle>
-            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">随画布即时更新</span>
-          </div>
-          {fields.length === 0 && <div className="text-zinc-400 dark:text-zinc-500 text-sm py-6 text-center">添加字段后此处显示表单效果</div>}
-          {fields.length > 0 && (
-            <div className="flex flex-col gap-4">
-              {fields.map((f) => (
-                <div key={f.id} className="flex flex-col gap-1.5">
-                  <label className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</label>
-                  <FormPreviewControl f={f} value={formValues[f.id]} onChange={(v) => setFormValues((prev) => ({ ...prev, [f.id]: v }))} />
-                </div>
-              ))}
-              <Button type="primary" className="self-start" onClick={() => setSubmitted(JSON.stringify(formValues, null, 2))}>提交（演示）</Button>
-              {submitted && <pre className="text-xs bg-zinc-900 text-emerald-300 rounded-lg p-3 overflow-x-auto">{submitted}</pre>}
-            </div>
-          )}
-        </Card>
-      </div>
+      </Card>
 
       {/* 导出弹窗 */}
       <Modal open={showExport} onCancel={() => setShowExport(false)} title="导出 JSON Schema" width={680}
