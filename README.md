@@ -19,7 +19,7 @@ UI 全量 antd 化，经 nginx 以 `/admin` 前缀对外服务。**原 myapp 保
 - 会话：B 端 Cookie `notelab_session`（HMAC，与 Python/Java 版兼容），登录/菜单/权限
   契约与 myapp 完全一致。
 
-## 功能清单（21 个路由，与 myapp 19 页 1:1 + 新增 1 页）
+## 功能清单（与 myapp 19 页 1:1 + 新增页）
 
 | 路由（/admin 下） | 功能 | antd 化情况 |
 |---|---|---|
@@ -42,6 +42,7 @@ UI 全量 antd 化，经 nginx 以 `/admin` 前缀对外服务。**原 myapp 保
 | `/user/accounts` | 账户管理（服务端分页） | 原已 antd |
 | `/user/roles` | 角色组管理（路由授权树） | 原已 antd |
 | `/c-users` | **新增：C 端用户管理**（/api/c-admin/*，用户+用户组 Tabs） | 全 antd（Table/Form/Modal/Popconfirm/Tabs） |
+| `/translate` | **新增：翻译句子库**（每日英语翻译练习，/api/admin/translate/*）——句子组列表（状态/句子数/激活日期/来源）+ 新建/入队/设激活日期强制发布/删除；组详情分阶句子表 + 手动加句 / 批量导入（中文句末标点+换行切分，前端实时预览切分结果）/ AI 批量生成（场景+提示词+每阶数量 → 生成入库 → 预览可删） | 全 antd（Card/Table/Tag/Modal/Input/InputNumber/Select/AutoComplete/Popconfirm/Tooltip/Alert/Spin） |
 | `/login` | 登录（回跳被拦截路由） | Form/Input/Button |
 | `/register` | 注册关闭说明页 | 保持原样 |
 
