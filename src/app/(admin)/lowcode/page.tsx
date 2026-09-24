@@ -3,6 +3,8 @@
 import { Fragment, useEffect, useRef, useState, type DragEvent } from "react"
 import { Button, Card, Input, InputNumber, Modal, Select, Switch, Tabs, Checkbox, Radio, DatePicker, Table } from "antd"
 import { CopyOutlined, DeleteOutlined } from "@ant-design/icons"
+import { copyText } from "@/lib/clipboard"
+import { toast } from "@/lib/toast"
 
 // ================= 通用工具 =================
 const LS = {
@@ -20,7 +22,7 @@ function CopyBtn({ text }: { text: string }) {
   const [ok, setOk] = useState(false)
   return (
     <Button size="small" icon={<CopyOutlined />}
-      onClick={() => { navigator.clipboard.writeText(text).catch(() => {}); setOk(true); setTimeout(() => setOk(false), 1500) }}>
+      onClick={() => { copyText(text).then((done) => { if (done) { setOk(true); setTimeout(() => setOk(false), 1500) } else { toast.warning("复制失败，请手动选择复制") } }) }}>
       {ok ? "已复制" : "复制"}
     </Button>
   )

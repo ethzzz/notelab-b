@@ -8,6 +8,7 @@ import {
 import { Plus, Copy, Ban, Ticket } from "lucide-react"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
+import { copyText } from "@/lib/clipboard"
 
 type InviteCode = {
   id: number; code: string; max_uses: number; used_count: number
@@ -38,33 +39,6 @@ export default function InviteCodesPage() {
   }, [])
 
   useEffect(() => { fetchData(page, pageSize, q) }, [page, pageSize, q, fetchData])
-
-  // 复制文本：Clipboard API 仅在安全上下文（HTTPS / localhost）可用；
-  // 生产经 http://IP/admin 访问时 navigator.clipboard 为 undefined，故回退到 execCommand。
-  async function copyText(text: string): Promise<boolean> {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text)
-        return true
-      }
-    } catch { /* 落到回退方案 */ }
-    try {
-      const ta = document.createElement("textarea")
-      ta.value = text
-      ta.setAttribute("readonly", "")
-      ta.style.position = "fixed"
-      ta.style.top = "-9999px"
-      ta.style.opacity = "0"
-      document.body.appendChild(ta)
-      ta.select()
-      ta.setSelectionRange(0, ta.value.length)
-      const ok = document.execCommand("copy")
-      document.body.removeChild(ta)
-      return ok
-    } catch {
-      return false
-    }
-  }
 
   function copy(code: string) {
     copyText(code).then((ok) => {
