@@ -1,7 +1,8 @@
 "use client"
 
-// 爬塔尖塔内容工坊（antd 版）：Tabs（卡片/角色/技能制作）+ Table + 类型化 Modal 表单
+// 爬塔尖塔内容工坊（antd 版）：Tabs（卡片/角色/技能制作/角色授权）+ Table + 类型化 Modal 表单
 // 保存后自定义内容经「发布到 C 端」生效于 C 端游戏中心（B/C 拆分 P6 后 B 端不再有游玩页）
+// 角色授权：给 C 端用户组勾选"该组可选择哪些角色"，写入 spire.charAccess（随发布生效，C 端做前置筛选）
 import { useEffect, useMemo, useState } from "react"
 import {
   CARDS, applyCustomContent, sanitizeCard, sanitizeCharacter, cardDesc,
@@ -10,9 +11,9 @@ import {
   type CardDef, type CardEffect, type CharacterDef, type CardCategory, type EffectType, type PassiveKind, type SkillKind,
 } from "@/lib/spire-engine"
 import { SpireCardView, CATEGORY_LABEL, RARITY_NAME } from "@/components/SpireCardView"
-import { loadSpireContent, saveSpireContent } from "@/lib/spire-content"
+import { loadSpireContent, saveSpireContent, type SpireBaseChar } from "@/lib/spire-content"
 import { apiJson, postJson } from "@/lib/api"
-import { Tabs, Table, Modal, Form, Input, InputNumber, Select, Button, Tag, Checkbox, Popconfirm, Space } from "antd"
+import { Tabs, Table, Modal, Form, Input, InputNumber, Select, Button, Tag, Checkbox, Popconfirm, Space, Radio, Alert } from "antd"
 import { toast } from "@/lib/toast"
 import { Plus, Save } from "lucide-react"
 
@@ -68,6 +69,35 @@ function cleanSkill(raw: any): SkillTpl | null {
   }
 }
 
+/** 角色授权：C 端用户组（GET /api/c-admin/groups 的 items） */
+interface CGroup { code: string; name: string; member_count?: number }
+
+/** VIP 组码：默认全勾；default 组默认排除下面这批"需授权"角色 */
+const VIP_GROUP = "vip"
+/** 普通用户（default 组）默认不勾的角色 id：武诸葛为 VIP 专属 */
+const DEFAULT_LOCKED_IDS = ["wuzhuge"]
+
+/** 全量可选角色池 = 内置基础角色 + 工坊自定义角色（按 id 去重，自定义覆盖同名基础角色） */
+function allCharPool(baseChars: SpireBaseChar[], chars: CharacterDef[]): { id: string; name: string; icon: string; custom: boolean }[] {
+  const seen = new Set<string>()
+  const out: { id: string; name: string; icon: string; custom: boolean }[] = []
+  for (const c of chars) {
+    if (!c?.id || seen.has(c.id)) continue
+    seen.add(c.id); out.push({ id: c.id, name: c.name || c.id, icon: c.icon || "🧙", custom: true })
+  }
+  for (const c of baseChars) {
+    if (!c?.id || seen.has(c.id)) continue
+    seen.add(c.id); out.push({ id: c.id, name: c.name || c.id, icon: c.icon || "🎭", custom: false })
+  }
+  return out
+}
+
+/** 某组首次无配置时的预填白名单（fail-open 友好，便于运维直接发布） */
+function presetAccess(groupCode: string, pool: { id: string }[]): string[] {
+  if (groupCode === "default") return pool.map((c) => c.id).filter((id) => !DEFAULT_LOCKED_IDS.includes(id))
+  return pool.map((c) => c.id) // vip 与其它组：默认全勾
+}
+
 const kindLabel = (t: SkillTpl) => (t.stype === "active" ? SKILL_KIND_LABEL : PASSIVE_KIND_LABEL)[t.kind as SkillKind & PassiveKind] || t.kind
 const catColor: Record<CardCategory, string> = { attack: "volcano", defense: "geekblue", buff: "gold", special: "magenta" }
 
@@ -81,6 +111,12 @@ export default function SpireEditorPage() {
   // B/C 拆分阶段2：发布状态（ui_config 顶层是否存在 spire_published 快照）
   const [published, setPublished] = useState<boolean | null>(null)
   const [pubBusy, setPubBusy] = useState(false)
+  // 角色授权：内置角色常量 / C 端用户组 / 白名单 {组码: [角色 id]} / 当前编辑的组
+  const [baseChars, setBaseChars] = useState<SpireBaseChar[]>([])
+  const [groups, setGroups] = useState<CGroup[]>([])
+  const [charAccess, setCharAccess] = useState<Record<string, string[]>>({})
+  const [accGroup, setAccGroup] = useState<string>("default")
+  const [accBusy, setAccBusy] = useState(false)
 
   // 搜索与筛选
   const [qCard, setQCard] = useState(""); const [fCat, setFCat] = useState("all")
@@ -94,11 +130,19 @@ export default function SpireEditorPage() {
 
   useEffect(() => {
     apiJson("/api/ui-config").then((j) => setPublished(!!j.config?.spire_published)).catch(() => {})
+    // 角色授权要用的 C 端用户组（B 端登录才可读，失败不阻塞工坊主流程）
+    apiJson("/api/c-admin/groups").then((j) => {
+      const gs: CGroup[] = (j.items || []).filter((g: any) => g && typeof g.code === "string")
+      setGroups(gs)
+      if (gs.length && !gs.some((g) => g.code === "default")) setAccGroup(gs[0].code)
+    }).catch(() => {})
     loadSpireContent().then((c) => {
       const sc = c.cards.map(sanitizeCard).filter(Boolean) as CardDef[]
       const sh = c.characters.map((r) => sanitizeCharacter(r, CARDS)).filter(Boolean) as CharacterDef[]
       const sk = c.skills.map(cleanSkill).filter(Boolean) as SkillTpl[]
       setCards(sc); setChars(sh); setSkills(sk)
+      setBaseChars(c.baseCharacters || [])
+      setCharAccess(c.charAccess || {})
       applyCustomContent(sc, sh)
       setLoaded(true)
     })
@@ -107,7 +151,8 @@ export default function SpireEditorPage() {
   const save = async () => {
     setBusy(true)
     try {
-      await saveSpireContent({ cards, characters: chars, skills })
+      // charAccess 一并回传：POST /api/spire-content 是整包覆盖写，漏带会把角色授权清空
+      await saveSpireContent({ cards, characters: chars, skills, charAccess })
       applyCustomContent(cards, chars)
       toast.success("已保存并应用到游戏")
     } catch (e: any) {
@@ -142,6 +187,21 @@ export default function SpireEditorPage() {
     setPubBusy(false)
   }
 
+  /**
+   * 保存授权：把 charAccess（全部组）连同 cards/characters/skills 整包 POST，避免覆盖丢失；
+   * 与工坊「保存并应用」同一入口，授权同样需要点「发布到 C 端」才在 C 端生效。
+   */
+  const saveAccess = async () => {
+    setAccBusy(true)
+    try {
+      await saveSpireContent({ cards, characters: chars, skills, charAccess })
+      toast.success("角色授权已保存，点「发布到 C 端」后生效")
+    } catch (e: any) {
+      toast.error(`保存授权失败：${e?.message || e}`)
+    }
+    setAccBusy(false)
+  }
+
   // ---------------- 筛选 ----------------
   const fCards = useMemo(() => cards.filter((c) =>
     (fCat === "all" || c.category === fCat) && (!qCard.trim() || c.name.toLowerCase().includes(qCard.trim().toLowerCase()) || c.id.includes(qCard.trim()))
@@ -150,6 +210,8 @@ export default function SpireEditorPage() {
   const fSkills = useMemo(() => skills.filter((s) =>
     (fStype === "all" || s.stype === fStype) && (!qSkill.trim() || s.name.toLowerCase().includes(qSkill.trim().toLowerCase()))
   ), [skills, qSkill, fStype])
+  /** 角色授权：全量生效角色池（内置基础角色 + 工坊自定义，去重） */
+  const charPool = useMemo(() => allCharPool(baseChars, chars), [baseChars, chars])
 
   // ---------------- 草稿操作 ----------------
   const upsertCard = () => {
@@ -249,6 +311,15 @@ export default function SpireEditorPage() {
   const emptyChar = <div className="py-6 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无自定义角色，点右上角「新建角色」开始制作</div>
   const emptySkill = <div className="py-6 text-center text-sm text-zinc-400 dark:text-zinc-500">暂无技能模板，点右上角「新建技能」开始制作（角色制作时可从技能库引用）</div>
 
+  // ---------------- 角色授权 ----------------
+  /** 某组当前勾选：未配置该组键时按推荐规则预填（首次直接可发布，不落库） */
+  const accChecked = (code: string): string[] =>
+    Array.isArray(charAccess[code]) ? charAccess[code] : presetAccess(code, charPool)
+  /** 写回某组白名单（其它组原样保留） */
+  const setGroupAccess = (code: string, ids: string[]) =>
+    setCharAccess((prev) => ({ ...prev, [code]: ids.filter((id, i, a) => a.indexOf(id) === i) }))
+  const groupName = (code: string) => groups.find((g) => g.code === code)?.name || code
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3 flex-wrap">
@@ -309,6 +380,56 @@ export default function SpireEditorPage() {
               </div>
               <Table rowKey="id" size="middle" columns={skillColumns as any} dataSource={fSkills} pagination={false}
                 locale={{ emptyText: emptySkill }} className={tableCls} />
+            </div>
+          ),
+        },
+        {
+          key: "access", label: `👥 角色授权（${groups.length || "…"} 组）`,
+          children: (
+            <div className="flex flex-col gap-3">
+              <Alert type="info" showIcon
+                message="给 C 端用户组勾选可选择的角色（爬塔「选择角色」页按玩家所属组做前置筛选，未授权角色锁定）"
+                description={<span className="text-xs">白名单外的角色在 C 端锁定；<b>某组未配置（无键）时不筛选、全部可选</b>（fail-open，避免未配置时把玩家全锁死）。调整后需点右上角「保存授权」再「发布到 C 端」才生效。</span>} />
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm text-zinc-500 dark:text-zinc-400">用户组</span>
+                {groups.length > 0 ? (
+                  <Radio.Group value={accGroup} onChange={(e) => setAccGroup(e.target.value)}
+                    options={groups.map((g) => ({ value: g.code, label: `${g.name}（${g.code}${g.member_count != null ? ` · ${g.member_count}人` : ""}）` }))}
+                    optionType="button" buttonStyle="solid" />
+                ) : (
+                  <span className="text-xs text-amber-500">用户组列表加载失败或无可用组（需 B 端登录，可在「C 端用户管理」新建组）</span>
+                )}
+                <Button type="primary" className="ml-auto" loading={accBusy} disabled={!accGroup} onClick={saveAccess}>保存授权</Button>
+              </div>
+              {accGroup && (
+                <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
+                  <div className="flex items-center gap-2 flex-wrap text-sm">
+                    <span className="font-medium">「{groupName(accGroup)}」可选择的角色</span>
+                    <Tag color="blue">已选 {accChecked(accGroup).length} / {charPool.length}</Tag>
+                    {!(accGroup in charAccess) && <Tag color="orange">尚未配置 · C 端当前不筛选</Tag>}
+                    <div className="ml-auto flex items-center gap-2">
+                      <Button size="small" onClick={() => setGroupAccess(accGroup, charPool.map((c) => c.id))}>全选</Button>
+                      <Button size="small" onClick={() => setGroupAccess(accGroup, [])}>全不选</Button>
+                      <Button size="small" onClick={() => setGroupAccess(accGroup, presetAccess(accGroup, charPool))}>按推荐预填</Button>
+                    </div>
+                  </div>
+                  <Checkbox.Group className="!w-full" value={accChecked(accGroup)}
+                    onChange={(vals) => setGroupAccess(accGroup, vals as string[])}>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                      {charPool.map((c) => (
+                        <div key={c.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-2 dark:border-zinc-700">
+                          <Checkbox value={c.id}>{c.icon} {c.name}</Checkbox>
+                          <Tag className="!ml-auto !mr-0" color={c.custom ? "purple" : "default"}>{c.custom ? "工坊" : "内置"}</Tag>
+                        </div>
+                      ))}
+                    </div>
+                  </Checkbox.Group>
+                  {charPool.length === 0 && <div className="py-4 text-center text-sm text-zinc-400">暂无可授权角色（内置角色清单加载失败？）</div>}
+                  <div className="text-xs text-zinc-400 dark:text-zinc-500">
+                    锁定文案在 C 端展示为「该角色未解锁 · VIP 专属/联系管理员」；组内成员在「C 端用户管理 → 用户」页调整。
+                  </div>
+                </div>
+              )}
             </div>
           ),
         },
