@@ -39,10 +39,38 @@ export default function InviteCodesPage() {
 
   useEffect(() => { fetchData(page, pageSize, q) }, [page, pageSize, q, fetchData])
 
+  // 复制文本：Clipboard API 仅在安全上下文（HTTPS / localhost）可用；
+  // 生产经 http://IP/admin 访问时 navigator.clipboard 为 undefined，故回退到 execCommand。
+  async function copyText(text: string): Promise<boolean> {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+        return true
+      }
+    } catch { /* 落到回退方案 */ }
+    try {
+      const ta = document.createElement("textarea")
+      ta.value = text
+      ta.setAttribute("readonly", "")
+      ta.style.position = "fixed"
+      ta.style.top = "-9999px"
+      ta.style.opacity = "0"
+      document.body.appendChild(ta)
+      ta.select()
+      ta.setSelectionRange(0, ta.value.length)
+      const ok = document.execCommand("copy")
+      document.body.removeChild(ta)
+      return ok
+    } catch {
+      return false
+    }
+  }
+
   function copy(code: string) {
-    navigator.clipboard?.writeText(code)
-      .then(() => toast.success("邀请码已复制"))
-      .catch(() => toast.warning("复制失败，请手动选择复制"))
+    copyText(code).then((ok) => {
+      if (ok) toast.success("邀请码已复制")
+      else toast.warning("复制失败，请手动选择复制")
+    })
   }
 
   async function generate() {
