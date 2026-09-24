@@ -23,9 +23,16 @@
 ## 路由
 `src/app/(admin)/` 是 **路由组，不进 URL** —— 例：`(admin)/translate/page.tsx` 的真实路径是 `/admin/translate`。
 
-- 业务页约 24 个：dashboard / chat / arena / toolbox / tools / rag / english / extract / lowcode / trpg/gen / trpg/play / spire / spire-editor / vs / ui / perm / c-users / user/accounts / user/roles / translate 等，逐页说明见 `README.md` 的功能清单表。
+**业务页 20 个**：`dashboard` / `chat` / `arena` / `toolbox` / `tools` / `rag` / `english` / `extract` / `lowcode` / `notes` / `docs` / `trpg/gen` / `spire-editor` / `ui` / `perm` / `c-users` / `translate` / `user/accounts` / `user/invites` / `user/roles`。逐页说明见 `README.md` 的功能清单表。
+
 - `/trpg` → `/trpg/gen`（307），写在 `next.config.ts` 的 `redirects()`。
+- ⚠️ **`/trpg` 本体、`/trpg/play`、`/spire`、`/vs` 这四个页面已在 P6 从本端删除**（随玩法功能一起移到 C 端）。别因为本地镜像里还留着它们就以为还在。
 - **新增页面必须登记权限路由**：`perm_routes` 表 + `/admin/perm` 页面配角色，否则普通用户的菜单里不会出现。Java 启动时会自动注册新路由，但角色授权要人工配。
+
+## ⚠️ 本地镜像停留在 P6 之前的旧快照
+`E:\code\NoteLab\notelab-b` 里存在一批**从未入库、服务器上也没有**的文件：`src/app/(admin)/spire/`、`(admin)/trpg/page.tsx`、`(admin)/trpg/play/`、`(admin)/vs/`、`src/lib/vs-engine.ts`、`src/components/ThemePicker.tsx`、`src/components/ui/`。
+
+它们正是 P6「B 端移除游玩功能」删掉的那批残留。**不要把它们当成本仓结构，更不要据此恢复入口**。需要准确版本时以服务器 `/root/notelab-b` 为准。
 
 ## 主题
 只维护 light / dark 两套：antd 动态 `algorithm` + localStorage `notelab_b_theme` + 首帧防闪烁内联脚本 + Tailwind v4 `@custom-variant dark`。改外壳或页面样式时这几条链路都要顾到。
