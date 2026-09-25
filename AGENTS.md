@@ -71,15 +71,19 @@ users.role → perm_role_routes（该组持有的 page:* / api:* 权限码）
 ## 主题
 只维护 light / dark 两套：antd 动态 `algorithm` + localStorage `notelab_b_theme` + 首帧防闪烁内联脚本 + Tailwind v4 `@custom-variant dark`。改外壳或页面样式时这几条链路都要顾到。
 
-## 构建与发布（生产在服务器，本地只读参考）
+## 构建与发布（本地改 → 服务器从 git 同步）
 ```bash
-ssh myapp
-cd /root/notelab-b && npm run build && pm2 restart notelab-b
+# 本地：改完提交推送
+git push origin main
+# 服务器：同步 + 构建 + 重启一条命令搞定
+ssh myapp "/root/notelab-java/ops/sync-deploy.sh notelab-b"
 ```
+- **不要在 `/root/notelab-b` 里手改代码**——服务器是只读部署目标；脚本发现工作区脏会直接拒绝执行。完整行为与参数见根 `AGENTS.md`「开发流程」。
+- 脚本只在**有变更**时构建；仅文档变更自动跳过（强制构建加 `--build`）；**构建失败不会重启服务**，老进程继续服务。
 - **只用 npm**（镜像已配在 `/root/.npmrc`）。
 - 会话 Cookie 为 `notelab_session`（HMAC，与 Java / Python 版兼容）；改认证相关代码前先确认这一点，不要换格式。
 
 ## 纪律与禁区
 - 不动 `myapp`（旧前端，可随时回切）、`notelab`（旧 Python 版）、`notelab-c`（C 端）。
 - 玩法功能已整体移到 C 端：**本端不再新增游玩入口**（后端玩法 API 仍保留）。
-- 本目录是**镜像**：真正生效的代码在服务器 `/root/notelab-b`。别只在本地改。
+- 本目录是本地工作副本，**改这里**；服务器 `/root/notelab-b` 是只读部署目标（由 `ops/sync-deploy.sh notelab-b` 从 git 拉取）。别去服务器上改。
