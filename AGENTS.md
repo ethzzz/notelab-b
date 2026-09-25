@@ -27,7 +27,18 @@
 
 - `/trpg` → `/trpg/gen`（307），写在 `next.config.ts` 的 `redirects()`。
 - ⚠️ **`/trpg` 本体、`/trpg/play`、`/spire`、`/vs` 这四个页面已在 P6 从本端删除**（随玩法功能一起移到 C 端）。别因为本地镜像里还留着它们就以为还在。
-- **新增页面必须登记权限路由**：`perm_routes` 表 + `/admin/perm` 页面配角色，否则普通用户的菜单里不会出现。Java 启动时会自动注册新路由，但角色授权要人工配。
+- **新增页面必须登记权限路由**，否则普通用户的菜单里不会出现、也进不去：
+  1. ⚠️ **Java 侧要同时改两处常量**——`MenuTree.MENUS` 加菜单节点 **+** `PageRoutes.PAGE_ROUTES` 加页面路由。`/ui` 界面配置只能改已有节点的名称/图标，**加不了新节点**；Java 启动时"自动注册新路由"**只覆盖 API 路由**（从 SpringMVC 映射采集），页面路由是手写常量。只改一处会分别表现为"超管能看普通角色看不了"和"谁都看不见"。详见 `../notelab-java/AGENTS.md` 的「新增后台页面」章节。
+  2. 页面进了 `perm_routes` 之后，才会出现在 `/admin/perm`、`/user/roles` 里可勾选；已存在的角色**不会**自动获得新页面（Java 的默认权限只在角色路由为空时写入一次）。
+
+## 页面级守卫：只有后端下发的路由才进得去
+`(admin)/layout.tsx` 有一层页面守卫，数据源是 `GET /api/menu` 的 **`pages`** 字段（= 当前账户被授予的页面路径清单，超管为全部；由 Java `PermService.allowedPagePaths` 计算，以 `PageRoutes.PAGE_ROUTES` 为准遍历，故数据库里的脏权限码不会凭空开通路径）。
+
+- **点菜单与直接敲 URL 走同一套判定**：`usePathname()` 不在 `pages` 内 → 直接不渲染子页面（子组件不挂载，连请求都不会发出去）→ 403 提示 1.2s → `/admin/no-access?next=<清单里首个可进入页面>`。
+- ⚠️ **归一处理（改判定逻辑时别漏）**：仪表盘在菜单里的 `path` 是 `/`，真实路由却是 `/dashboard`（`src/app/page.tsx` 把 `/admin` 307 到 `/admin/dashboard`）。守卫把 `pathname === "/dashboard"` 归一成 `/` 再比对，否则会把首页误杀。
+- ⚠️ **`/no-access` 必须留在 `(admin)` 分组之外**（`src/app/no-access/page.tsx` → `/admin/no-access`）。放进 `(admin)` 会被守卫再判一次 → 死循环；`/login`、`/register` 同理都在组外。
+- **fail-open**：`pages` 缺失（旧后端 / `/api/menu` 拉取异常）时**不拦截**。好处是前端可先于后端发布而不锁死所有人；代价是**这层不是安全边界**——它拦的是"误入页面"，不是"绕过 UI 调接口"（`/api/c-admin/*` 目前仍只要求 B 端登录）。
+- 菜单负责「看不见」、守卫负责「进不去」，两者共用同一份后端清单但**判定独立**，改一处别忘另一处。
 
 ## ⚠️ 本地镜像停留在 P6 之前的旧快照
 `E:\code\NoteLab\notelab-b` 里存在一批**从未入库、服务器上也没有**的文件：`src/app/(admin)/spire/`、`(admin)/trpg/page.tsx`、`(admin)/trpg/play/`、`(admin)/vs/`、`src/lib/vs-engine.ts`、`src/components/ThemePicker.tsx`、`src/components/ui/`。
