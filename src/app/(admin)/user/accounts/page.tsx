@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { Table, Modal, Form, Input, Select, Button, Tag, Popconfirm, Space, Result } from "antd"
-import { Plus, Pencil, KeyRound } from "lucide-react"
+import { Plus, Pencil, KeyRound, Users } from "lucide-react"
 
 type Role = { code: string; name: string; route_codes: string[] }
 type User = { id: number; username: string; email: string | null; role: string; created_at: string }
@@ -31,6 +31,10 @@ export default function UserAccountsPage() {
   const [pwdUser, setPwdUser] = useState<User | null>(null)
   const [pwd, setPwd] = useState("")
   const [busy, setBusy] = useState(false)
+  // 批量设置用户组：跨页保留选中（preserveSelectedRowKeys），以便「筛一批 → 全选 → 一次改属」
+  const [selIds, setSelIds] = useState<number[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchRole, setBatchRole] = useState("user")
 
   const loadOverview = useCallback(() => {
     apiJson<Overview>("/api/perm/overview")
@@ -68,6 +72,7 @@ export default function UserAccountsPage() {
   }
 
   const roleOptions = (ov?.roles || []).map((r) => ({ value: r.code, label: r.name }))
+  const roleLabel = (code: string) => roleOptions.find((r) => r.value === code)?.label || code
 
   async function createUser() {
     if (!nu.username || !nu.password) { toast.warning("用户名和密码必填"); return }
@@ -105,14 +110,30 @@ export default function UserAccountsPage() {
   /** 切换角色前二次确认 */
   function confirmChangeRole(u: User, role: string) {
     if (role === u.role) return
-    const roleName = (code: string) => roleOptions.find((r) => r.value === code)?.label || code
     Modal.confirm({
       title: "切换角色组",
-      content: `确定将「${u.username}」的角色从「${roleName(u.role)}」切换为「${roleName(role)}」吗？切换后该账户的菜单权限即时生效。`,
+      content: `确定将「${u.username}」的角色从「${roleLabel(u.role)}」切换为「${roleLabel(role)}」吗？切换后该账户的菜单权限即时生效。`,
       okText: "确认切换",
       cancelText: "取消",
       onOk: () => changeRole(u, role),
     })
+  }
+
+  /** 批量把选中的账户设为同一个用户组（后端 POST /api/perm/users/batch-role） */
+  async function saveBatchRole() {
+    if (!selIds.length) return
+    setBusy(true)
+    try {
+      const d = await postJson("/api/perm/users/batch-role", { ids: selIds, role: batchRole })
+      toast.success(`已将 ${d?.updated ?? selIds.length} 个账户加入「${roleLabel(batchRole)}」`)
+      setBatchOpen(false)
+      setSelIds([])
+      refresh()
+    } catch (e: any) {
+      toast.error(e.message || "批量设置失败")
+      refresh() // 部分成功/失败后都要把最新角色刷回来
+    }
+    setBusy(false)
   }
 
   async function resetPwd() {
@@ -172,6 +193,10 @@ export default function UserAccountsPage() {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>创建账户</Button>
+        <Button icon={<Users size={14} />} disabled={!selIds.length}
+          onClick={() => { setBatchRole("user"); setBatchOpen(true) }}>
+          批量设置用户组{selIds.length ? `（已选 ${selIds.length}）` : ""}
+        </Button>
         <Input.Search placeholder="搜索用户名/邮箱" allowClear style={{ width: 220 }}
           onSearch={(v) => { setQ(v); setPage(1) }} />
         <Select placeholder="角色筛选" allowClear style={{ width: 150 }} value={roleFilter || undefined}
@@ -180,6 +205,11 @@ export default function UserAccountsPage() {
       </div>
 
       <Table rowKey="id" size="middle" columns={columns as any} dataSource={users} loading={loading}
+        rowSelection={{
+          selectedRowKeys: selIds,
+          onChange: (ks) => setSelIds(ks as number[]),
+          preserveSelectedRowKeys: true, // 跨页保留：便于「按条件筛一批 → 全选 → 一次改属」
+        }}
         pagination={{
           current: page, pageSize, total,
           showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100],
@@ -233,6 +263,23 @@ export default function UserAccountsPage() {
           </Form>
         </Modal>
       )}
+
+      {/* 批量设置用户组 */}
+      <Modal open={batchOpen} onCancel={() => { if (!busy) setBatchOpen(false) }}
+        title={`👥 批量设置用户组 · 已选 ${selIds.length} 个账户`}
+        okText="确认设置" cancelText="取消" confirmLoading={busy} onOk={saveBatchRole} maskClosable={false}>
+        <Form layout="vertical" className="mt-3">
+          <Form.Item label="目标用户组" required extra="设置后这些账户的菜单权限即时生效">
+            <Select value={batchRole} onChange={setBatchRole} options={roleOptions} />
+          </Form.Item>
+        </Form>
+        <div className="text-xs text-zinc-400 dark:text-zinc-500">
+          一个账户只属于一个用户组，故这是「改属」而非「追加」。
+          {batchRole === "super_admin" && (
+            <span className="text-amber-600 dark:text-amber-500">批量移入「超级管理员」会赋予全部路由权限（含未来新增），请谨慎。</span>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

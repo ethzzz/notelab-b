@@ -4,8 +4,8 @@
 import { useCallback, useEffect, useState } from "react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
-import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result } from "antd"
-import { Plus, ShieldCheck, Pencil } from "lucide-react"
+import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result, Tabs } from "antd"
+import { Plus, ShieldCheck, Pencil, Users } from "lucide-react"
 
 type Route = { code: string; path: string; method: string; kind: string; name: string }
 type Role = { code: string; name: string; route_codes: string[] }
@@ -24,6 +24,12 @@ export default function UserRolesPage() {
   const [draft, setDraft] = useState<string[]>([])
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [busy, setBusy] = useState(false)
+  // 成员管理（批量加入/移出）：账户全量取自 /api/perm/overview 的 users，不额外发请求
+  const [managing, setManaging] = useState<Role | null>(null)
+  const [memTab, setMemTab] = useState<"add" | "current">("add")
+  const [memQ, setMemQ] = useState("")
+  const [addIds, setAddIds] = useState<number[]>([])
+  const [removeIds, setRemoveIds] = useState<number[]>([])
 
   const load = useCallback(() => {
     apiJson<Overview>("/api/perm/overview")
@@ -83,6 +89,33 @@ export default function UserRolesPage() {
     setBusy(false)
   }
 
+  // ---------------- 成员管理：批量把账户加入/移出本用户组 ----------------
+  // 语义基础：users.role 是单值，一个账户只属于一个用户组。
+  // 所以「加入 A 组」= 把这批人从原组移到 A 组；「移出」= 并入内置的「普通用户」组。
+  function openMembers(r: Role) {
+    setManaging(r)
+    setMemTab("add"); setMemQ(""); setAddIds([]); setRemoveIds([])
+  }
+
+  async function saveMembers() {
+    if (!managing) return
+    const nAdd = addIds.length, nDel = removeIds.length
+    if (nAdd + nDel === 0) { toast.warning("没有需要变更的成员"); return }
+    setBusy(true)
+    try {
+      // 先加后移：这样中途失败时已生效的是「加入」，不会先把人踢出组造成临时失去权限
+      if (nAdd) await postJson("/api/perm/users/batch-role", { ids: addIds, role: managing.code })
+      if (nDel) await postJson("/api/perm/users/batch-role", { ids: removeIds, role: "user" })
+      toast.success(`「${managing.name}」成员已更新：加入 ${nAdd} 人、移出 ${nDel} 人`)
+      setManaging(null)
+      load()
+    } catch (e: any) {
+      toast.error(e.message || "保存失败")
+      load() // 部分成功时也要把最新成员数刷回来
+    }
+    setBusy(false)
+  }
+
   if (denied) return <Result status="403" title="403" subTitle="此页面仅超级管理员可见" />
   if (!ov) return <div className="text-zinc-500 dark:text-zinc-400">加载中...</div>
 
@@ -137,6 +170,28 @@ export default function UserRolesPage() {
     { title: `🔌 API 路由（已登记备用）· ${apiRoutes.length} 条`, key: "grp:root:api", selectable: false, children: apiGroupNodes },
   ]
 
+  // 成员管理用的派生数据：账户全量来自 overview 的 users（本来就为算成员数而拉），按 role 切成两半
+  const roleLabel = (c: string) => ov.roles.find((r) => r.code === c)?.name || c
+  const memKw = memQ.trim().toLowerCase()
+  const hitKw = (u: User) => !memKw || u.username.toLowerCase().includes(memKw)
+    || String(u.email || "").toLowerCase().includes(memKw)
+  const groupMembers = managing ? ov.users.filter((u) => u.role === managing.code) : []
+  const nonMembers = managing ? ov.users.filter((u) => u.role !== managing.code) : []
+  const memberCols = [
+    {
+      title: "用户名", dataIndex: "username",
+      render: (v: string, u: User) => (
+        <Space size={6}>
+          <span className="font-medium text-zinc-800 dark:text-zinc-100">{v}</span>
+          {u.id === ov.me.id && <Tag color="processing">我</Tag>}
+          {u.role === "super_admin" && <Tag color="gold">👑 超管</Tag>}
+        </Space>
+      ),
+    },
+    { title: "邮箱", dataIndex: "email", width: 190, render: (v: string | null) => <span className="text-zinc-500 dark:text-zinc-400">{v || "—"}</span> },
+    { title: "当前用户组", dataIndex: "role", width: 140, render: (c: string) => <Tag color="blue">{roleLabel(c)}</Tag> },
+  ]
+
   const columns = [
     {
       title: "角色组", dataIndex: "name",
@@ -163,10 +218,15 @@ export default function UserRolesPage() {
         : <span className="text-xs text-zinc-400 dark:text-zinc-500">分配路由组后，成员菜单即时生效</span>,
     },
     {
-      title: "操作", align: "right" as const, width: 240,
+      title: "操作", align: "right" as const, width: 330,
       render: (_: any, r: Role) => r.code === "super_admin" ? null : (
         <Space size={4}>
           <Button size="small" type="primary" ghost icon={<ShieldCheck size={13} />} onClick={() => openAssign(r)}>分配路由</Button>
+          {/* 内置「普通用户」组不给批量入口：它的成员 = 所有未分到其它组的人，且「移出普通用户」无处可去，
+              变更内置组成员请去「账户管理」用单人或批量设置 */}
+          {r.code !== "user" && (
+            <Button size="small" type="text" icon={<Users size={13} />} onClick={() => openMembers(r)}>成员</Button>
+          )}
           <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(r); setRenameVal(r.name) }}>重命名</Button>
           {r.code !== "user" && (
             <Popconfirm title="删除角色组"
@@ -226,6 +286,35 @@ export default function UserRolesPage() {
                 setDraft(arr.filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:")) as string[])
               }} />
             <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">共 {ov.routes.length} 条路由 · 已勾选 {draft.length} 条；勾选分组节点可整组选/取消</div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 成员管理（批量加/移） */}
+      {managing && (
+        <Modal open onCancel={() => { if (!busy) setManaging(null) }}
+          title={<span>👥 管理成员 · {managing.name}<span className="ml-2 font-mono text-[11px] text-zinc-400 dark:text-zinc-500">{managing.code}</span></span>}
+          width={680}
+          okText={addIds.length + removeIds.length ? `保存（加入 ${addIds.length} · 移出 ${removeIds.length}）` : "保存"}
+          okButtonProps={{ disabled: addIds.length + removeIds.length === 0 }}
+          cancelText="取消" confirmLoading={busy} onOk={saveMembers} maskClosable={false}>
+          <Tabs activeKey={memTab} onChange={(k) => setMemTab(k as "add" | "current")} items={[
+            { key: "add", label: `➕ 添加成员（可选 ${nonMembers.length}）` },
+            { key: "current", label: `👥 当前成员（${groupMembers.length}）` },
+          ]} />
+          <Input.Search placeholder="搜索用户名 / 邮箱" allowClear value={memQ}
+            onChange={(e) => setMemQ(e.target.value)} className="mb-2" />
+          {memTab === "add" ? (
+            <Table rowKey="id" size="small" columns={memberCols as any} dataSource={nonMembers.filter(hitKw)}
+              pagination={false} scroll={{ y: 300 }} locale={{ emptyText: "没有可加入的账户（所有人都已在本组）" }}
+              rowSelection={{ selectedRowKeys: addIds, onChange: (ks) => setAddIds(ks as number[]) }} />
+          ) : (
+            <Table rowKey="id" size="small" columns={memberCols as any} dataSource={groupMembers.filter(hitKw)}
+              pagination={false} scroll={{ y: 300 }} locale={{ emptyText: "本组暂无成员" }}
+              rowSelection={{ selectedRowKeys: removeIds, onChange: (ks) => setRemoveIds(ks as number[]) }} />
+          )}
+          <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+            一个账户只属于一个用户组，故「加入本组」= 从原组移到本组；被移出的成员统一并入「普通用户」。
           </div>
         </Modal>
       )}
