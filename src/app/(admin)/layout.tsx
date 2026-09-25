@@ -19,6 +19,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const { mode, toggleTheme } = useTheme()
   const [user, setUser] = useState<any>(null)
   const [menu, setMenu] = useState<MenuItem[]>([])
+  const [pages, setPages] = useState<string[] | null>(null)
   const [state, setState] = useState<"loading" | "ok" | "out">("loading")
   const [drawerOpen, setDrawerOpen] = useState(false)
 
@@ -37,6 +38,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       try {
         const m = await apiJson("/api/menu")
         setMenu(m.menu || [])
+        // pages = 后端下发的「可进入页面」清单（本账户被授予的页面路由，超管为全部）。
+        // 旧后端或字段缺失时保持 null → 守卫不启用（见下方 allowedPath）。
+        setPages(Array.isArray(m.pages) ? m.pages : null)
       } catch { /* 外壳配置失败不阻断 */ }
       setState("ok")
     })()
@@ -75,6 +79,33 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       })
     return { items: toAntd(menu), allGroupKeys: groupKeys, selectedKey: sel }
   }, [menu, pathname])
+
+  // ---------------- 页面级守卫：只有后端下发的页面路由才可进入 ----------------
+  // 菜单只能保证「看不见」，挡不住直接敲 URL；这里按 /api/menu 的 pages 清单再兜一道，
+  // 点菜单与直接输地址走的是同一套判定。
+  // 归一说明：仪表盘在菜单里的 path 是 "/"，真实路由却是 "/dashboard"
+  //（src/app/page.tsx 把 /admin 307 到 /admin/dashboard），故两者视为等价。
+  // 忠实度：pages 为 null（字段缺失 / /api/menu 拉取异常）时不拦截——后端抖动不该把所有人锁在门外。
+  const allowedPath = useMemo(() => {
+    if (!pages) return true
+    return pages.includes(pathname === "/dashboard" ? "/" : pathname)
+  }, [pages, pathname])
+
+  /** 无权限时的回退目标：下发清单里的第一个页面（"/" 还原成真实路由 /dashboard）；
+   *  清单为空（该角色一个页面都没被授予）时返回空串 → 不传 next，无权限页不显示「前往」按钮 */
+  const firstAllowedPath = useMemo(() => {
+    const p = pages?.[0]
+    if (!p) return ""
+    return p === "/" ? "/dashboard" : p
+  }, [pages])
+
+  useEffect(() => {
+    if (state !== "ok" || allowedPath) return
+    // 先给提示再跳转（与登录态失效同一节奏），避免用户误以为页面崩了
+    const to = firstAllowedPath ? `/no-access?next=${encodeURIComponent(firstAllowedPath)}` : "/no-access"
+    const t = setTimeout(() => router.replace(to), 1200)
+    return () => clearTimeout(t)
+  }, [state, allowedPath, firstAllowedPath, router])
 
   const menuEl = (
     <Menu
@@ -119,6 +150,20 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   const isSuperAdmin = user.role === "super_admin"
   const avatarChar = String(user.username || "?").trim().charAt(0).toUpperCase()
+
+  // 未授权页面：直接不渲染子页面（子组件不挂载 → 连请求都不会发出去），提示后跳无权限页
+  if (!allowedPath) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f0f2f5] dark:bg-[#141414]">
+        <Result
+          status="403"
+          title="无权访问该页面"
+          subTitle={`当前账户的角色组未被授予 ${pathname} 的访问权限，正在跳转…`}
+          extra={<Spin />}
+        />
+      </div>
+    )
+  }
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
