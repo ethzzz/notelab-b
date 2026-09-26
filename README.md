@@ -34,7 +34,13 @@ UI 全量 antd 化，经 nginx 以 `/admin` 前缀对外服务。**原 myapp 保
 | `/lowcode` | 低代码平台（表单/流程/数据模型，本地草稿） | Select/确认弹窗走 antd |
 | `/trpg/gen` | 剧本生成（轮询任务）+ **新增：发布/取消发布到 C 端** | Table/Tag/Button/Modal |
 | `/trpg/play` | 玩剧本（跑团引擎） | Modal 走 antd，引擎零改动 |
-| `/spire-editor` | 尖塔工坊（卡/角色/技能）+ **新增：发布/取消发布快照** | 原已 antd，补发布按钮与状态 |
+| `/spire-editor/cards` | 尖塔工坊 · 卡片制作（原 Tab 拆分） | 原已 antd |
+| `/spire-editor/chars` | 尖塔工坊 · 角色制作 | 原已 antd |
+| `/spire-editor/skills` | 尖塔工坊 · 技能制作 | 原已 antd |
+| `/spire-editor/assets` | 尖塔工坊 · **新增：素材资源配置**（槽位 → 素材路径，候选池来自 `GET /api/spire-assets/catalog` 后端扫盘） | 全 antd（Select 可搜 + 分组 + 缩略图预览） |
+| `/spire-editor/map` | 尖塔工坊 · **新增：地图生成**（整套 3 幕节点 JSON，多套命名方案、选一套发布，生成后过 7 条硬约束自校验） | 全 antd + 内联 SVG 预览 |
+| `/spire-editor/access` | 尖塔工坊 · 角色授权（按 C 端用户组配可选角色） | 原已 antd |
+| `/spire-editor` | 旧入口，307 → `/spire-editor/cards` | 见 `next.config.ts` |
 | `/spire` | 爬塔游戏 | 引擎零改动（localStorage 加 b_ 前缀） |
 | `/vs` | 吸血鬼幸存者 | 引擎零改动（localStorage 加 b_ 前缀） |
 | `/ui` | 界面配置 + **新增「C 端背景」说明区与预览** | 保持原交互 |
@@ -45,6 +51,9 @@ UI 全量 antd 化，经 nginx 以 `/admin` 前缀对外服务。**原 myapp 保
 | `/translate` | **新增：翻译句子库**（每日英语翻译练习，/api/admin/translate/*）——句子组列表（状态/句子数/激活日期/来源）+ 新建/入队/设激活日期强制发布/删除；组详情分阶句子表 + 手动加句 / 批量导入（中文句末标点+换行切分，前端实时预览切分结果）/ AI 批量生成（场景+提示词+每阶数量 → 生成入库 → 预览可删） | 全 antd（Card/Table/Tag/Modal/Input/InputNumber/Select/AutoComplete/Popconfirm/Tooltip/Alert/Spin） |
 | `/login` | 登录（回跳被拦截路由） | Form/Input/Button |
 | `/register` | 注册关闭说明页 | 保持原样 |
+
+> ⚠️ 上表里的 `/trpg/play`、`/spire`、`/vs` 三行是 **P6 之前的迁移记录**，页面已在 P6 随玩法功能移到 C 端时删除，
+> 现在**不存在**（后端玩法 API 仍保留）。爬塔工坊也已由单页 4 个 Tab 拆成 6 个子页（2026-09-26）。
 
 外壳：antd `Layout` + `Sider`（Menu 数据源 `/api/menu`，多级 SubMenu，ready=false 打
 「敬请期待」Tag 并禁用）+ 固定 Header（主题切换/用户信息/超级管理员标记/退出）+ 移动端

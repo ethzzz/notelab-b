@@ -23,9 +23,11 @@
 ## 路由
 `src/app/(admin)/` 是 **路由组，不进 URL** —— 例：`(admin)/translate/page.tsx` 的真实路径是 `/admin/translate`。
 
-**业务页 20 个**：`dashboard` / `chat` / `arena` / `toolbox` / `tools` / `rag` / `english` / `extract` / `lowcode` / `notes` / `docs` / `trpg/gen` / `spire-editor` / `ui` / `perm` / `c-users` / `translate` / `user/accounts` / `user/invites` / `user/roles`。逐页说明见 `README.md` 的功能清单表。
+**业务页 25 个**：`dashboard` / `chat` / `arena` / `toolbox` / `tools` / `rag` / `english` / `extract` / `lowcode` / `notes` / `docs` / `trpg/gen` / **`spire-editor` ×6** / `ui` / `perm` / `c-users` / `translate` / `user/accounts` / `user/invites` / `user/roles`。逐页说明见 `README.md` 的功能清单表。
 
-- `/trpg` → `/trpg/gen`（307），写在 `next.config.ts` 的 `redirects()`。
+- `/trpg` → `/trpg/gen`、`/spire-editor` → `/spire-editor/cards`（307），都写在 `next.config.ts` 的 `redirects()`。
+  ⚠️ 重定向必须放在 config 层（而不是页面里 `redirect()`）：它发生在 React 之前，**不经过 `(admin)` 的页面守卫** ——
+  守卫只认"能进入的页面"，而 `/spire-editor` 这个裸路径已不在 `PageRoutes` 里，放到页面里会被自己的守卫拦掉。
 - ⚠️ **`/trpg` 本体、`/trpg/play`、`/spire`、`/vs` 这四个页面已在 P6 从本端删除**（随玩法功能一起移到 C 端）。别因为本地镜像里还留着它们就以为还在。
 - **新增页面必须登记权限路由**，否则普通用户的菜单里不会出现、也进不去：
   1. ⚠️ **Java 侧要同时改两处常量**——`MenuTree.MENUS` 加菜单节点 **+** `PageRoutes.PAGE_ROUTES` 加页面路由。`/ui` 界面配置只能改已有节点的名称/图标，**加不了新节点**；Java 启动时"自动注册新路由"**只覆盖 API 路由**（从 SpringMVC 映射采集），页面路由是手写常量。只改一处会分别表现为"超管能看普通角色看不了"和"谁都看不见"。详见 `../notelab-java/AGENTS.md` 的「新增后台页面」章节。
@@ -67,6 +69,54 @@ users.role → perm_role_routes（该组持有的 page:* / api:* 权限码）
 `E:\code\NoteLab\notelab-b` 里存在一批**从未入库、服务器上也没有**的文件：`src/app/(admin)/spire/`、`(admin)/trpg/page.tsx`、`(admin)/trpg/play/`、`(admin)/vs/`、`src/lib/vs-engine.ts`、`src/components/ThemePicker.tsx`、`src/components/ui/`。
 
 它们正是 P6「B 端移除游玩功能」删掉的那批残留。**不要把它们当成本仓结构，更不要据此恢复入口**。需要准确版本时以服务器 `/root/notelab-b` 为准。
+
+## 爬塔尖塔内容工坊：6 个子页共享一份文档（2026-09-26 拆分）
+
+原来是一个页面里的 4 个 Tab，现在拆成 `src/app/(admin)/spire-editor/` 下的 6 个子页：
+
+| 子页 | 路由 | 干什么 |
+|---|---|---|
+| 卡片制作 | `/spire-editor/cards` | 自定义卡牌 |
+| 角色制作 | `/spire-editor/chars` | 自定义角色（可引用技能库） |
+| 技能制作 | `/spire-editor/skills` | 主动/被动技能模板 |
+| 素材资源 | `/spire-editor/assets` | **槽位 → 素材路径**（节点整图 / 连线 / 背景 / 角色立绘） |
+| 地图生成 | `/spire-editor/map` | 生成整套 3 幕的**节点配置 JSON**，多套命名方案、选一套发布 |
+| 角色授权 | `/spire-editor/access` | 按 C 端用户组配置可选角色白名单 |
+
+**核心约束：这 6 页编辑的是同一份文档。** 后端 `POST /api/spire-content` 是**整包覆盖写**，
+漏带任何一个切片都会把它清空 —— 所以状态全部集中在 `_shared/store.tsx`，
+子页只做自己那一片的编辑 UI，点任意一页的「保存」都是提交全量。
+
+- `_shared/store.tsx` 的**脏标记用「整份文档指纹比对」**（`fingerprint()` 排序后 JSON 序列化），
+  不是让每个 setter 手动置位：新增切片时不需要记得改标记逻辑，漏置位不会发生。
+  ⚠️ 因此**前后端的净化口径必须一致**（空值一律丢弃，不存空串），否则保存往返一次指纹就变，永远显示「有未保存改动」。
+- `saveQuiet()`（不刷本地引擎预览）给素材/地图页用；`publish()` 先 `commit()` 再发布，保证"发布的是服务端已落库的内容"。
+- 子页可以假定切片已可用 —— 加载门在 `layout.tsx` 的 `Shell` 里，`!loaded` 时子页**根本不挂载**。
+
+### 怎么加一类新的素材槽位（"配置类型之后再做拓展"的落点）
+
+1. `src/lib/spire-assets.ts` 的 `ASSET_SLOTS` 加一行（页面是**声明式渲染**的，不用改页面代码）；
+   `default` 填 C 端当前的硬编码值，页面用它显示「内置默认」并提供「恢复默认」。
+2. 到 `notelab-c/lib/spire-assets.ts` 加对应的**消费点**（同一个 key）。
+   ⚠️ **key 一经发布不可改名**：改名不报错，只会静默失配 → 回落默认，表现为"后台配了但没生效"。
+3. 固定槽位走注册表；**角色立绘这组例外**，由 `slotsWithChars(charPool)` 按运行时角色池动态展开
+   （所以新建工坊角色会立刻多出一个 `char.<id>` 槽位）；`sanitizeAssetMap` 对 `char.*` 是**开放命名空间**，
+   不能因为注册表里没有就把值丢掉。
+4. **敌人形象槽位刻意未开**：敌人 id 清单只在 C 端引擎里，要先由后端提供一份镜像常量，否则就是两份真相。
+   （同理 C 端 `NODE_META.art` 是节点整图的**唯一默认来源**，B 端只存覆盖值，不复制一份路径表。）
+
+### 地图生成：产物是自包含 JSON，不是参数
+
+`src/lib/spire-mapgen.ts` 是 **C 端 `generateMap` 的移植版**（纯函数 + `mulberry32` 带种子可复现），
+产物直接存节点表 `{act, layers, nodes:[{id,row,col,type,next}]}`，C 端不读参数、不读 `map-gen.config.json`。
+
+- ⚠️ **不要用本仓 `src/lib/spire-engine.ts` 的 `generateMap`** —— 那份是 C 端引擎的**陈旧副本**
+  （`MAP_ROWS=7`、无参老版本），只为卡/角色净化与卡面渲染而留。
+- 生成后**必过一遍硬约束自校验**（`generateVerified`）：不交叉 / 无死路 / 全覆盖 / 唯一 BOSS / 开局安全层 /
+  商店营地不相邻 / BOSS 前一层补给。有 violation 就**拒绝保存** —— 概率性生成器"看着像对的"说明不了任何事。
+- 校验逻辑与 C 端的加载校验**分工不同**：B 端管"生成得对不对"（语义），C 端管"读进来的能不能建图"（结构 + `next` 交叉引用）。
+  后端 `SpireContentController.sanitizeMaps` 只做形状与体积，不做地图语义 —— 避免变成第三套规则真相源。
+- 预览用内联 SVG（第 0 层在下、层号向上递增，与 C 端盘面同向），配色与 C 端 `TYPE_STYLE` 取同一批色值。
 
 ## 主题
 只维护 light / dark 两套：antd 动态 `algorithm` + localStorage `notelab_b_theme` + 首帧防闪烁内联脚本 + Tailwind v4 `@custom-variant dark`。改外壳或页面样式时这几条链路都要顾到。
