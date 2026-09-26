@@ -118,6 +118,33 @@ users.role → perm_role_routes（该组持有的 page:* / api:* 权限码）
   后端 `SpireContentController.sanitizeMaps` 只做形状与体积，不做地图语义 —— 避免变成第三套规则真相源。
 - 预览用内联 SVG（第 0 层在下、层号向上递增，与 C 端盘面同向），配色与 C 端 `TYPE_STYLE` 取同一批色值。
 
+### 发布链路的验证：两个脚本，分工不同
+
+这套功能跨 `notelab-b` → `notelab-java` → `notelab-c`，坏点几乎都在**形状**而非类型上（字段被后端吃掉、发布读错键、
+C 端校验器不认），类型检查一律看不出来。所以验证分两层：
+
+| 脚本 | 跑在哪 | 证明什么 |
+|---|---|---|
+| `.sync/verify-maps-e2e.js` | 本地，不用服务器 | 生成器与 C 端校验器的**契约**一致（808 条断言） |
+| `.sync/verify-map-publish-e2e.js` | 本地打生产 HTTP | 中间那层（java 净化 + 落库 + 发布快照 + C 端匿名读）**不丢字段、不改形状**（39 条断言） |
+
+两者都用**逐字转译真实 TS**（`ts.transpileModule`）而不重写逻辑 —— 重写一遍等于测自己的想象。
+
+⚠️ **`verify-map-publish-e2e.js` 会写生产 `ui_config`**（`POST /api/spire-content` 是整包覆盖写）。跑之前先留底：
+
+```bash
+scp .sync/backup-uiconfig.sh myapp:/root/ && ssh myapp "sh /root/backup-uiconfig.sh"   # 整表 dump 到 /root/backups
+node .sync/verify-map-publish-e2e.js                                                    # 写入→发布→读→建图，finally 自动回滚
+ssh myapp "sh /root/restore-uiconfig.sh"                                               # 精确整表还原
+```
+
+- 脚本的 `finally` 会「写回原草稿 + 按原发布态 publish/unpublish」，但那只做到**语义等价**：
+  原始 `spire` 里连 `assets`/`maps` 键都没有，一旦走过 `save`，后端就会把这两个键（哪怕空对象）写进库。
+  要让 DB 回到**原始字节**，必须再跑一次 `restore-uiconfig.sh`（整表还原）。
+- 因此脚本里的回滚断言用的是**规范化口径 + C 端语义比对**，不是逐字节比 —— 逐字节比会因一个空 `defaultId` 假失败。
+- 排查这类脚本时记住两个探针事实：`ui_config` 的列名是 **`config`**（不是 `cfg`），
+  `mysqldump` 的 `--defaults-file` **必须排在参数首位**（否则报 `unknown variable`），且本机账号需要 `--no-tablespaces`。
+
 ## 主题
 只维护 light / dark 两套：antd 动态 `algorithm` + localStorage `notelab_b_theme` + 首帧防闪烁内联脚本 + Tailwind v4 `@custom-variant dark`。改外壳或页面样式时这几条链路都要顾到。
 
