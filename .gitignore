@@ -4,3 +4,5 @@ node_modules/
 out/
 *.log
 .env*
+# 验收用测试账号（{account, password}），与 notelab-c 同一约定：只放本地，严禁入库
+account.json
