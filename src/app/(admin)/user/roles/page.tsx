@@ -167,7 +167,7 @@ export default function UserRolesPage() {
 
   const routeTree = [
     { title: `🧭 页面路由（决定可见菜单）· ${pageRoutes.length} 条`, key: "grp:root:page", selectable: false, children: menuGroupNodes },
-    { title: `🔌 API 路由（已登记备用）· ${apiRoutes.length} 条`, key: "grp:root:api", selectable: false, children: apiGroupNodes },
+    { title: `🔌 API 路由（决定能否调用后端接口）· ${apiRoutes.length} 条`, key: "grp:root:api", selectable: false, children: apiGroupNodes },
   ]
 
   // 成员管理用的派生数据：账户全量来自 overview 的 users（本来就为算成员数而拉），按 role 切成两半
@@ -286,6 +286,12 @@ export default function UserRolesPage() {
                 setDraft(arr.filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:")) as string[])
               }} />
             <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">共 {ov.routes.length} 条路由 · 已勾选 {draft.length} 条；勾选分组节点可整组选/取消</div>
+            {/* 2026-09-27 起接口层是「默认拒绝」，api:* 真正生效。说明两件容易被误解的事。 */}
+            <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              后端按「默认拒绝」校验 api 权限：没勾选的接口会被 403 拦下。注意<b>普通用户组（user）的 api 权限由后端每次启动时按模块自动重算</b>
+              （受限的 /api/perm、/api/c-admin、/api/ui-config 不给，其余全给），在这里手工改的 api 勾选会在重启后被覆盖；
+              页面路由（page:*）不受影响，任意调整都会被保留。
+            </div>
           </div>
         </Modal>
       )}
