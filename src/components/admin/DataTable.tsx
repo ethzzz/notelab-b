@@ -4,9 +4,10 @@ import { Table } from "antd"
 import type { TableProps } from "antd"
 import type { ReactNode } from "react"
 
-/** 统一的「操作」列：右固定、右对齐（对齐 c-users 标杆）、默认宽度 120；render 返回操作按钮组 */
+/** 统一的「操作」列：右固定、右对齐（对齐 c-users 标杆）、默认宽度 120
+ *  render 签名与 antd Column.render 一致：(value, record, index)；操作列通常忽略 value，取 record */
 export function actionColumn(
-  render: (record: any, index: number) => ReactNode,
+  render: (value: any, record: any, index: number) => ReactNode,
   width = 120,
 ): any {
   return {
