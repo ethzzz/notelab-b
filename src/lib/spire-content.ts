@@ -17,6 +17,19 @@ export interface SpireBaseChar {
  */
 export type SpireAssetMap = Record<string, string>
 
+/**
+ * 素材**资源池**：{槽位 key: [素材路径...]}。
+ *
+ * 与 assets 的分工：池子 = 该类型登记了哪些候选素材（可多个）；
+ * assets = 当前**使用**哪一个（必须属于池子，池子为空时回落内置默认）。
+ * 「同类多个、用时选一个」就落在这两个键上 —— 运营换图时只需在池子里切换，
+ * 不用重新找素材路径，也不会因为换图把旧图路径丢掉。
+ */
+export type SpireAssetPool = Record<string, string[]>
+
+/** 单槽位资源池条目上限（与后端 MAX_POOL_PER_SLOT 对齐，防呆） */
+export const MAX_ASSET_POOL_PER_SLOT = 50
+
 /** 一套地图方案（含整套 3 幕的节点配置） */
 export interface SpireMapPack {
   /** 方案 id（稳定标识，用于选默认） */
@@ -46,6 +59,8 @@ export interface SpireCustomContent {
   charAccess?: Record<string, string[]>
   /** 素材资源槽位取值（缺失 → C 端全部走内置默认） */
   assets?: SpireAssetMap
+  /** 素材资源池：同类可登记多个候选（缺失 → 只有 assets 那一个在用） */
+  assetPool?: SpireAssetPool
   /** 地图方案（缺失或空 → C 端回落到本地生成） */
   maps?: SpireMapDoc
   /** 只读：后端下发的内置角色清单，提交时可省 */
@@ -74,6 +89,30 @@ export function cleanAssets(raw: any): SpireAssetMap {
   for (const [k, v] of Object.entries(raw)) {
     if (!k) continue
     if (typeof v === "string" && v.trim()) out[k] = v.trim()
+  }
+  return out
+}
+
+/**
+ * 净化资源池：只保留 {非空字符串键: 非空字符串数组}。
+ * 与 cleanAssets 同一口径（值 trim、空值丢弃、去重、保序），
+ * 保证「保存往返后文档指纹不变」，否则会误报「有未保存改动」。
+ */
+export function cleanAssetPool(raw: any): SpireAssetPool {
+  const out: SpireAssetPool = {}
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out
+  for (const [k, v] of Object.entries(raw)) {
+    if (!k) continue
+    if (!Array.isArray(v)) continue
+    const list: string[] = []
+    for (const x of v) {
+      if (typeof x !== "string") continue
+      const p = x.trim()
+      if (!p || list.includes(p)) continue
+      list.push(p)
+      if (list.length >= MAX_ASSET_POOL_PER_SLOT) break
+    }
+    if (list.length) out[k] = list
   }
   return out
 }
@@ -117,6 +156,7 @@ export async function loadSpireContent(): Promise<SpireCustomContent> {
       skills: Array.isArray(d.skills) ? d.skills : [],
       charAccess: cleanCharAccess(d.charAccess),
       assets: cleanAssets(d.assets),
+      assetPool: cleanAssetPool(d.assetPool),
       maps: cleanMaps(d.maps),
       baseCharacters: Array.isArray(d.baseCharacters)
         ? d.baseCharacters.filter((c: any) => c && typeof c.id === "string" && c.id)
@@ -125,7 +165,7 @@ export async function loadSpireContent(): Promise<SpireCustomContent> {
   } catch {
     return {
       cards: [], characters: [], skills: [], charAccess: {},
-      assets: {}, maps: { packs: [] }, baseCharacters: [],
+      assets: {}, assetPool: {}, maps: { packs: [] }, baseCharacters: [],
     }
   }
 }
@@ -137,6 +177,7 @@ export function saveSpireContent(c: SpireCustomContent) {
     ...body,
     charAccess: c.charAccess && typeof c.charAccess === "object" ? c.charAccess : {},
     assets: c.assets && typeof c.assets === "object" ? c.assets : {},
+    assetPool: c.assetPool && typeof c.assetPool === "object" ? c.assetPool : {},
     maps: c.maps && typeof c.maps === "object" ? c.maps : { packs: [] },
   })
 }

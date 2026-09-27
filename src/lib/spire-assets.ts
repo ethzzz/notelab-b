@@ -77,25 +77,70 @@ export interface AssetSlot {
   default: string
   /** 候选过滤：默认只列图片 */
   filter?: (it: AssetItem) => boolean
+  /**
+   * **推荐素材**判定：同一槽位可登记多个候选（资源池），这个谓词标出"按素材包归属应该属于本槽位"的那些。
+   * 用途：①下拉里推荐项排在前面；②「填充推荐」一键把该类素材加进池子。
+   * 不设 = 该槽位没有推荐（如背景图、角色立绘）。
+   */
+  suggest?: (it: AssetItem) => boolean
   /** 预览方式 */
   preview?: "image" | "none"
 }
 
 const onlyImages = (it: AssetItem) => it.kind === "image"
-/** 只列 art/ 整图层的图（节点整图与连线都来自这里） */
+/** 只列 art/ 整图层的图（节点整图与连线都来自这里，含 art/dungeon/ 地牢元素包） */
 const onlyArt = (it: AssetItem) => it.kind === "image" && it.rel.startsWith("art/")
+
+/** 素材文件名（不含目录与扩展名） */
+const baseName = (rel: string) => {
+  const file = rel.slice(rel.lastIndexOf("/") + 1)
+  const dot = file.lastIndexOf(".")
+  return dot < 0 ? file : file.slice(0, dot)
+}
+
+/**
+ * 地牢元素包（art/dungeon/）的归属判定：按文件名前缀圈定一类，可用 exclude 排除个别。
+ * 素材包自带的 game-assets.json 已经按 boss/elite/normal/shop/rest/path 分好组，
+ * 这里**不抄一份清单**，只按命名前缀归类 —— 加新素材只要沿用前缀就自动归入对应槽位。
+ */
+const dungeon = (prefixes: string[], exclude: string[] = []) => (it: AssetItem) => {
+  if (!it.rel.startsWith("art/dungeon/")) return false
+  const b = baseName(it.rel)
+  if (exclude.some((e) => b.startsWith(e))) return false
+  return prefixes.some((p) => b.startsWith(p))
+}
 
 export const ASSET_SLOTS: AssetSlot[] = [
   // ---------------- 地图节点（C 端 NODE_META.art，已接入） ----------------
-  { key: "node.enemy", group: "node", label: "普通敌人", default: "/games/spire/art/icon-normal.png", filter: onlyArt },
-  { key: "node.elite", group: "node", label: "精英敌人", default: "/games/spire/art/icon-elite.png", filter: onlyArt },
-  { key: "node.boss", group: "node", label: "BOSS", default: "/games/spire/art/icon-boss.png", filter: onlyArt },
-  { key: "node.rest", group: "node", label: "补给营地", default: "/games/spire/art/icon-rest.png", filter: onlyArt },
-  { key: "node.shop", group: "node", label: "商店", default: "/games/spire/art/icon-shop.png", filter: onlyArt },
-  { key: "node.random", group: "node", label: "未知（未揭示）", default: "/games/spire/art/icon-random.png", filter: onlyArt },
+  // suggest = 地牢元素包里**按素材包分组**属于该节点类型的那些；同类可登记多个，用时选一个。
+  {
+    key: "node.enemy", group: "node", label: "普通敌人", default: "/games/spire/art/icon-normal.png",
+    filter: onlyArt, suggest: dungeon(["stone-skull", "stone-empty"]),
+  },
+  {
+    key: "node.elite", group: "node", label: "精英敌人", default: "/games/spire/art/icon-elite.png",
+    filter: onlyArt, suggest: dungeon(["demon"], ["demon-boss"]),
+  },
+  {
+    key: "node.boss", group: "node", label: "BOSS", default: "/games/spire/art/icon-boss.png",
+    filter: onlyArt, suggest: dungeon(["demon-boss"]),
+  },
+  {
+    key: "node.rest", group: "node", label: "补给营地", default: "/games/spire/art/icon-rest.png",
+    filter: onlyArt, suggest: dungeon(["campfire"]),
+  },
+  {
+    key: "node.shop", group: "node", label: "商店", default: "/games/spire/art/icon-shop.png",
+    filter: onlyArt, suggest: dungeon(["merchant"]),
+  },
+  {
+    key: "node.random", group: "node", label: "未知（未揭示）", default: "/games/spire/art/icon-random.png",
+    filter: onlyArt, suggest: dungeon(["stone-skull", "stone-empty"]),
+  },
   {
     key: "node.event", group: "node", label: "未知事件", default: "",
     filter: onlyArt,
+    suggest: dungeon(["stone-empty"]),
     hint: "内置**故意留空**：若指向与 node.random 相同的图，玩家无法区分「进去触发事件」与「进去才知道是什么」。配了图就会用图，不再走自绘圆盘兜底。",
   },
 
@@ -103,7 +148,8 @@ export const ASSET_SLOTS: AssetSlot[] = [
   {
     key: "link.straight", group: "link", label: "直行连线", default: "/games/spire/art/link-straight.png",
     filter: onlyArt,
-    hint: "建议横向、左右可无缝延展、上下透明渐隐的图（现用 165×24 的小径）。",
+    suggest: dungeon(["path-bridge"]),
+    hint: "建议横向、左右可无缝延展、上下透明渐隐的图（现用 165×24 的小径；地牢元素包的 path-bridge 是 622×220 的岩桥）。",
   },
 
   // ---------------- 背景图（C 端新增接入） ----------------
@@ -173,9 +219,68 @@ export function sanitizeAssetMap(raw: Record<string, unknown> | undefined): Reco
   return out
 }
 
+/**
+ * 资源池净化：键的识别规则与 sanitizeAssetMap 完全一致（注册表内 或 `char.*` 开放命名空间），
+ * 值是**去重保序**的非空字符串数组；空数组丢弃（= 该槽位没有池子，只用 assets 那一个）。
+ * 未知 key 丢弃 —— 否则页面会出现"池子里有东西却没人认"的幽灵行。
+ */
+export function sanitizeAssetPool(
+  raw: Record<string, unknown> | undefined,
+  limit = 50,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  if (!raw || typeof raw !== "object") return out
+  for (const [k, v] of Object.entries(raw)) {
+    if (!SLOT_BY_KEY[k] && !/^char\.[^.\s]+$/.test(k)) continue
+    if (!Array.isArray(v)) continue
+    const list: string[] = []
+    for (const x of v) {
+      if (typeof x !== "string") continue
+      const p = x.trim()
+      if (!p || list.includes(p)) continue
+      list.push(p)
+      if (list.length >= limit) break
+    }
+    if (list.length) out[k] = list
+  }
+  return out
+}
+
+/** 槽位取值：池子优先（取其第一个），没有池子时回落到"当前使用的那一个"，再没有才用内置默认 */
+export function effectiveAsset(
+  key: string,
+  pool: Record<string, string[]>,
+  current: Record<string, string>,
+  fallback = "",
+): string {
+  const p = pool[key]
+  if (Array.isArray(p) && p.length && p[0]) return p[0]
+  const c = current[key]
+  if (typeof c === "string" && c.trim()) return c.trim()
+  return fallback
+}
+
 /** 已配置数 / 总槽位（页面顶部进度用）；传 slots 时按动态槽位表算分母 */
 export function configuredCount(map: Record<string, string>, slots: AssetSlot[] = ASSET_SLOTS): number {
   return slots.filter((s) => map[s.key]).length
+}
+
+/** 池子里的素材总数（页面顶部进度用；同一素材被多个槽位引用会重复计数，这里就是要看"登记量"） */
+export function pooledCount(pool: Record<string, string[]>, slots: AssetSlot[] = ASSET_SLOTS): number {
+  return slots.reduce((n, s) => n + (pool[s.key]?.length || 0), 0)
+}
+
+/** 某槽位在素材清单里的**推荐项**（按 suggest 判定，没有 suggest 则为空数组） */
+export function suggestedItems(slot: AssetSlot, catalog: AssetCatalog): AssetItem[] {
+  if (!slot.suggest) return []
+  const out: AssetItem[] = []
+  for (const g of catalog.groups) {
+    for (const it of g.items) {
+      if (slot.filter && !slot.filter(it)) continue
+      if (slot.suggest(it)) out.push(it)
+    }
+  }
+  return out
 }
 
 export const CATALOG_EMPTY: AssetCatalog = { available: false, total: 0, groups: [] }

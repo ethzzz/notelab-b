@@ -13,7 +13,7 @@ import { toast } from "@/lib/toast"
 import { apiJson, postJson } from "@/lib/api"
 import {
   loadSpireContent, saveSpireContent,
-  type SpireAssetMap, type SpireMapDoc, type SpireBaseChar,
+  type SpireAssetMap, type SpireAssetPool, type SpireMapDoc, type SpireBaseChar,
 } from "@/lib/spire-content"
 import {
   CARDS, applyCustomContent, sanitizeCard, sanitizeCharacter,
@@ -29,16 +29,20 @@ interface Doc {
   skills: SkillTpl[]
   charAccess: Record<string, string[]>
   assets: SpireAssetMap
+  /** 素材资源池：同类可登记多个候选，assets 指向其中"当前使用"的那一个 */
+  assetPool: SpireAssetPool
   maps: SpireMapDoc
 }
 
-/** 稳定序列化：charAccess / assets 的键序无关紧要，排序后再比，避免"没改也显示未保存" */
+/** 稳定序列化：charAccess / assets / assetPool 的键序无关紧要，排序后再比，避免"没改也显示未保存" */
 function fingerprint(d: Doc): string {
   const sorted = (o: Record<string, any>) =>
     Object.fromEntries(Object.entries(o || {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
   return JSON.stringify({
     cards: d.cards, characters: d.chars, skills: d.skills,
     charAccess: sorted(d.charAccess), assets: sorted(d.assets),
+    // 池子内部是数组（顺序有意义，代表展示顺序），只排序 key 不动数组
+    assetPool: sorted(d.assetPool),
     maps: d.maps,
   })
 }
@@ -63,6 +67,7 @@ interface SpireStore extends Doc {
   setSkills: (v: SkillTpl[] | ((l: SkillTpl[]) => SkillTpl[])) => void
   setCharAccess: (v: Record<string, string[]> | ((l: Record<string, string[]>) => Record<string, string[]>)) => void
   setAssets: (v: SpireAssetMap | ((l: SpireAssetMap) => SpireAssetMap)) => void
+  setAssetPool: (v: SpireAssetPool | ((l: SpireAssetPool) => SpireAssetPool)) => void
   setMaps: (v: SpireMapDoc | ((l: SpireMapDoc) => SpireMapDoc)) => void
 
   /** 保存并应用（本地引擎立即生效，供卡面/角色预览） */
@@ -88,6 +93,7 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
   const [skills, setSkills] = useState<SkillTpl[]>([])
   const [charAccess, setCharAccess] = useState<Record<string, string[]>>({})
   const [assets, setAssets] = useState<SpireAssetMap>({})
+  const [assetPool, setAssetPool] = useState<SpireAssetPool>({})
   const [maps, setMaps] = useState<SpireMapDoc>({ packs: [] })
 
   const [loaded, setLoaded] = useState(false)
@@ -100,8 +106,8 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
   /** 最近一次「已落库」状态的指纹；加载完成与每次保存成功后刷新 */
   const [baseline, setBaseline] = useState<string>("")
   // 用 ref 取当前文档做序列化，避免把 baseline 依赖进每个 setter
-  const docRef = useRef<Doc>({ cards, chars, skills, charAccess, assets, maps })
-  docRef.current = { cards, chars, skills, charAccess, assets, maps }
+  const docRef = useRef<Doc>({ cards, chars, skills, charAccess, assets, assetPool, maps })
+  docRef.current = { cards, chars, skills, charAccess, assets, assetPool, maps }
 
   useEffect(() => {
     let alive = true
@@ -123,10 +129,11 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
       const doc: Doc = {
         cards: sc, chars: sh, skills: sk,
         charAccess: c.charAccess || {}, assets: c.assets || {},
+        assetPool: c.assetPool || {},
         maps: c.maps || { packs: [] },
       }
       setCards(sc); setChars(sh); setSkills(sk)
-      setCharAccess(doc.charAccess); setAssets(doc.assets); setMaps(doc.maps)
+      setCharAccess(doc.charAccess); setAssets(doc.assets); setAssetPool(doc.assetPool); setMaps(doc.maps)
       setBaseChars(c.baseCharacters || [])
       // 把自定义内容注册进本地引擎，卡面/角色预览才和游戏内一致
       applyCustomContent(sc, sh)
@@ -140,7 +147,7 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
     () => loaded && fingerprint(docRef.current) !== baseline,
     // docRef.current 的每次渲染赋值不会触发 memo 重算，所以把各切片列进依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loaded, baseline, cards, chars, skills, charAccess, assets, maps],
+    [loaded, baseline, cards, chars, skills, charAccess, assets, assetPool, maps],
   )
 
   /** 整包提交（一定是全量，绝不只提交当前页那一片） */
@@ -149,7 +156,7 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
     try {
       await saveSpireContent({
         cards: d.cards, characters: d.chars, skills: d.skills,
-        charAccess: d.charAccess, assets: d.assets, maps: d.maps,
+        charAccess: d.charAccess, assets: d.assets, assetPool: d.assetPool, maps: d.maps,
       })
     } catch (e: any) {
       toast.error(`保存失败：${e?.message || e}`)
@@ -205,9 +212,9 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
   const charPool = useMemo(() => allCharPool(baseChars, chars), [baseChars, chars])
 
   const store: SpireStore = {
-    cards, chars, skills, charAccess, assets, maps,
+    cards, chars, skills, charAccess, assets, assetPool, maps,
     loaded, busy, pubBusy, published, dirty, baseChars, groups, charPool,
-    setCards, setChars, setSkills, setCharAccess, setAssets, setMaps,
+    setCards, setChars, setSkills, setCharAccess, setAssets, setAssetPool, setMaps,
     save, saveQuiet, publish, unpublish,
   }
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>
