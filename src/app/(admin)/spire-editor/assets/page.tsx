@@ -162,7 +162,8 @@ export default function SpireAssetsPage() {
           </span>} />
       )}
 
-      {!fetching && catalog.available && (
+      {/* 清单拿不到时也要渲染槽位：下拉虽为空，但已存的配置仍可见、可恢复默认后保存 */}
+      {!fetching && (
         <Card size="small" className="shadow-sm">
           <div className="flex flex-col gap-4">
             {SLOT_GROUPS.map((g) => {
