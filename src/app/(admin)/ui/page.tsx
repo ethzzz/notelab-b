@@ -5,6 +5,7 @@ import { Button, Card, Input, Modal, Radio, Spin } from "antd"
 import { apiJson, postJson } from "@/lib/api"
 import { THEMES, themeById, resolveBgStyle } from "@/lib/themes"
 import { toast } from "@/lib/toast"
+import AdminPage from "@/components/admin/AdminPage"
 
 export default function UiConfigPage() {
   const [config, setConfig] = useState<any>(null)
@@ -45,10 +46,21 @@ export default function UiConfigPage() {
   const menuKeys = Object.keys(defaults.menus || {})
 
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-2xl font-bold mb-0">界面配置</h1>
-      <p className="text-zinc-500 dark:text-zinc-400 text-sm -mt-2 mb-0">配置菜单展示与全局背景，保存后即时生效。</p>
-
+    <AdminPage
+      title="界面配置"
+      description="配置菜单展示与全局背景，保存后即时生效。"
+      extra={
+        <>
+          <Button type="primary" onClick={() => save(config)} loading={saving}>保存配置</Button>
+          <Button onClick={() => Modal.confirm({
+            title: "恢复为默认外观配置？",
+            okText: "恢复",
+            cancelText: "取消",
+            onOk: () => save(defaults),
+          })}>恢复默认</Button>
+        </>
+      }
+    >
       {/* B/C 拆分阶段4：C 端背景说明 —— 此处保存的 background 即 C 端匿名拉取的全局背景 */}
       <Card size="small" className="!border-indigo-200 !bg-indigo-50/40 dark:!border-indigo-500/30 dark:!bg-indigo-500/10">
         <div className="font-semibold text-sm text-indigo-700 mb-2">🌐 C 端背景说明</div>
@@ -122,16 +134,6 @@ export default function UiConfigPage() {
           })}
         </div>
       </Card>
-
-      <div className="flex items-center gap-3">
-        <Button type="primary" onClick={() => save(config)} loading={saving}>保存配置</Button>
-        <Button onClick={() => Modal.confirm({
-          title: "恢复为默认外观配置？",
-          okText: "恢复",
-          cancelText: "取消",
-          onOk: () => save(defaults),
-        })}>恢复默认</Button>
-      </div>
-    </div>
+    </AdminPage>
   )
 }
