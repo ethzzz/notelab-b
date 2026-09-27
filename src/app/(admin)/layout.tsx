@@ -261,7 +261,6 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
               notFoundContent={searchValue.trim() ? "无匹配菜单" : null}
               onSearch={setSearchValue}
               onSelect={(v) => goMenu(v as string)}
-              onPressEnter={() => { if (menuOptions.length) goMenu(menuOptions[0].value as string) }}
             />
             {/* light/dark 切换（图标为目标模式），状态持久化于 localStorage: notelab_b_theme */}
             <Button
