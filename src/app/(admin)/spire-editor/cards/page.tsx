@@ -2,10 +2,11 @@
 
 // 爬塔工坊 · 卡片制作（原「名片制作」Tab，已独立成页）
 import { useMemo, useState } from "react"
-import { Input, Select, Button, Tag, Table, Modal, Form, InputNumber, Checkbox } from "antd"
+import { Input, Select, Button, Tag, Card, Modal, Form, InputNumber, Checkbox } from "antd"
 import { Plus } from "lucide-react"
 import { SpireCardView, CATEGORY_LABEL, RARITY_NAME } from "@/components/SpireCardView"
 import { toast } from "@/lib/toast"
+import { DataTable, actionColumn } from "@/components/admin"
 import { useSpire } from "../_shared/store"
 import { actBtns, emptyHint, PageHead } from "../_shared/ui"
 import {
@@ -50,14 +51,11 @@ export default function SpireCardsPage() {
     { title: "稀有度", dataIndex: "rarity", width: 90, render: (v: number) => <Tag>{RARITY_NAME[v]}</Tag> },
     { title: "效果描述", dataIndex: "id", render: (_: any, c: CardDef) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{cardDesc(c)}</span> },
     { title: "抽取池", dataIndex: "spawnOnly", width: 100, render: (v: boolean) => v ? <Tag>仅生成</Tag> : <Tag color="green">可抽取</Tag> },
-    {
-      title: "操作", align: "right" as const, width: 140,
-      render: (_: any, c: CardDef) => actBtns(
-        () => setDraft(JSON.parse(JSON.stringify(c))),
-        () => setCards((l) => l.filter((x) => x.id !== c.id)),
-        c.name,
-      ),
-    },
+    actionColumn((_: any, c: CardDef) => actBtns(
+      () => setDraft(JSON.parse(JSON.stringify(c))),
+      () => setCards((l) => l.filter((x) => x.id !== c.id)),
+      c.name,
+    ), 140),
   ]
 
   return (
@@ -69,15 +67,19 @@ export default function SpireCardsPage() {
         saving={busy}
         extra={dirty ? <span className="text-xs text-amber-500">保存后才会写入服务端</span> : null}
       />
-      <div className="flex items-center gap-2 flex-wrap">
-        <Input.Search placeholder="搜索卡片名称 / ID…" allowClear className="!w-60"
-          value={q} onChange={(e) => setQ(e.target.value)} onSearch={setQ} />
-        <Select className="w-32" value={fCat} onChange={setFCat}
-          options={[{ value: "all", label: "全部类型" }, ...CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))]} />
-        <Button type="primary" icon={<Plus size={14} />} className="ml-auto" onClick={() => setDraft(blankCard())}>新建卡片</Button>
-      </div>
-      <Table rowKey="id" size="middle" columns={columns as any} dataSource={list} pagination={false}
-        locale={{ emptyText: emptyHint("暂无自定义卡片，点右上角「新建卡片」开始制作") }} />
+      <Card size="small" className="shadow-sm">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input.Search placeholder="搜索卡片名称 / ID…" allowClear className="!w-60"
+              value={q} onChange={(e) => setQ(e.target.value)} onSearch={setQ} />
+            <Select className="w-32" value={fCat} onChange={setFCat}
+              options={[{ value: "all", label: "全部类型" }, ...CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))]} />
+            <Button type="primary" icon={<Plus size={14} />} className="ml-auto" onClick={() => setDraft(blankCard())}>新建卡片</Button>
+          </div>
+          <DataTable size="middle" columns={columns as any} dataSource={list} pagination={false}
+            locale={{ emptyText: emptyHint("暂无自定义卡片，点右上角「新建卡片」开始制作") }} />
+        </div>
+      </Card>
 
       {draft && (
         <Modal open onCancel={() => setDraft(null)}

@@ -9,10 +9,11 @@
 // 生成后**必过一遍硬约束自校验**：概率性生成器"看着像对的"说明不了任何事。
 import { useMemo, useState } from "react"
 import {
-  Alert, Button, Card, Empty, Input, InputNumber, Popconfirm, Radio, Space, Table, Tag, Tooltip,
+  Alert, Button, Card, Empty, Input, InputNumber, Popconfirm, Radio, Space, Tag, Tooltip,
 } from "antd"
 import { Dices, Play, Plus, Wand2 } from "lucide-react"
 import { toast } from "@/lib/toast"
+import { DataTable, actionColumn } from "@/components/admin"
 import { useSpire } from "../_shared/store"
 import { PageHead } from "../_shared/ui"
 import type { SpireMapPack } from "@/lib/spire-content"
@@ -170,19 +171,16 @@ export default function SpireMapPage() {
       title: "创建时间", width: 170,
       render: (_: any, p: SpireMapPack) => <span className="text-xs text-zinc-500">{p.createdAt ? new Date(p.createdAt).toLocaleString() : "—"}</span>,
     },
-    {
-      title: "操作", align: "right" as const, width: 190,
-      render: (_: any, p: SpireMapPack) => (
-        <Space size={4}>
-          <Button size="small" type="text" onClick={() => { setPreview(null); setViolations([]); setMaps((prev) => ({ ...prev, defaultId: p.id })) }}>预览</Button>
-          <Button size="small" type="text" onClick={() => loadParams(p)}>参数</Button>
-          <Popconfirm title="删除方案" description={`删除「${p.name}」？`} okText="删除" cancelText="取消"
-            okButtonProps={{ danger: true }} onConfirm={() => removePack(p.id)}>
-            <Button size="small" type="text" danger>删除</Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
+    actionColumn((_: any, p: SpireMapPack) => (
+      <Space size={4}>
+        <Button size="small" type="text" onClick={() => { setPreview(null); setViolations([]); setMaps((prev) => ({ ...prev, defaultId: p.id })) }}>预览</Button>
+        <Button size="small" type="text" onClick={() => loadParams(p)}>参数</Button>
+        <Popconfirm title="删除方案" description={`删除「${p.name}」？`} okText="删除" cancelText="取消"
+          okButtonProps={{ danger: true }} onConfirm={() => removePack(p.id)}>
+          <Button size="small" type="text" danger>删除</Button>
+        </Popconfirm>
+      </Space>
+    ), 190),
   ], [activePackId, setMaps])
 
   return (
@@ -357,12 +355,12 @@ export default function SpireMapPage() {
       </div>
 
       {/* ---------------- 已保存方案 ---------------- */}
-      <Card size="small" title={`已保存方案（${packs.length}）`}
+      <Card size="small" className="shadow-sm" title={`已保存方案（${packs.length}）`}
         extra={<span className="text-xs text-zinc-500">选中「默认」的那套会在发布时下发给 C 端</span>}>
         {packs.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有方案，先生成一套并保存" />
         ) : (
-          <Table rowKey="id" size="small" columns={packColumns as any} dataSource={packs} pagination={false} />
+          <DataTable size="middle" columns={packColumns as any} dataSource={packs} pagination={false} />
         )}
       </Card>
 

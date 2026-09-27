@@ -9,7 +9,7 @@
 // 存的是**路径字符串**（如 /games/spire/art/icon-normal.png），不搬文件；
 // 真正的文件仍在 C 端 public/spire 下，与 C 端 basePath（/games）绑定。
 import { useEffect, useMemo, useState } from "react"
-import { Alert, Button, Select, Spin, Tag, Tooltip } from "antd"
+import { Alert, Button, Card, Select, Spin, Tag, Tooltip } from "antd"
 import { RotateCcw } from "lucide-react"
 import { apiJson } from "@/lib/api"
 import { useSpire } from "../_shared/store"
@@ -162,24 +162,30 @@ export default function SpireAssetsPage() {
           </span>} />
       )}
 
-      {SLOT_GROUPS.map((g) => {
-        const groupSlots = slots.filter((s) => s.group === g.key)
-        if (!groupSlots.length) return null
-        return (
-          <div key={g.key} className="flex flex-col gap-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-sm font-semibold">{g.label}</h3>
-              {g.wired
-                ? <Tag color="green">C 端已接入</Tag>
-                : <Tag color="orange">C 端尚未消费</Tag>}
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">{g.desc}</span>
-            </div>
-            <div className="flex flex-col gap-2">
-              {groupSlots.map((s) => <SlotRow key={s.key} slot={s} catalog={catalog} />)}
-            </div>
+      {!fetching && catalog.available && (
+        <Card size="small" className="shadow-sm">
+          <div className="flex flex-col gap-4">
+            {SLOT_GROUPS.map((g) => {
+              const groupSlots = slots.filter((s) => s.group === g.key)
+              if (!groupSlots.length) return null
+              return (
+                <div key={g.key} className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-semibold">{g.label}</h3>
+                    {g.wired
+                      ? <Tag color="green">C 端已接入</Tag>
+                      : <Tag color="orange">C 端尚未消费</Tag>}
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">{g.desc}</span>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {groupSlots.map((s) => <SlotRow key={s.key} slot={s} catalog={catalog} />)}
+                  </div>
+                </div>
+              )
+            })}
           </div>
-        )
-      })}
+        </Card>
+      )}
 
       <Alert type="info" showIcon
         message="如何扩展更多素材类型"

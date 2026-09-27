@@ -4,7 +4,7 @@
 // 给 C 端用户组勾选可选择哪些角色；写入 spire.charAccess，随「发布到 C 端」生效。
 // fail-open：某组没有对应键时 C 端**不筛选**（全部可选），避免未配置把玩家全锁死。
 import { useEffect, useMemo, useState } from "react"
-import { Alert, Button, Checkbox, Radio, Tag } from "antd"
+import { Alert, Button, Card, Checkbox, Radio, Tag } from "antd"
 import { toast } from "@/lib/toast"
 import { useSpire } from "../_shared/store"
 import { PageHead } from "../_shared/ui"
@@ -52,53 +52,57 @@ export default function SpireAccessPage() {
           组内成员在「C 端用户管理 → 用户」页调整。
         </span>} />
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-sm text-zinc-500 dark:text-zinc-400">用户组</span>
-        {groups.length > 0 ? (
-          <Radio.Group value={accGroup} onChange={(e) => setAccGroup(e.target.value)}
-            options={groups.map((g) => ({
-              value: g.code,
-              label: `${g.name}（${g.code}${g.member_count != null ? ` · ${g.member_count}人` : ""}）`,
-            }))}
-            optionType="button" buttonStyle="solid" />
-        ) : (
-          <span className="text-xs text-amber-500">用户组列表加载失败或无可用组（需 B 端登录，可在「C 端用户管理」新建组）</span>
-        )}
-      </div>
-
-      {accGroup && (
-        <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
-          <div className="flex items-center gap-2 flex-wrap text-sm">
-            <span className="font-medium">「{groupName(accGroup)}」可选择的角色</span>
-            <Tag color="blue">已选 {checked.length} / {charPool.length}</Tag>
-            {!(accGroup in charAccess) && <Tag color="orange">尚未配置 · C 端当前不筛选</Tag>}
-            <div className="ml-auto flex items-center gap-2">
-              <Button size="small" onClick={() => setGroup(accGroup, charPool.map((c) => c.id))}>全选</Button>
-              <Button size="small" onClick={() => setGroup(accGroup, [])}>全不选</Button>
-              <Button size="small" onClick={() => setGroup(accGroup, presetAccess(accGroup, charPool))}>按推荐预填</Button>
-            </div>
+      <Card size="small" className="shadow-sm">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm text-zinc-500 dark:text-zinc-400">用户组</span>
+            {groups.length > 0 ? (
+              <Radio.Group value={accGroup} onChange={(e) => setAccGroup(e.target.value)}
+                options={groups.map((g) => ({
+                  value: g.code,
+                  label: `${g.name}（${g.code}${g.member_count != null ? ` · ${g.member_count}人` : ""}）`,
+                }))}
+                optionType="button" buttonStyle="solid" />
+            ) : (
+              <span className="text-xs text-amber-500">用户组列表加载失败或无可用组（需 B 端登录，可在「C 端用户管理」新建组）</span>
+            )}
           </div>
 
-          <Checkbox.Group className="!w-full" value={checked}
-            onChange={(vals) => setGroup(accGroup, vals as string[])}>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {charPool.map((c) => (
-                <div key={c.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-2 dark:border-zinc-700">
-                  <Checkbox value={c.id}>{c.icon} {c.name}</Checkbox>
-                  <Tag className="!ml-auto !mr-0" color={c.custom ? "purple" : "default"}>{c.custom ? "工坊" : "内置"}</Tag>
-                </div>
-              ))}
+          {accGroup && (
+            <div className="flex flex-col gap-2 rounded-xl bg-black/[0.02] p-3 dark:bg-white/[0.04]">
+            <div className="flex items-center gap-2 flex-wrap text-sm">
+              <span className="font-medium">「{groupName(accGroup)}」可选择的角色</span>
+              <Tag color="blue">已选 {checked.length} / {charPool.length}</Tag>
+              {!(accGroup in charAccess) && <Tag color="orange">尚未配置 · C 端当前不筛选</Tag>}
+              <div className="ml-auto flex items-center gap-2">
+                <Button size="small" onClick={() => setGroup(accGroup, charPool.map((c) => c.id))}>全选</Button>
+                <Button size="small" onClick={() => setGroup(accGroup, [])}>全不选</Button>
+                <Button size="small" onClick={() => setGroup(accGroup, presetAccess(accGroup, charPool))}>按推荐预填</Button>
+              </div>
             </div>
-          </Checkbox.Group>
 
-          {charPool.length === 0 && (
-            <div className="py-4 text-center text-sm text-zinc-400">暂无可授权角色（内置角色清单加载失败？）</div>
+            <Checkbox.Group className="!w-full" value={checked}
+              onChange={(vals) => setGroup(accGroup, vals as string[])}>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {charPool.map((c) => (
+                  <div key={c.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-2 dark:border-zinc-700">
+                    <Checkbox value={c.id}>{c.icon} {c.name}</Checkbox>
+                    <Tag className="!ml-auto !mr-0" color={c.custom ? "purple" : "default"}>{c.custom ? "工坊" : "内置"}</Tag>
+                  </div>
+                ))}
+              </div>
+            </Checkbox.Group>
+
+            {charPool.length === 0 && (
+              <div className="py-4 text-center text-sm text-zinc-400">暂无可授权角色（内置角色清单加载失败？）</div>
+            )}
+            <div className="text-xs text-zinc-400 dark:text-zinc-500">
+              角色池 = 内置基础角色 + 本工坊「角色制作」页的自定义角色（按 id 去重，自定义优先）。
+            </div>
+            </div>
           )}
-          <div className="text-xs text-zinc-400 dark:text-zinc-500">
-            角色池 = 内置基础角色 + 本工坊「角色制作」页的自定义角色（按 id 去重，自定义优先）。
-          </div>
         </div>
-      )}
+      </Card>
     </div>
   )
 }

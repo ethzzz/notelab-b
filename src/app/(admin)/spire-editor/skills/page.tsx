@@ -3,9 +3,10 @@
 // 爬塔工坊 · 技能制作（原「技能制作」Tab，已独立成页）
 // 技能模板本身不直接生效，是给「角色制作」页引用（以拷贝形式嵌进角色的主动/被动槽）
 import { useMemo, useState } from "react"
-import { Input, Select, Button, Tag, Table, Modal, Form, InputNumber } from "antd"
+import { Input, Select, Button, Tag, Card, Modal, Form, InputNumber } from "antd"
 import { Plus } from "lucide-react"
 import { toast } from "@/lib/toast"
+import { DataTable, actionColumn } from "@/components/admin"
 import { useSpire } from "../_shared/store"
 import { actBtns, emptyHint, PageHead } from "../_shared/ui"
 import {
@@ -44,14 +45,11 @@ export default function SpireSkillsPage() {
     { title: "数值", dataIndex: "value", width: 70 },
     { title: "冷却", dataIndex: "cooldown", width: 90, render: (v: number, s: SkillTpl) => s.stype === "active" ? `${v} 回合` : "—" },
     { title: "描述", dataIndex: "desc", render: (v: string) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{v || "—"}</span> },
-    {
-      title: "操作", align: "right" as const, width: 140,
-      render: (_: any, s: SkillTpl) => actBtns(
-        () => setDraft({ ...s }),
-        () => setSkills((l) => l.filter((x) => x.id !== s.id)),
-        s.name,
-      ),
-    },
+    actionColumn((_: any, s: SkillTpl) => actBtns(
+      () => setDraft({ ...s }),
+      () => setSkills((l) => l.filter((x) => x.id !== s.id)),
+      s.name,
+    ), 140),
   ]
 
   return (
@@ -63,15 +61,19 @@ export default function SpireSkillsPage() {
         saving={busy}
         extra={dirty ? <span className="text-xs text-amber-500">保存后才会写入服务端</span> : null}
       />
-      <div className="flex items-center gap-2 flex-wrap">
-        <Input.Search placeholder="搜索技能名称…" allowClear className="!w-60"
-          value={q} onChange={(e) => setQ(e.target.value)} onSearch={setQ} />
-        <Select className="w-32" value={fStype} onChange={setFStype}
-          options={[{ value: "all", label: "全部类型" }, { value: "active", label: "主动技能" }, { value: "passive", label: "被动技能" }]} />
-        <Button type="primary" icon={<Plus size={14} />} className="ml-auto" onClick={() => setDraft(blankSkill("active"))}>新建技能</Button>
-      </div>
-      <Table rowKey="id" size="middle" columns={columns as any} dataSource={list} pagination={false}
-        locale={{ emptyText: emptyHint("暂无技能模板，点右上角「新建技能」开始制作（角色制作时可从技能库引用）") }} />
+      <Card size="small" className="shadow-sm">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input.Search placeholder="搜索技能名称…" allowClear className="!w-60"
+              value={q} onChange={(e) => setQ(e.target.value)} onSearch={setQ} />
+            <Select className="w-32" value={fStype} onChange={setFStype}
+              options={[{ value: "all", label: "全部类型" }, { value: "active", label: "主动技能" }, { value: "passive", label: "被动技能" }]} />
+            <Button type="primary" icon={<Plus size={14} />} className="ml-auto" onClick={() => setDraft(blankSkill("active"))}>新建技能</Button>
+          </div>
+          <DataTable size="middle" columns={columns as any} dataSource={list} pagination={false}
+            locale={{ emptyText: emptyHint("暂无技能模板，点右上角「新建技能」开始制作（角色制作时可从技能库引用）") }} />
+        </div>
+      </Card>
 
       {draft && (
         <Modal open onCancel={() => setDraft(null)}

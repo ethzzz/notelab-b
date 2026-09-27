@@ -8,18 +8,24 @@ export default function AdminPage({
   extra,
   children,
   className = "",
+  level = 1,
 }: {
   title: ReactNode
   description?: ReactNode
   extra?: ReactNode
   children?: ReactNode
   className?: string
+  /** 标题层级：1 = 页面主标题（h1 / xl）；2 = 子页或分区标题（h2 / lg，用于外壳已有 h1 的场景，如爬塔工坊各子页） */
+  level?: 1 | 2
 }) {
+  const Heading = level === 2 ? "h2" : "h1"
   return (
     <div className={`flex flex-col gap-4 ${className}`}>
       <div className="flex items-start gap-3 flex-wrap">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <h1 className="m-0 text-xl font-semibold text-zinc-800 dark:text-zinc-100">{title}</h1>
+          <Heading className={`m-0 font-semibold text-zinc-800 dark:text-zinc-100 ${level === 2 ? "text-lg" : "text-xl"}`}>
+            {title}
+          </Heading>
           {description && <p className="m-0 text-sm text-zinc-500 dark:text-zinc-400">{description}</p>}
         </div>
         {extra && <div className="ml-auto flex items-center gap-2">{extra}</div>}

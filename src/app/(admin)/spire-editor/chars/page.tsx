@@ -3,9 +3,10 @@
 // 爬塔工坊 · 角色制作（原「角色制作」Tab，已独立成页）
 // 依赖同工坊的「技能制作」：可从技能库把主动/被动模板**拷贝**进当前角色（改模板不回改已套用的角色）
 import { useMemo, useState } from "react"
-import { Input, Select, Button, Tag, Table, Modal, Form, InputNumber } from "antd"
+import { Input, Select, Button, Tag, Card, Modal, Form, InputNumber } from "antd"
 import { Plus } from "lucide-react"
 import { toast } from "@/lib/toast"
+import { DataTable, actionColumn } from "@/components/admin"
 import { useSpire } from "../_shared/store"
 import { actBtns, emptyHint, PageHead } from "../_shared/ui"
 // CATEGORY_LABEL（卡牌类型中文名）只定义在卡面组件里，各页就地取用（与 cards/page.tsx 一致），
@@ -44,14 +45,11 @@ export default function SpireCharsPage() {
     { title: "被动技能", dataIndex: "passives", render: (ps: CharacterDef["passives"]) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{ps.map((p) => `${p.icon}${p.name}`).join("、") || "—"}</span> },
     { title: "主动技能", dataIndex: "skill", render: (s: CharacterDef["skill"]) => <span className="text-xs text-zinc-500 dark:text-zinc-400">{s.icon} {s.name}</span> },
     { title: "初始卡组", dataIndex: "startDeck", width: 100, render: (d: string[]) => `${d.length} 张` },
-    {
-      title: "操作", align: "right" as const, width: 140,
-      render: (_: any, c: CharacterDef) => actBtns(
-        () => setDraft(JSON.parse(JSON.stringify(c))),
-        () => setChars((l) => l.filter((x) => x.id !== c.id)),
-        c.name,
-      ),
-    },
+    actionColumn((_: any, c: CharacterDef) => actBtns(
+      () => setDraft(JSON.parse(JSON.stringify(c))),
+      () => setChars((l) => l.filter((x) => x.id !== c.id)),
+      c.name,
+    ), 140),
   ]
 
   return (
@@ -63,13 +61,17 @@ export default function SpireCharsPage() {
         saving={busy}
         extra={dirty ? <span className="text-xs text-amber-500">保存后才会写入服务端</span> : null}
       />
-      <div className="flex items-center gap-2 flex-wrap">
-        <Input.Search placeholder="搜索角色名称…" allowClear className="!w-60"
-          value={q} onChange={(e) => setQ(e.target.value)} onSearch={setQ} />
-        <Button type="primary" icon={<Plus size={14} />} className="ml-auto" onClick={() => setDraft(blankChar())}>新建角色</Button>
-      </div>
-      <Table rowKey="id" size="middle" columns={columns as any} dataSource={list} pagination={false}
-        locale={{ emptyText: emptyHint("暂无自定义角色，点右上角「新建角色」开始制作") }} />
+      <Card size="small" className="shadow-sm">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input.Search placeholder="搜索角色名称…" allowClear className="!w-60"
+              value={q} onChange={(e) => setQ(e.target.value)} onSearch={setQ} />
+            <Button type="primary" icon={<Plus size={14} />} className="ml-auto" onClick={() => setDraft(blankChar())}>新建角色</Button>
+          </div>
+          <DataTable size="middle" columns={columns as any} dataSource={list} pagination={false}
+            locale={{ emptyText: emptyHint("暂无自定义角色，点右上角「新建角色」开始制作") }} />
+        </div>
+      </Card>
 
       {draft && (
         <Modal open onCancel={() => setDraft(null)}
