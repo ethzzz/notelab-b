@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import Link from "next/link"
-import { Layout, Menu, Tag, Button, Drawer, Spin, Avatar, Result } from "antd"
+import { Layout, Menu, Tag, Button, Drawer, Spin, Avatar, Result, AutoComplete } from "antd"
 import type { MenuProps } from "antd"
 import { api, apiJson, rememberPath, clearRememberedPath } from "@/lib/api"
 import { useTheme } from "@/components/AntdProvider"
@@ -22,6 +22,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const [pages, setPages] = useState<string[] | null>(null)
   const [state, setState] = useState<"loading" | "ok" | "out">("loading")
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [searchValue, setSearchValue] = useState("")
 
   useEffect(() => {
     (async () => {
@@ -79,6 +80,47 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       })
     return { items: toAntd(menu), allGroupKeys: groupKeys, selectedKey: sel }
   }, [menu, pathname])
+
+  // ---------------- 菜单搜索：把角色可见的菜单树扁平化为「完整路径」叶子 ----------------
+  // 只收 leaf（含 path 且 ready !== false）；分组节点（children）不进结果（无法跳转）。
+  // fullPath 例：「游戏配置/爬塔尖塔/角色授权」，拼接祖先 name + 自身 name。
+  const flatMenu = useMemo(() => {
+    const out: { key: string; path: string; name: string; icon: string; fullPath: string }[] = []
+    const walk = (nodes: MenuItem[], prefix: string[]) => {
+      for (const n of nodes) {
+        if (n.children) walk(n.children, [...prefix, n.name])
+        else if (n.path && n.ready !== false) {
+          out.push({ key: n.key, path: n.path, name: n.name, icon: n.icon, fullPath: [...prefix, n.name].join("/") })
+        }
+      }
+    }
+    walk(menu, [])
+    return out
+  }, [menu])
+
+  // path 归一：仪表盘菜单 path 为 "/"，真实路由是 "/dashboard"
+  const goMenu = (p: string) => {
+    const target = p === "/" ? "/dashboard" : p
+    setSearchValue("")
+    router.push(target)
+  }
+
+  // 模糊匹配：fullPath / 自身名 包含查询串（中文子串即可，忽略大小写）即命中；空查询不展示结果
+  const menuOptions = useMemo(() => {
+    const q = searchValue.trim().toLowerCase()
+    if (!q) return []
+    return flatMenu
+      .filter((m) => m.fullPath.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      .map((m) => ({
+        value: m.path,
+        label: (
+          <div className="flex items-center gap-2 py-0.5">
+            {m.icon && <span className="text-base leading-none">{m.icon}</span>}
+            <span className="text-sm text-zinc-700 dark:text-zinc-200">{m.fullPath}</span>
+          </div>
+        ),
+      }))
+  }, [flatMenu, searchValue])
 
   // ---------------- 页面级守卫：只有后端下发的页面路由才可进入 ----------------
   // 菜单只能保证「看不见」，挡不住直接敲 URL；这里按 /api/menu 的 pages 清单再兜一道，
@@ -207,6 +249,20 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           />
           <span className="text-sm text-zinc-400 dark:text-zinc-500 hidden sm:inline">AI 试验后台 · B 端管理</span>
           <div className="ml-auto flex items-center gap-2.5 min-w-0">
+            {/* 菜单搜索：模糊匹配当前角色可见菜单，显示完整路径，点击跳转 */}
+            <AutoComplete
+              className="w-36 sm:w-56"
+              value={searchValue}
+              options={menuOptions}
+              filterOption={false}
+              placeholder="搜索菜单…"
+              allowClear
+              popupClassName="!min-w-[12rem]"
+              notFoundContent={searchValue.trim() ? "无匹配菜单" : null}
+              onSearch={setSearchValue}
+              onSelect={(v) => goMenu(v as string)}
+              onPressEnter={() => { if (menuOptions.length) goMenu(menuOptions[0].value as string) }}
+            />
             {/* light/dark 切换（图标为目标模式），状态持久化于 localStorage: notelab_b_theme */}
             <Button
               type="text"
