@@ -5,7 +5,7 @@ import Link from "next/link"
 import { Tag, Button, Card, Result } from "antd"
 import { Users } from "lucide-react"
 import { apiJson } from "@/lib/api"
-import AdminPage, { DataTable } from "@/components/admin"
+import { AdminPage, DataTable } from "@/components/admin"
 
 type Route = { code: string; path: string; method: string; kind: string; name: string }
 type Role = { code: string; name: string; route_codes: string[] }

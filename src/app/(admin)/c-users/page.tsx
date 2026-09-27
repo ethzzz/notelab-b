@@ -8,7 +8,7 @@ import {
 import { Plus, Pencil, KeyRound, Users, UserPlus } from "lucide-react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
-import AdminPage, { DataTable, actionColumn } from "@/components/admin"
+import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 
 type CUser = { id: number; username: string; nickname: string; group_code: string; status: string; created_at: string }
 type CGroup = { code: string; name: string; created_at: string; member_count: number }

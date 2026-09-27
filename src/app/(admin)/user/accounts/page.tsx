@@ -6,7 +6,7 @@ import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { Modal, Form, Input, Select, Button, Tag, Popconfirm, Space, Result } from "antd"
 import { Plus, Pencil, KeyRound, Users } from "lucide-react"
-import AdminPage, { DataTable, actionColumn } from "@/components/admin"
+import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 
 type Role = { code: string; name: string; route_codes: string[] }
 type User = { id: number; username: string; email: string | null; role: string; created_at: string }

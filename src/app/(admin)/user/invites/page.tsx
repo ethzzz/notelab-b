@@ -9,7 +9,7 @@ import { Plus, Copy, Ban, Ticket } from "lucide-react"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { copyText } from "@/lib/clipboard"
-import AdminPage, { DataTable, actionColumn } from "@/components/admin"
+import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 
 type InviteCode = {
   id: number; code: string; max_uses: number; used_count: number
