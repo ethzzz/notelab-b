@@ -83,6 +83,12 @@ export interface AssetSlot {
    * 不设 = 该槽位没有推荐（如背景图、角色立绘）。
    */
   suggest?: (it: AssetItem) => boolean
+  /**
+   * 推荐项里**排在最前**的命名前缀（决定「填充推荐」后默认使用的是哪一张）。
+   * 不设时按 seriesOrder（基础款 → -2/-3 变体 → 无序号特殊款）排。
+   * 例：node.enemy 同时收了 stone-skull 与 stone-empty，但"有敌人"的是骷髅石环，故 prefer: ["stone-skull"]。
+   */
+  prefer?: string[]
   /** 预览方式 */
   preview?: "image" | "none"
 }
@@ -115,7 +121,7 @@ export const ASSET_SLOTS: AssetSlot[] = [
   // suggest = 地牢元素包里**按素材包分组**属于该节点类型的那些；同类可登记多个，用时选一个。
   {
     key: "node.enemy", group: "node", label: "普通敌人", default: "/games/spire/art/icon-normal.png",
-    filter: onlyArt, suggest: dungeon(["stone-skull", "stone-empty"]),
+    filter: onlyArt, suggest: dungeon(["stone-skull", "stone-empty"]), prefer: ["stone-skull"],
   },
   {
     key: "node.elite", group: "node", label: "精英敌人", default: "/games/spire/art/icon-elite.png",
@@ -135,7 +141,7 @@ export const ASSET_SLOTS: AssetSlot[] = [
   },
   {
     key: "node.random", group: "node", label: "未知（未揭示）", default: "/games/spire/art/icon-random.png",
-    filter: onlyArt, suggest: dungeon(["stone-skull", "stone-empty"]),
+    filter: onlyArt, suggest: dungeon(["stone-skull", "stone-empty"]), prefer: ["stone-empty"],
   },
   {
     key: "node.event", group: "node", label: "未知事件", default: "",
@@ -270,9 +276,23 @@ export function pooledCount(pool: Record<string, string[]>, slots: AssetSlot[] =
   return slots.reduce((n, s) => n + (pool[s.key]?.length || 0), 0)
 }
 
+/**
+ * 素材包内的展示顺序：同一系列的「基础款」排在最前，带 -2/-3 后缀的变体按序号跟进，
+ * 无序号的特殊款（如 merchant-tomb）排最后。
+ * —— 这样「填充推荐」后默认选中的就是最能代表该类的一张，而不是字母序里的 campfire-2。
+ */
+function seriesOrder(rel: string): [number, number, string] {
+  const b = baseName(rel)
+  const m = /-(\d+)$/.exec(b)
+  if (!m) return [0, Number.MAX_SAFE_INTEGER, b]
+  return [1, Number(m[1]), b]
+}
+
 /** 某槽位在素材清单里的**推荐项**（按 suggest 判定，没有 suggest 则为空数组） */
 export function suggestedItems(slot: AssetSlot, catalog: AssetCatalog): AssetItem[] {
   if (!slot.suggest) return []
+  const prefer = slot.prefer || []
+  const rank = (it: AssetItem) => (prefer.some((p) => baseName(it.rel).startsWith(p)) ? 0 : 1)
   const out: AssetItem[] = []
   for (const g of catalog.groups) {
     for (const it of g.items) {
@@ -280,7 +300,13 @@ export function suggestedItems(slot: AssetSlot, catalog: AssetCatalog): AssetIte
       if (slot.suggest(it)) out.push(it)
     }
   }
-  return out
+  return out.sort((a, b) => {
+    const ra = rank(a), rb = rank(b)
+    if (ra !== rb) return ra - rb
+    const x = seriesOrder(a.rel)
+    const y = seriesOrder(b.rel)
+    return x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : x[2] > y[2] ? 1 : 0)
+  })
 }
 
 export const CATALOG_EMPTY: AssetCatalog = { available: false, total: 0, groups: [] }
