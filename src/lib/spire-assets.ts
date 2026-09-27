@@ -52,7 +52,7 @@ export interface SlotGroup {
 export const SLOT_GROUPS: SlotGroup[] = [
   {
     key: "node", label: "🗺️ 地图节点素材", wired: true,
-    desc: "引擎里每个节点类型的整幅美术。C 端 basePath 是 /games，所以路径带该前缀；留空则回落内置默认。",
+    desc: "引擎里每个节点类型的整幅美术。C 端已无 basePath，路径挂在根路径（/spire/...）；留空则回落内置默认。",
   },
   {
     key: "link", label: "🔗 地图连线素材", wired: true,
