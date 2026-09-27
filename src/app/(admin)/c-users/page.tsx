@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react"
 import {
   Tabs, Table, Button, Input, Select, Tag, Modal, Form, Space, Popconfirm, Card,
 } from "antd"
-import { Plus, Pencil, KeyRound, Users } from "lucide-react"
+import { Plus, Pencil, KeyRound, Users, UserPlus } from "lucide-react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 
@@ -155,6 +155,12 @@ export default function CUsersPage() {
   const [renaming, setRenaming] = useState<CGroup | null>(null)
   const [renameVal, setRenameVal] = useState("")
 
+  // 添加用户到用户组（modal）
+  const [addOpen, setAddOpen] = useState(false)
+  const [addGroup, setAddGroup] = useState<CGroup | null>(null)
+  const [idsText, setIdsText] = useState("")
+  const [addBusy, setAddBusy] = useState(false)
+
   async function createGroup() {
     if (!ng.code.trim() || !ng.name.trim()) { toast.warning("用户组编码和名称必填"); return }
     setBusy(true)
@@ -191,6 +197,50 @@ export default function CUsersPage() {
     } catch (e: any) { toast.error(e.message || "删除失败") }
   }
 
+  function openAddToGroup(g: CGroup) {
+    setAddGroup(g)
+    setIdsText("")
+    setAddOpen(true)
+  }
+
+  /** 解析批量输入的 ID：支持逗号 / 换行 / 分号 / 空格分隔，去重、过滤非正整数 */
+  function parseIds(raw: string): { ids: number[]; invalid: string[] } {
+    const parts = (raw || "").split(/[\s,;，；]+/).map((s) => s.trim()).filter(Boolean)
+    const ids: number[] = []
+    const invalid: string[] = []
+    const seen = new Set<number>()
+    for (const p of parts) {
+      if (/^\d+$/.test(p)) {
+        const n = Number(p)
+        if (n > 0 && !seen.has(n)) { seen.add(n); ids.push(n) }
+        else invalid.push(p)
+      } else {
+        invalid.push(p)
+      }
+    }
+    return { ids, invalid }
+  }
+
+  async function addMembersToGroup() {
+    if (!addGroup) return
+    const { ids, invalid } = parseIds(idsText)
+    if (ids.length === 0) { toast.warning("没有可添加的合法用户 ID"); return }
+    setAddBusy(true)
+    try {
+      const res: any = await postJson(`/api/c-admin/groups/${addGroup.code}/members`, { user_ids: ids })
+      const added: number = res.added ?? 0
+      const unknown: number[] = res.unknown_ids ?? []
+      let msg = `已将 ${added} 名用户加入「${addGroup.name}」`
+      if (unknown.length) msg += `；${unknown.length} 个 ID 不存在已跳过`
+      if (invalid.length) msg += `；${invalid.length} 个非法输入已忽略`
+      toast.success(msg)
+      setAddOpen(false); setIdsText("")
+      loadGroups() // 成员数变化
+      if (tab === "users" && groupFilter === addGroup.code) fetchUsers(page, pageSize, q, groupFilter)
+    } catch (e: any) { toast.error(e.message || "添加失败") }
+    setAddBusy(false)
+  }
+
   const groupColumns = [
     { title: "编码", dataIndex: "code", width: 160, render: (v: string) => <span className="font-mono text-xs">{v}</span> },
     { title: "名称", dataIndex: "name", render: (v: string, g: CGroup) => <span className="font-medium">{v}{g.code === "default" && <Tag className="!ml-2">默认</Tag>}</span> },
@@ -200,9 +250,10 @@ export default function CUsersPage() {
       render: (v: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500">{String(v || "").slice(0, 16)}</span>,
     },
     {
-      title: "操作", align: "right" as const, width: 170,
+      title: "操作", align: "right" as const, width: 230,
       render: (_: any, g: CGroup) => (
         <Space size={4}>
+          <Button size="small" type="text" icon={<UserPlus size={13} />} onClick={() => openAddToGroup(g)}>添加用户</Button>
           <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(g); setRenameVal(g.name) }}>重命名</Button>
           {g.code !== "default" && (
             <Popconfirm title="删除用户组" description={`删除用户组「${g.name}」？组内有成员时不可删除。`}
@@ -343,6 +394,28 @@ export default function CUsersPage() {
           </Form>
         </Modal>
       )}
+
+      {/* 添加用户到用户组 */}
+      {addOpen && (() => {
+        const parsed = parseIds(idsText)
+        return (
+          <Modal open onCancel={() => { if (!addBusy) { setAddOpen(false); setIdsText("") } }}
+            title={`➕ 添加用户到「${addGroup?.name}」`}
+            okText="添加" cancelText="取消" confirmLoading={addBusy} onOk={addMembersToGroup} maskClosable={false}
+            okButtonProps={{ disabled: parsed.ids.length === 0 }}>
+            <Form layout="vertical" className="mt-3">
+              <Form.Item label="用户 ID" required extra="支持逗号、换行、分号或空格分隔，可批量输入">
+                <Input.TextArea rows={6} placeholder={"例如：\n1, 2, 3\n4\n5"} value={idsText}
+                  onChange={(e) => setIdsText(e.target.value)} />
+              </Form.Item>
+              <div className="text-xs text-zinc-500 mt-1">
+                已解析 <b className="text-zinc-800 dark:text-zinc-100">{parsed.ids.length}</b> 个有效 ID
+                {parsed.invalid.length > 0 && <span className="text-amber-600"> · {parsed.invalid.length} 个非法输入将忽略</span>}
+              </div>
+            </Form>
+          </Modal>
+        )
+      })()}
     </div>
   )
 }
