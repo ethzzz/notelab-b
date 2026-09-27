@@ -4,7 +4,7 @@ import { Table } from "antd"
 import type { TableProps } from "antd"
 import type { ReactNode } from "react"
 
-/** 统一的「操作」列：右固定、居中、默认宽度 120；render 返回操作按钮组 */
+/** 统一的「操作」列：右固定、右对齐（对齐 c-users 标杆）、默认宽度 120；render 返回操作按钮组 */
 export function actionColumn(
   render: (record: any, index: number) => ReactNode,
   width = 120,
@@ -14,24 +14,27 @@ export function actionColumn(
     key: "action",
     width,
     fixed: "right",
-    align: "center",
+    align: "right",
     render,
   }
 }
 
-/** 数据表格：套用传统后台默认观感，分页/空态已预置，可按需覆盖 */
+/** 数据表格：套用传统后台默认观感，分页/空态已预置，可按需覆盖（pagination={false} 可关闭分页） */
 export function DataTable<T extends object>(props: TableProps<T>) {
+  const pagination = props.pagination === false
+    ? false
+    : {
+        pageSize: 10,
+        showSizeChanger: true,
+        showTotal: (t: number) => `共 ${t} 条`,
+        ...(props.pagination || {}),
+      }
   return (
     <Table<T>
       size="small"
       rowKey="id"
       scroll={{ x: "max-content" }}
-      pagination={{
-        pageSize: 10,
-        showSizeChanger: true,
-        showTotal: (t) => `共 ${t} 条`,
-        ...(props.pagination || {}),
-      }}
+      pagination={pagination}
       locale={{ emptyText: "暂无数据", ...(props.locale || {}) }}
       {...props}
     />

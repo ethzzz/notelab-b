@@ -6,6 +6,7 @@ import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result, Tabs } from "antd"
 import { Plus, ShieldCheck, Pencil, Users } from "lucide-react"
+import AdminPage, { DataTable, actionColumn } from "@/components/admin"
 
 type Route = { code: string; path: string; method: string; kind: string; name: string }
 type Role = { code: string; name: string; route_codes: string[] }
@@ -217,37 +218,34 @@ export default function UserRolesPage() {
         ? <span className="text-xs text-zinc-400 dark:text-zinc-500">默认拥有全部路由（含未来自动注册的新路由），无需分配</span>
         : <span className="text-xs text-zinc-400 dark:text-zinc-500">分配路由组后，成员菜单即时生效</span>,
     },
-    {
-      title: "操作", align: "right" as const, width: 330,
-      render: (_: any, r: Role) => r.code === "super_admin" ? null : (
-        <Space size={4}>
-          <Button size="small" type="primary" ghost icon={<ShieldCheck size={13} />} onClick={() => openAssign(r)}>分配路由</Button>
-          {/* 内置「普通用户」组不给批量入口：它的成员 = 所有未分到其它组的人，且「移出普通用户」无处可去，
-              变更内置组成员请去「账户管理」用单人或批量设置 */}
-          {r.code !== "user" && (
-            <Button size="small" type="text" icon={<Users size={13} />} onClick={() => openMembers(r)}>成员</Button>
-          )}
-          <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(r); setRenameVal(r.name) }}>重命名</Button>
-          {r.code !== "user" && (
-            <Popconfirm title="删除角色组"
-              description={`删除角色组「${r.name}」？${memberCount(r.code) > 0 ? `其下 ${memberCount(r.code)} 名成员将并入「普通用户」。` : ""}该操作不可恢复。`}
-              okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => removeRole(r)}>
-              <Button size="small" type="text" danger>删除</Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
-    },
+    actionColumn((_: any, r: Role) => r.code === "super_admin" ? null : (
+      <Space size={4}>
+        <Button size="small" type="primary" ghost icon={<ShieldCheck size={13} />} onClick={() => openAssign(r)}>分配路由</Button>
+        {/* 内置「普通用户」组不给批量入口：它的成员 = 所有未分到其它组的人，且「移出普通用户」无处可去，
+            变更内置组成员请去「账户管理」用单人或批量设置 */}
+        {r.code !== "user" && (
+          <Button size="small" type="text" icon={<Users size={13} />} onClick={() => openMembers(r)}>成员</Button>
+        )}
+        <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(r); setRenameVal(r.name) }}>重命名</Button>
+        {r.code !== "user" && (
+          <Popconfirm title="删除角色组"
+            description={`删除角色组「${r.name}」？${memberCount(r.code) > 0 ? `其下 ${memberCount(r.code)} 名成员将并入「普通用户」。` : ""}该操作不可恢复。`}
+            okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => removeRole(r)}>
+            <Button size="small" type="text" danger>删除</Button>
+          </Popconfirm>
+        )}
+      </Space>
+    ), 330),
   ]
 
   return (
-    <div className="flex flex-col gap-3">
+    <AdminPage title="角色组管理" description="给角色分配路由组后，成员菜单即时生效。">
       <div className="flex items-center gap-2">
         <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>创建角色组</Button>
         <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {ov.roles.length} 个角色组 · 给角色分配路由组后，成员菜单即时生效</span>
       </div>
 
-      <Table rowKey="code" size="middle" columns={columns as any} dataSource={ov.roles} pagination={false} />
+      <DataTable size="middle" rowKey="code" columns={columns as any} dataSource={ov.roles} pagination={false} />
 
       {/* 创建角色组 */}
       <Modal open={createOpen} onCancel={() => { if (!busy) setCreateOpen(false) }} title="➕ 创建角色组"
@@ -324,6 +322,6 @@ export default function UserRolesPage() {
           </div>
         </Modal>
       )}
-    </div>
+    </AdminPage>
   )
 }

@@ -2,9 +2,10 @@
 // 权限管理（antd 版）：路由组总览 + C 端用户管理直达入口
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { Table, Tag, Button, Card, Result } from "antd"
+import { Tag, Button, Card, Result } from "antd"
 import { Users } from "lucide-react"
 import { apiJson } from "@/lib/api"
+import AdminPage, { DataTable } from "@/components/admin"
 
 type Route = { code: string; path: string; method: string; kind: string; name: string }
 type Role = { code: string; name: string; route_codes: string[] }
@@ -37,13 +38,11 @@ export default function PermPage() {
   ]
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3 flex-wrap">
-        <h1 className="text-2xl font-bold">权限路由表</h1>
-        <Tag color="indigo">当前账户：{ov.me.username}（{ov.me.role === "super_admin" ? "超级管理员" : "普通用户"}）</Tag>
-      </div>
-      <p className="text-zinc-600 dark:text-zinc-300 text-sm -mt-2">后端每次启动会采集所有 Controller 路由与页面路由写入权限路由表，新增功能路由重启即自动出现。账户与角色管理请前往「用户管理」菜单。</p>
-
+    <AdminPage
+      title="权限路由表"
+      description="后端每次启动会采集所有 Controller 路由与页面路由写入权限路由表，新增功能路由重启即自动出现。账户与角色管理请前往「用户管理」菜单。"
+      extra={<Tag color="indigo">当前账户：{ov.me.username}（{ov.me.role === "super_admin" ? "超级管理员" : "普通用户"}）</Tag>}
+    >
       {/* C 端用户管理直达入口：后端菜单树（MenuTree 常量）暂无该项，前端在此提供入口 */}
       <Card size="small" className="shadow-sm border-indigo-200/70 dark:border-indigo-500/30">
         <div className="flex items-center gap-3 flex-wrap">
@@ -60,10 +59,10 @@ export default function PermPage() {
 
       <Card size="small" className="shadow-sm"
         title={<span className="text-sm">🧭 权限路由表（共 {ov.routes.length} 条，启动时自动注册）</span>}>
-        <Table rowKey="code" size="small" columns={columns as any}
+        <DataTable size="small" rowKey="code" columns={columns as any}
           dataSource={[...pageRoutes, ...apiRoutes]} pagination={false} scroll={{ x: 720 }} />
         <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2 mb-0">API 路由权限码已登记备用（当前仅页面路由参与菜单过滤；后续可基于权限码做接口级拦截）。</p>
       </Card>
-    </div>
+    </AdminPage>
   )
 }

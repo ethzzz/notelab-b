@@ -4,8 +4,9 @@
 import { useCallback, useEffect, useState } from "react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
-import { Table, Modal, Form, Input, Select, Button, Tag, Popconfirm, Space, Result } from "antd"
+import { Modal, Form, Input, Select, Button, Tag, Popconfirm, Space, Result } from "antd"
 import { Plus, Pencil, KeyRound, Users } from "lucide-react"
+import AdminPage, { DataTable, actionColumn } from "@/components/admin"
 
 type Role = { code: string; name: string; route_codes: string[] }
 type User = { id: number; username: string; email: string | null; role: string; created_at: string }
@@ -174,23 +175,20 @@ export default function UserAccountsPage() {
       render: (_: any, u: User) => <Select size="small" value={u.role} onChange={(v) => confirmChangeRole(u, v)} options={roleOptions} className="w-36" />,
     },
     { title: "创建时间", dataIndex: "created_at", render: (v: string) => <span className="text-zinc-400 dark:text-zinc-500 text-xs">{String(v || "").slice(0, 16)}</span> },
-    {
-      title: "操作", align: "right" as const, width: 200,
-      render: (_: any, u: User) => (
-        <Space size={4}>
-          <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setEditing(u); setEditForm({ username: u.username, email: u.email || "" }) }}>编辑</Button>
-          <Button size="small" type="text" icon={<KeyRound size={13} />} onClick={() => { setPwdUser(u); setPwd("") }}>密码</Button>
-          <Popconfirm title="删除账户" description={`删除账户「${u.username}」？该操作不可恢复。`} okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
-            onConfirm={() => removeUser(u)} disabled={u.id === ov.me.id}>
-            <Button size="small" type="text" danger disabled={u.id === ov.me.id}>删除</Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
+    actionColumn((_: any, u: User) => (
+      <Space size={4}>
+        <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setEditing(u); setEditForm({ username: u.username, email: u.email || "" }) }}>编辑</Button>
+        <Button size="small" type="text" icon={<KeyRound size={13} />} onClick={() => { setPwdUser(u); setPwd("") }}>密码</Button>
+        <Popconfirm title="删除账户" description={`删除账户「${u.username}」？该操作不可恢复。`} okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
+          onConfirm={() => removeUser(u)} disabled={u.id === ov.me.id}>
+          <Button size="small" type="text" danger disabled={u.id === ov.me.id}>删除</Button>
+        </Popconfirm>
+      </Space>
+    ), 200),
   ]
 
   return (
-    <div className="flex flex-col gap-3">
+    <AdminPage title="账户管理" description="管理 B 端账户：创建、编辑信息、重置密码、切换角色组与批量改属。注册入口已关闭，统一由此建号。">
       <div className="flex flex-wrap items-center gap-2">
         <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>创建账户</Button>
         <Button icon={<Users size={14} />} disabled={!selIds.length}
@@ -204,7 +202,7 @@ export default function UserAccountsPage() {
         <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {total} 个账户 · 注册入口已关闭，统一由此建号</span>
       </div>
 
-      <Table rowKey="id" size="middle" columns={columns as any} dataSource={users} loading={loading}
+      <DataTable size="middle" rowKey="id" columns={columns as any} dataSource={users} loading={loading}
         rowSelection={{
           selectedRowKeys: selIds,
           onChange: (ks) => setSelIds(ks as number[]),
@@ -280,6 +278,6 @@ export default function UserAccountsPage() {
           )}
         </div>
       </Modal>
-    </div>
+    </AdminPage>
   )
 }

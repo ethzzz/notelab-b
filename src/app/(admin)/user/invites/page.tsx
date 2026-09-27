@@ -3,12 +3,13 @@
 // 单码可注册次数在生成时决定，超出次数或作废后不可再用；接口契约以 CAdminController 为准
 import { useCallback, useEffect, useState } from "react"
 import {
-  Card, Table, Button, Input, InputNumber, Modal, Form, Tag, Space, Popconfirm,
+  Button, Input, InputNumber, Modal, Form, Tag, Popconfirm,
 } from "antd"
 import { Plus, Copy, Ban, Ticket } from "lucide-react"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { copyText } from "@/lib/clipboard"
+import AdminPage, { DataTable, actionColumn } from "@/components/admin"
 
 type InviteCode = {
   id: number; code: string; max_uses: number; used_count: number
@@ -98,30 +99,28 @@ export default function InviteCodesPage() {
     },
     { title: "备注", dataIndex: "remark", key: "remark", ellipsis: true },
     { title: "创建时间", dataIndex: "created_at", key: "created_at", width: 170 },
-    {
-      title: "操作", key: "op", width: 110,
-      render: (_: any, r: InviteCode) =>
-        r.revoked ? <span className="text-zinc-400 text-xs">—</span> : (
-          <Popconfirm title="作废后剩余次数不可再用，确定作废？" onConfirm={() => revoke(r.id)} okText="作废" cancelText="取消" okButtonProps={{ danger: true }}>
-            <Button size="small" danger icon={<Ban size={13} />}>作废</Button>
-          </Popconfirm>
-        ),
-    },
+    actionColumn((_: any, r: InviteCode) =>
+      r.revoked ? <span className="text-zinc-400 text-xs">—</span> : (
+        <Popconfirm title="作废后剩余次数不可再用，确定作废？" onConfirm={() => revoke(r.id)} okText="作废" cancelText="取消" okButtonProps={{ danger: true }}>
+          <Button size="small" danger icon={<Ban size={13} />}>作废</Button>
+        </Popconfirm>
+      ), 110),
   ]
 
   return (
-    <Card
+    <AdminPage
       title={<span className="inline-flex items-center gap-2"><Ticket size={17} /> 邀请码管理</span>}
-      extra={
-        <Space>
-          <Input.Search placeholder="搜索邀请码 / 备注" allowClear onSearch={(v) => { setPage(1); setQ(v) }} style={{ width: 220 }} />
-          <Button type="primary" icon={<Plus size={14} />} onClick={() => { genForm.setFieldsValue({ max_uses: 1, count: 1, remark: "" }); setGenOpen(true) }}>
-            生成邀请码
-          </Button>
-        </Space>
-      }
+      description="B 端生成 / 查看 / 作废 C 端注册邀请码。单码可注册次数在生成时决定，超出次数或作废后不可再用。"
     >
-      <Table
+      <div className="flex flex-wrap items-center gap-2">
+        <Input.Search placeholder="搜索邀请码 / 备注" allowClear onSearch={(v) => { setPage(1); setQ(v) }} style={{ width: 220 }} />
+        <Button type="primary" icon={<Plus size={14} />}
+          onClick={() => { genForm.setFieldsValue({ max_uses: 1, count: 1, remark: "" }); setGenOpen(true) }}>
+          生成邀请码
+        </Button>
+      </div>
+
+      <DataTable
         rowKey="id" size="middle" loading={loading} columns={columns as any} dataSource={items}
         pagination={{
           current: page, pageSize, total, showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
@@ -159,6 +158,6 @@ export default function InviteCodesPage() {
           ))}
         </div>
       </Modal>
-    </Card>
+    </AdminPage>
   )
 }

@@ -3,11 +3,12 @@
 // 说明：后端菜单树（Java MenuTree 常量）暂无本页面菜单项，入口由「权限管理」页提供（不改 Java 代码）
 import { useCallback, useEffect, useState } from "react"
 import {
-  Tabs, Table, Button, Input, Select, Tag, Modal, Form, Space, Popconfirm, Card,
+  Tabs, Button, Input, Select, Tag, Modal, Form, Space, Popconfirm, Card,
 } from "antd"
 import { Plus, Pencil, KeyRound, Users, UserPlus } from "lucide-react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
+import AdminPage, { DataTable, actionColumn } from "@/components/admin"
 
 type CUser = { id: number; username: string; nickname: string; group_code: string; status: string; created_at: string }
 type CGroup = { code: string; name: string; created_at: string; member_count: number }
@@ -129,24 +130,21 @@ export default function CUsersPage() {
       title: "创建时间", dataIndex: "created_at", width: 150,
       render: (v: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500">{String(v || "").slice(0, 16)}</span>,
     },
-    {
-      title: "操作", align: "right" as const, width: 210,
-      render: (_: any, u: CUser) => (
-        <Space size={4}>
-          <Button size="small" type="text" icon={<Pencil size={13} />}
-            onClick={() => { setEditing(u); setEditForm({ nickname: u.nickname || "", group_code: u.group_code, status: u.status }) }}>
-            编辑
-          </Button>
-          <Button size="small" type="text" icon={<KeyRound size={13} />} onClick={() => { setPwdUser(u); setPwd("") }}>
-            重置密码
-          </Button>
-          <Popconfirm title="删除用户" description={`删除 C 端用户「${u.username}」？该操作不可恢复。`}
-            okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => removeUser(u)}>
-            <Button size="small" type="text" danger>删除</Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
+    actionColumn((_: any, u: CUser) => (
+      <Space size={4}>
+        <Button size="small" type="text" icon={<Pencil size={13} />}
+          onClick={() => { setEditing(u); setEditForm({ nickname: u.nickname || "", group_code: u.group_code, status: u.status }) }}>
+          编辑
+        </Button>
+        <Button size="small" type="text" icon={<KeyRound size={13} />} onClick={() => { setPwdUser(u); setPwd("") }}>
+          重置密码
+        </Button>
+        <Popconfirm title="删除用户" description={`删除 C 端用户「${u.username}」？该操作不可恢复。`}
+          okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => removeUser(u)}>
+          <Button size="small" type="text" danger>删除</Button>
+        </Popconfirm>
+      </Space>
+    ), 210),
   ]
 
   // ---------------- 用户组 ----------------
@@ -249,30 +247,22 @@ export default function CUsersPage() {
       title: "创建时间", dataIndex: "created_at", width: 150,
       render: (v: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500">{String(v || "").slice(0, 16)}</span>,
     },
-    {
-      title: "操作", align: "right" as const, width: 230,
-      render: (_: any, g: CGroup) => (
-        <Space size={4}>
-          <Button size="small" type="text" icon={<UserPlus size={13} />} onClick={() => openAddToGroup(g)}>添加用户</Button>
-          <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(g); setRenameVal(g.name) }}>重命名</Button>
-          {g.code !== "default" && (
-            <Popconfirm title="删除用户组" description={`删除用户组「${g.name}」？组内有成员时不可删除。`}
-              okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => removeGroup(g)}>
-              <Button size="small" type="text" danger>删除</Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
-    },
+    actionColumn((_: any, g: CGroup) => (
+      <Space size={4}>
+        <Button size="small" type="text" icon={<UserPlus size={13} />} onClick={() => openAddToGroup(g)}>添加用户</Button>
+        <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(g); setRenameVal(g.name) }}>重命名</Button>
+        {g.code !== "default" && (
+          <Popconfirm title="删除用户组" description={`删除用户组「${g.name}」？组内有成员时不可删除。`}
+            okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => removeGroup(g)}>
+            <Button size="small" type="text" danger>删除</Button>
+          </Popconfirm>
+        )}
+      </Space>
+    ), 230),
   ]
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <h1 className="text-2xl font-bold">C 端用户管理</h1>
-        <span className="text-xs text-zinc-400 dark:text-zinc-500">管理游戏中心（C 端）账号 · 接口 /api/c-admin/*</span>
-      </div>
-
+    <AdminPage title="C 端用户管理" description="管理游戏中心（C 端）账号 · 接口 /api/c-admin/*">
       <Card size="small" className="shadow-sm">
         <Tabs
           activeKey={tab}
@@ -294,7 +284,7 @@ export default function CUsersPage() {
                       新建 C 端用户
                     </Button>
                   </div>
-                  <Table rowKey="id" size="middle" columns={userColumns as any} dataSource={users} loading={loading}
+                  <DataTable size="middle" rowKey="id" columns={userColumns as any} dataSource={users} loading={loading}
                     pagination={{
                       current: page, pageSize, total, showSizeChanger: true, showTotal: (t) => `共 ${t} 名用户`,
                       onChange: (p, s) => { setPage(p); setPageSize(s) },
@@ -310,7 +300,7 @@ export default function CUsersPage() {
                   <div className="flex justify-end">
                     <Button type="primary" icon={<Plus size={14} />} onClick={() => setGroupCreateOpen(true)}>新建用户组</Button>
                   </div>
-                  <Table rowKey="code" size="middle" columns={groupColumns as any} dataSource={groups} pagination={false} />
+                  <DataTable size="middle" rowKey="code" columns={groupColumns as any} dataSource={groups} pagination={false} />
                 </div>
               ),
             },
@@ -415,7 +405,7 @@ export default function CUsersPage() {
             </Form>
           </Modal>
         )
-      })()}
-    </div>
+      }      )()}
+    </AdminPage>
   )
 }
