@@ -347,4 +347,20 @@ export function suggestedItems(slot: AssetSlot, catalog: AssetCatalog): AssetIte
   })
 }
 
+/**
+ * 槽位对素材**宽高比**的期望（w/h），用于选图时提前预警 —— 图能加载 ≠ 铺上去好看。
+ * 返回 null = 该槽位没有硬性比例要求（背景图是铺满裁切，什么比例都能用）。
+ */
+export function expectedRatio(slot: AssetSlot): { min: number; max: number; why: string } | null {
+  switch (slot.group) {
+    // 连线是「沿弦长拉伸再旋转」的：必须横向、左右可延展，太方会在拉伸后糊成一块
+    case "link": return { min: 2.2, max: 100, why: "连线贴图会沿弦长拉伸：需要横向细长的图（现用 165×24），太方会糊成一团" }
+    // 节点是整幅美术铺进方形节点框
+    case "node": return { min: 0.6, max: 1.6, why: "节点整图等比铺进方形节点框：太扁/太高会明显留白或被裁" }
+    // 立绘是竖构图
+    case "char": return { min: 0.35, max: 1.2, why: "角色立绘是竖构图：横图会被压扁、露出大片空白" }
+    default: return null
+  }
+}
+
 export const CATALOG_EMPTY: AssetCatalog = { available: false, total: 0, groups: [] }

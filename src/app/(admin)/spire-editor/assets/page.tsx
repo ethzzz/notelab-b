@@ -24,15 +24,22 @@
 // ⑦ 跨槽位复用：池子里任意一张可复制到其它槽位的池子（只加候选，不动目标当前使用的那张）；
 // ⑧ 撤销改动：回退到上次加载/保存成功的状态（草稿只在前端内存里，服务端那份天然就是基线）；
 // ⑨ 顶部「未配置槽位」一览，点标签直接跳过去（页面很长，"哪些还没配"要能一眼看到）。
+//
+// P2（多人共用一份素材时的可维护性）：
+// ⑩ 池内可换位（←/→）：顺序 = 展示次序，也决定「填充后默认用哪张」；
+// ⑪ **反向索引**：每张候选上标「另 N 槽位在用」，改/删之前知道牵连范围；
+// ⑫ 长池折叠：超过 8 个候选先折叠，避免一个槽位占满整屏；
+// ⑬ 宽高比按槽位期望判定（连线要横向、节点要方形、立绘要竖构图），背景图不设限。
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Alert, Button, Card, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip } from "antd"
-import { Copy, Eraser, ExternalLink, Maximize2, RotateCcw, Sparkles, Undo2, Upload, Wand2 } from "lucide-react"
+import { Copy, ArrowLeft, ArrowRight, Eraser, ExternalLink, Maximize2, RotateCcw, Sparkles, Undo2, Upload, Wand2 } from "lucide-react"
 import { apiJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { useSpire } from "../_shared/store"
 import { PageHead } from "../_shared/ui"
 import {
-  CATALOG_EMPTY, SLOT_GROUPS, cmpSeriesOrder, configuredCount, pooledCount, seriesKey, seriesLabel, suggestedItems,
+  CATALOG_EMPTY, SLOT_GROUPS, cmpSeriesOrder, configuredCount, expectedRatio, pooledCount,
+  seriesKey, seriesLabel, suggestedItems,
   sanitizeAssetMap, sanitizeAssetPool, slotsWithChars,
   type AssetCatalog, type AssetGroup, type AssetItem, type AssetSlot,
 } from "@/lib/spire-assets"
@@ -92,10 +99,11 @@ const fmtBytes = (b?: number) => {
  * 为什么必须有它：地牢元素包里「骷髅石环」与「空石环」在 56px 缩略图上几乎一样，
  * 运营只能靠**大图 + 素材说明（manifest 的 notes）**判断这张该放进哪个槽位。
  */
-function AssetPreviewModal({ url, item, slotLabel, onClose }: {
+function AssetPreviewModal({ url, item, slot, onClose }: {
   url: string
   item?: AssetItem
-  slotLabel?: string
+  /** 所在槽位（决定宽高比的期望值：连线要横向、节点要方形、立绘要竖构图） */
+  slot?: AssetSlot
   onClose: () => void
 }) {
   const [dim, setDim] = useState<{ w: number; h: number } | null>(null)
@@ -103,9 +111,10 @@ function AssetPreviewModal({ url, item, slotLabel, onClose }: {
   useEffect(() => { setDim(null); setBroken(false) }, [url])
   const file = url.slice(url.lastIndexOf("/") + 1)
   const size = fmtBytes(item?.bytes)
-  // 宽高比偏离太多时，C 端等比铺进节点框会明显留白/被裁 —— 提前预警而不是等玩家截图反馈
   const ratio = dim && dim.h ? dim.w / dim.h : null
-  const odd = ratio !== null && (ratio > 1.6 || ratio < 0.62)
+  /** 偏离该槽位期望比例时预警（背景图之类没有期望的不报） */
+  const want = slot ? expectedRatio(slot) : null
+  const odd = ratio !== null && want ? (ratio < want.min || ratio > want.max) : false
 
   return (
     <Modal open onCancel={onClose} title={`🔍 ${item?.meta?.name || file}`}
@@ -128,12 +137,13 @@ function AssetPreviewModal({ url, item, slotLabel, onClose }: {
           {size && <Tag className="!mr-0">{size}</Tag>}
           {item?.meta?.kind && <Tag className="!mr-0" color="blue">{item.meta.kind}</Tag>}
           {item && <Tag className="!mr-0">系列：{seriesLabel(seriesKey(item.rel))}</Tag>}
-          {slotLabel && <Tag className="!mr-0" color="purple">所在槽位：{slotLabel}</Tag>}
+          {slot && <Tag className="!mr-0" color="purple">所在槽位：{slot.label}</Tag>}
         </div>
 
-        {dim && odd && (
+        {dim && odd && want && (
           <Alert type="warning" showIcon className="!text-xs"
-            message={`宽高比 ${ratio!.toFixed(2)}（${ratio! > 1 ? "很扁" : "很高"}），铺进 C 端方形节点框会明显留白或被裁，建议换一张接近 1:1 的图`} />
+            message={`宽高比 ${ratio!.toFixed(2)}${ratio! > 1 ? "（偏横）" : "（偏竖）"}，不在「${slot?.label}」期望的 ${want.min}–${want.max === 100 ? "∞" : want.max} 之间`}
+            description={want.why} />
         )}
 
         {item?.meta?.notes && (
@@ -195,8 +205,8 @@ function CopyToSlotsModal({ url, from, slots, onClose, onPick }: {
   )
 }
 
-/** 资源池里的一张素材：缩略图 + 名称 + 「设为当前 / 看大图 / 复制 / 移出」 */
-function PoolCard({ url, item, name, active, invalid, onUse, onRemove, onPreview, onCopy }: {
+/** 资源池里的一张素材：缩略图 + 名称 + 「设为当前 / 看大图 / 复制 / 排序 / 移出」 */
+function PoolCard({ url, item, name, active, invalid, usedBy, index, total, onUse, onRemove, onPreview, onCopy, onMove }: {
   url: string
   /** 清单里的元数据（可能为 undefined：池里有、清单里没有 = 失效路径） */
   item?: AssetItem
@@ -204,16 +214,27 @@ function PoolCard({ url, item, name, active, invalid, onUse, onRemove, onPreview
   active: boolean
   /** 路径在素材清单里找不到（C 端文件被删 / 前缀改过）→ 标红，提示清理 */
   invalid?: boolean
+  /** 反向索引：这张图还被哪些**别的**槽位引用（改/删它之前得知道会牵连谁） */
+  usedBy?: { key: string; label: string; current: boolean }[]
+  index: number
+  total: number
   onUse: () => void
   onRemove: () => void
   onPreview: () => void
   onCopy: () => void
+  /** 池内换位：顺序决定「填充后默认用哪张」与展示次序；不影响当前选择 */
+  onMove: (dir: -1 | 1) => void
 }) {
   const [broken, setBroken] = useState(false)
   useEffect(() => setBroken(false), [url])
-  const tip = item?.meta?.notes
-    ? `${item.meta.notes}\n\n${item.meta.name || ""} · ${url}`
-    : (invalid ? `素材清单里没有这个路径，C 端可能已删除：${url}` : `点击设为当前使用：${url}`)
+  const shared = usedBy || []
+  const tip = [
+    item?.meta?.notes,
+    shared.length
+      ? `还被 ${shared.length} 个槽位使用：${shared.map((u) => u.label + (u.current ? "（正在用）" : "（在池中）")).join("、")}`
+      : null,
+    invalid ? `素材清单里没有这个路径，C 端可能已删除：${url}` : `点击设为当前使用：${url}`,
+  ].filter(Boolean).join("\n\n")
   return (
     <div
       className={`flex w-[124px] shrink-0 cursor-pointer flex-col items-center gap-1 rounded-lg border p-1.5 transition ${invalid
@@ -238,6 +259,11 @@ function PoolCard({ url, item, name, active, invalid, onUse, onRemove, onPreview
         </span>
       </div>
       <span className="line-clamp-1 w-full text-center text-[11px] leading-tight">{name}</span>
+      {shared.length > 0 && (
+        <Tooltip title={`还被这些槽位使用：${shared.map((u) => u.label + (u.current ? "（正在用）" : "（在池中）")).join("、")}`}>
+          <Tag color="purple" className="!mr-0 !text-[10px]">另 {shared.length} 槽位在用</Tag>
+        </Tooltip>
+      )}
       <div className="flex items-center gap-1">
         {active
           ? <Tag color="blue" className="!mr-0 !text-[10px]">当前使用</Tag>
@@ -247,6 +273,14 @@ function PoolCard({ url, item, name, active, invalid, onUse, onRemove, onPreview
           <Button size="small" type="text" className="!h-5 !px-1 !text-[10px]" icon={<Copy size={10} />}
             onClick={(e) => { e.stopPropagation(); onCopy() }} />
         </Tooltip>
+        <span className="flex items-center">
+          <Button size="small" type="text" className="!h-5 !px-0.5 !text-[10px]" icon={<ArrowLeft size={10} />}
+            disabled={index <= 0}
+            onClick={(e) => { e.stopPropagation(); onMove(-1) }} />
+          <Button size="small" type="text" className="!h-5 !px-0.5 !text-[10px]" icon={<ArrowRight size={10} />}
+            disabled={index >= total - 1}
+            onClick={(e) => { e.stopPropagation(); onMove(1) }} />
+        </span>
         <Button size="small" type="text" danger className="!h-5 !px-1 !text-[10px]"
           onClick={(e) => { e.stopPropagation(); onRemove() }}>移出</Button>
       </div>
@@ -288,6 +322,38 @@ function SlotRow({ slot, catalog, invalid, allSlots }: {
   /** 大图预览 / 跨槽位复制的目标（一次只操作一张，故用单个 state 而非数组） */
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [copyUrl, setCopyUrl] = useState<string | null>(null)
+  /** 长池折叠：池子超过 COLLAPSE_AT 个时先只显示前几个，避免一个槽位占满整屏 */
+  const [showAll, setShowAll] = useState(false)
+  const COLLAPSE_AT = 8
+  const visible = showAll || pool.length <= COLLAPSE_AT ? pool : pool.slice(0, COLLAPSE_AT)
+
+  /**
+   * 反向索引：池里每张图**还被哪些别的槽位**引用。
+   * 用途：改图/移出前知道牵连范围 —— 同一张图被 3 个槽位共用时，删一次会以为只改了一个地方。
+   */
+  const usedByOf = useMemo(() => {
+    const m = new Map<string, { key: string; label: string; current: boolean }[]>()
+    for (const url of pool) {
+      const hits: { key: string; label: string; current: boolean }[] = []
+      for (const s of allSlots) {
+        if (s.key === slot.key) continue
+        const cur = assets[s.key] === url
+        const inPool = (assetPool[s.key] || []).includes(url)
+        if (cur || inPool) hits.push({ key: s.key, label: s.label, current: cur })
+      }
+      if (hits.length) m.set(url, hits)
+    }
+    return m
+  }, [pool, allSlots, assets, assetPool, slot.key])
+
+  /** 池内换位（只动顺序，不动「当前使用」） */
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= pool.length) return
+    const next = [...pool]
+    const tmp = next[i]; next[i] = next[j]; next[j] = tmp
+    setAssetPool((prev) => ({ ...prev, [slot.key]: next }))
+  }
 
   /** 改池子：顺带保证「当前使用」仍落在池内 —— 不在了就取第一个；池空则清空（回落内置默认） */
   const setPool = (next: string[]) => {
@@ -354,12 +420,20 @@ function SlotRow({ slot, catalog, invalid, allSlots }: {
       {/* 资源池：横向缩略图，点一下即用 */}
       {pool.length > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {pool.map((url) => (
+          {visible.map((url, i) => (
             <PoolCard key={url} url={url} item={itemOf(url)} name={nameOf(url)} active={url === active}
-              invalid={invalid.includes(url)}
+              invalid={invalid.includes(url)} usedBy={usedByOf.get(url)}
+              index={i} total={visible.length}
               onUse={() => useThis(url)} onRemove={() => removeFromPool(url)}
-              onPreview={() => setPreviewUrl(url)} onCopy={() => setCopyUrl(url)} />
+              onPreview={() => setPreviewUrl(url)} onCopy={() => setCopyUrl(url)}
+              onMove={(dir) => move(i, dir)} />
           ))}
+          {pool.length > COLLAPSE_AT && (
+            <Button size="small" type="text" className="!h-20 !w-[124px]"
+              onClick={() => setShowAll((v) => !v)}>
+              {showAll ? "收起" : `展开全部 ${pool.length} 个`}
+            </Button>
+          )}
         </div>
       ) : (
         <div className="rounded-lg bg-black/[0.02] px-3 py-2 text-xs text-zinc-500 dark:bg-white/[0.04] dark:text-zinc-400">
@@ -406,7 +480,7 @@ function SlotRow({ slot, catalog, invalid, allSlots }: {
       {slot.hint && <span className="text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">{slot.hint}</span>}
 
       {previewUrl && (
-        <AssetPreviewModal url={previewUrl} item={itemOf(previewUrl)} slotLabel={slot.label}
+        <AssetPreviewModal url={previewUrl} item={itemOf(previewUrl)} slot={slot}
           onClose={() => setPreviewUrl(null)} />
       )}
       {copyUrl && (
