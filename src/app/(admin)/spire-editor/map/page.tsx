@@ -18,7 +18,7 @@ import { useSpire } from "../_shared/store"
 import { PageHead } from "../_shared/ui"
 import type { SpireMapPack } from "@/lib/spire-content"
 import {
-  DEFAULT_PARAMS, LIMITS, TYPE_LABEL, generateVerified, sanitizeParams,
+  LIMITS, TYPE_LABEL, generateVerified, sanitizeParams,
   type ActMap, type MapGenParams, type NodeType, type RollType, type Violation,
 } from "@/lib/spire-mapgen"
 
@@ -82,9 +82,10 @@ function MapPreview({ act }: { act: ActMap | null }) {
 }
 
 export default function SpireMapPage() {
-  const { maps, setMaps, busy, saveQuiet, dirty } = useSpire()
+  const { maps, setMaps, busy, saveQuiet, dirty, mapRules, setMapRules, baseMapRules } = useSpire()
 
-  const [params, setParams] = useState<MapGenParams>(DEFAULT_PARAMS)
+  // 表单编辑直接写穿到 store.mapRules（= 后端 spire 切片的 mapRules 键），
+  // 顶栏「保存」会把整份文档（含改后的生成规则）落库；发布后 C 端即按新规则回落。
   const [seed, setSeed] = useState<number>(newSeed)
   const [preview, setPreview] = useState<ActMap[] | null>(null)
   const [violations, setViolations] = useState<Violation[]>([])
@@ -99,11 +100,11 @@ export default function SpireMapPage() {
   const shown: ActMap[] | null = preview ?? (activePack ? (activePack.acts as ActMap[]) : null)
   const shownAct = shown?.find((a) => a.act === previewAct) ?? shown?.[0] ?? null
 
-  const patch = (p: Partial<MapGenParams>) => setParams((prev) => sanitizeParams({ ...prev, ...p }))
+  const patch = (p: Partial<MapGenParams>) => setMapRules((prev) => sanitizeParams({ ...prev, ...p }))
 
   const doGenerate = () => {
-    const p = sanitizeParams(params)
-    setParams(p)
+    const p = sanitizeParams(mapRules)
+    setMapRules(p)
     const r = generateVerified(p, seed)
     setPreview(r.acts)
     setViolations(r.violations)
@@ -122,7 +123,7 @@ export default function SpireMapPage() {
     const pack: SpireMapPack = {
       id: `mappack_${Date.now().toString(36)}`,
       name,
-      params: { ...params, seed } as unknown as Record<string, unknown>,
+      params: { ...mapRules, seed } as unknown as Record<string, unknown>,
       acts: preview.map((a) => ({ act: a.act, layers: a.layers, nodes: a.nodes })),
       createdAt: new Date().toISOString(),
     }
@@ -143,7 +144,7 @@ export default function SpireMapPage() {
   /** 把已存方案的参数回填到表单，便于在其基础上微调 */
   const loadParams = (p: SpireMapPack) => {
     if (!p.params) { toast.warning("该方案没有记录参数（可能是早期数据）"); return }
-    setParams(sanitizeParams(p.params))
+    setMapRules(sanitizeParams(p.params))
     if (typeof (p.params as any).seed === "number") setSeed((p.params as any).seed)
     toast.success(`已回填「${p.name}」的生成参数`)
   }
@@ -209,32 +210,32 @@ export default function SpireMapPage() {
               <label className="flex flex-col gap-1 text-xs">
                 <span className="text-zinc-500 dark:text-zinc-400">每幕层数</span>
                 <InputNumber size="small" min={LIMITS.layers[0]} max={LIMITS.layers[1]}
-                  value={params.layers} onChange={(v) => patch({ layers: v ?? DEFAULT_PARAMS.layers })} />
+                  value={mapRules.layers} onChange={(v) => patch({ layers: v ?? baseMapRules.layers })} />
               </label>
               <label className="flex flex-col gap-1 text-xs">
                 <span className="text-zinc-500 dark:text-zinc-400">幕数</span>
                 <InputNumber size="small" min={LIMITS.acts[0]} max={LIMITS.acts[1]}
-                  value={params.acts} onChange={(v) => patch({ acts: v ?? DEFAULT_PARAMS.acts })} />
+                  value={mapRules.acts} onChange={(v) => patch({ acts: v ?? baseMapRules.acts })} />
               </label>
               <label className="flex flex-col gap-1 text-xs">
                 <span className="text-zinc-500 dark:text-zinc-400">最大列数</span>
                 <InputNumber size="small" min={LIMITS.maxColumns[0]} max={LIMITS.maxColumns[1]}
-                  value={params.maxColumns} onChange={(v) => patch({ maxColumns: v ?? DEFAULT_PARAMS.maxColumns })} />
+                  value={mapRules.maxColumns} onChange={(v) => patch({ maxColumns: v ?? baseMapRules.maxColumns })} />
               </label>
               <label className="flex flex-col gap-1 text-xs">
                 <span className="text-zinc-500 dark:text-zinc-400">开局安全层数</span>
                 <InputNumber size="small" min={0} max={8}
-                  value={params.earlySafeLayers} onChange={(v) => patch({ earlySafeLayers: v ?? 0 })} />
+                  value={mapRules.earlySafeLayers} onChange={(v) => patch({ earlySafeLayers: v ?? 0 })} />
               </label>
               <label className="flex flex-col gap-1 text-xs">
                 <span className="text-zinc-500 dark:text-zinc-400">主干条数下限</span>
                 <InputNumber size="small" min={LIMITS.pathCount[0]} max={LIMITS.pathCount[1]}
-                  value={params.pathCount[0]} onChange={(v) => patch({ pathCount: [v ?? 1, params.pathCount[1]] })} />
+                  value={mapRules.pathCount[0]} onChange={(v) => patch({ pathCount: [v ?? 1, mapRules.pathCount[1]] })} />
               </label>
               <label className="flex flex-col gap-1 text-xs">
                 <span className="text-zinc-500 dark:text-zinc-400">主干条数上限</span>
                 <InputNumber size="small" min={LIMITS.pathCount[0]} max={LIMITS.pathCount[1]}
-                  value={params.pathCount[1]} onChange={(v) => patch({ pathCount: [params.pathCount[0], v ?? 1] })} />
+                  value={mapRules.pathCount[1]} onChange={(v) => patch({ pathCount: [mapRules.pathCount[0], v ?? 1] })} />
               </label>
             </div>
 
@@ -252,11 +253,11 @@ export default function SpireMapPage() {
                       {TYPE_LABEL[t as NodeType]}
                     </span>
                     <InputNumber size="small" className="!w-full" min={LIMITS.weight[0]} max={LIMITS.weight[1]}
-                      addonBefore="权重" value={params.weights[t]}
-                      onChange={(v) => patch({ weights: { ...params.weights, [t]: v ?? 0 } })} />
+                      addonBefore="权重" value={mapRules.weights[t]}
+                      onChange={(v) => patch({ weights: { ...mapRules.weights, [t]: v ?? 0 } })} />
                     <InputNumber size="small" className="!w-full" min={LIMITS.minLayer[0]} max={LIMITS.minLayer[1]}
-                      addonBefore="层" value={params.minLayer[t]}
-                      onChange={(v) => patch({ minLayer: { ...params.minLayer, [t]: v ?? 0 } })} />
+                      addonBefore="层" value={mapRules.minLayer[t]}
+                      onChange={(v) => patch({ minLayer: { ...mapRules.minLayer, [t]: v ?? 0 } })} />
                   </div>
                 ))}
               </div>
@@ -269,7 +270,7 @@ export default function SpireMapPage() {
                   <label key={k} className="flex items-center gap-1.5 text-xs">
                     <span className="w-14 text-zinc-500 dark:text-zinc-400">{TYPE_LABEL[k === "normal" ? "enemy" : (k as NodeType)]}</span>
                     <InputNumber size="small" className="!w-full" min={0} max={999}
-                      value={params.revealPool[k]} onChange={(v) => patch({ revealPool: { ...params.revealPool, [k]: v ?? 0 } })} />
+                      value={mapRules.revealPool[k]} onChange={(v) => patch({ revealPool: { ...mapRules.revealPool, [k]: v ?? 0 } })} />
                   </label>
                 ))}
               </div>
@@ -297,7 +298,7 @@ export default function SpireMapPage() {
               </div>
             </div>
 
-            <Button size="small" onClick={() => { setParams(DEFAULT_PARAMS); setSeed(newSeed()); toast.success("参数已恢复默认") }}>
+            <Button size="small" onClick={() => { setMapRules(sanitizeParams(baseMapRules)); setSeed(newSeed()); toast.success("参数已恢复为内置默认") }}>
               参数恢复默认
             </Button>
           </div>

@@ -74,12 +74,16 @@ export interface SpireCustomContent {
   maps?: SpireMapDoc
   /** 平衡/难度参数（缺失 → C 端回落内置常量） */
   balance?: Record<string, any>
+  /** 地图生成规则（缺失 → C 端回落内置常量） */
+  mapRules?: Record<string, any>
   /** 只读：后端下发的内置角色清单，提交时可省 */
   baseCharacters?: SpireBaseChar[]
   /** 只读：后端下发的内置敌人清单，提交时可省 */
   baseEnemies?: SpireBaseEnemy[]
   /** 只读：后端下发的内置平衡参数，提交时可省 */
   baseBalance?: Record<string, any>
+  /** 只读：后端下发的内置地图生成规则，提交时可省 */
+  baseMapRules?: Record<string, any>
 }
 
 /** 净化后端返回的 charAccess：只保留 {字符串键: 字符串数组} 形态 */
@@ -175,6 +179,7 @@ export async function loadSpireContent(): Promise<SpireCustomContent> {
       assetPool: cleanAssetPool(d.assetPool),
       maps: cleanMaps(d.maps),
       balance: d.balance && typeof d.balance === "object" ? d.balance : {},
+      mapRules: d.mapRules && typeof d.mapRules === "object" ? d.mapRules : {},
       baseCharacters: Array.isArray(d.baseCharacters)
         ? d.baseCharacters.filter((c: any) => c && typeof c.id === "string" && c.id)
         : [],
@@ -182,23 +187,25 @@ export async function loadSpireContent(): Promise<SpireCustomContent> {
         ? d.baseEnemies.filter((e: any) => e && typeof e.id === "string" && e.id)
         : [],
       baseBalance: d.baseBalance && typeof d.baseBalance === "object" ? d.baseBalance : {},
+      baseMapRules: d.baseMapRules && typeof d.baseMapRules === "object" ? d.baseMapRules : {},
     }
   } catch {
     return {
       cards: [], characters: [], skills: [], enemies: [], charAccess: {},
       assets: {}, assetPool: {}, maps: { packs: [] }, balance: {},
-      baseCharacters: [], baseEnemies: [], baseBalance: {},
+      baseCharacters: [], baseEnemies: [], baseBalance: {}, baseMapRules: {},
     }
   }
 }
 
 export function saveSpireContent(c: SpireCustomContent) {
-  // baseCharacters / baseEnemies / baseBalance 是后端只读常量，不回传
-  const { baseCharacters: _dropC, baseEnemies: _dropE, baseBalance: _dropB, ...body } = c
+  // baseCharacters / baseEnemies / baseBalance / baseMapRules 是后端只读常量，不回传
+  const { baseCharacters: _dropC, baseEnemies: _dropE, baseBalance: _dropB, baseMapRules: _dropM, ...body } = c
   return postJson("/api/spire-content", {
     ...body,
     enemies: c.enemies && Array.isArray(c.enemies) ? c.enemies : [],
     balance: c.balance && typeof c.balance === "object" ? c.balance : {},
+    mapRules: c.mapRules && typeof c.mapRules === "object" ? c.mapRules : {},
     charAccess: c.charAccess && typeof c.charAccess === "object" ? c.charAccess : {},
     assets: c.assets && typeof c.assets === "object" ? c.assets : {},
     assetPool: c.assetPool && typeof c.assetPool === "object" ? c.assetPool : {},

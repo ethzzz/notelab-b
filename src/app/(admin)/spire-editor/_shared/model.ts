@@ -11,6 +11,12 @@ import {
   type CardDef, type CardEffect, type CharacterDef, type CardCategory,
   type EffectType, type PassiveKind, type SkillKind,
 } from "@/lib/spire-engine"
+// 地图生成规则复用 B 端权威生成器 spire-mapgen（DEFAULT_PARAMS / sanitizeParams / MapGenParams），
+// 保证「地图生成」页表单初始化与保存净化口径与生成器完全一致，不会和后端/ C 端漂移。
+import {
+  DEFAULT_PARAMS, sanitizeParams,
+  type MapGenParams,
+} from "@/lib/spire-mapgen"
 
 /** 技能模板：主动（SkillKind）或被动（PassiveKind），可在角色制作时引用（以拷贝形式嵌入角色） */
 export interface SkillTpl {
@@ -107,6 +113,22 @@ export function sanitizeBalance(raw: any): SpireBalance {
   for (let i = 0; i < totalActs; i++) filled.push(pool[i % pool.length])
   return { totalActs, mapRows, actBossIds: filled, actScaleStep: Number.isFinite(step) ? step : b.actScaleStep }
 }
+
+// ---------------- 地图生成规则 ----------------
+// 与敌人/平衡一致：运营在「地图生成」页改的是 mapRules（后端 spire 切片的 mapRules 键），
+// 这里负责类型 + 草稿工厂 + 净化，口径对齐 B 端 spire-mapgen（= C 端生成器的移植版，
+// DEFAULT_PARAMS / sanitizeParams 同源）。浏览器表单与保存往返都用同一份净化，避免漂移。
+// SpireMapRules 直接复用 MapGenParams 结构，使 store.mapRules 可直接喂给 generateVerified。
+export type SpireMapRules = MapGenParams
+
+/** 草稿工厂：返回一份与 DEFAULT_PARAMS 等价的全新对象（pathCount 单独拷贝，避免共享可变元组） */
+export const blankMapRules = (): SpireMapRules => ({
+  ...DEFAULT_PARAMS,
+  pathCount: [...DEFAULT_PARAMS.pathCount] as [number, number],
+})
+
+/** 净化 mapRules：越界夹到 LIMITS，结构非法回落 DEFAULT_PARAMS。与后端 sanitizeMapRules 同口径 */
+export const sanitizeMapRules = sanitizeParams
 
 /** 净化单条敌人：id/name 缺、无合法 move 直接丢弃；数值夹到安全范围 */
 export function sanitizeEnemy(raw: any): EnemyDef | null {
