@@ -19,7 +19,7 @@ import {
   CARDS, applyCustomContent, sanitizeCard, sanitizeCharacter,
   type CardDef, type CharacterDef,
 } from "@/lib/spire-engine"
-import { cleanSkill, sanitizeEnemy, type SkillTpl, type EnemyDef } from "./model"
+import { cleanSkill, sanitizeEnemy, sanitizeBalance, type SkillTpl, type EnemyDef, type SpireBalance } from "./model"
 import { allCharPool, type CGroup, type PoolChar } from "./access"
 
 /** 一份待落库的完整文档 */
@@ -33,6 +33,7 @@ interface Doc {
   /** 素材资源池：同类可登记多个候选，assets 指向其中"当前使用"的那一个 */
   assetPool: SpireAssetPool
   maps: SpireMapDoc
+  balance: SpireBalance
 }
 
 /** 稳定序列化：charAccess / assets / assetPool 的键序无关紧要，排序后再比，避免"没改也显示未保存" */
@@ -44,7 +45,7 @@ function fingerprint(d: Doc): string {
     charAccess: sorted(d.charAccess), assets: sorted(d.assets),
     // 池子内部是数组（顺序有意义，代表展示顺序），只排序 key 不动数组
     assetPool: sorted(d.assetPool),
-    maps: d.maps,
+    maps: d.maps, balance: d.balance,
   })
 }
 
@@ -60,6 +61,8 @@ interface SpireStore extends Doc {
   baseChars: SpireBaseChar[]
   /** 内置基础敌人（后端只读下发，供「敌人制作」页打标签） */
   baseEnemies: SpireBaseEnemy[]
+  /** 内置平衡参数（后端只读下发，供「难度配置」页展示默认） */
+  baseBalance: SpireBalance
   /** C 端用户组 */
   groups: CGroup[]
   /** 全量可选角色池 = 工坊自定义 + 内置（去重） */
@@ -73,6 +76,7 @@ interface SpireStore extends Doc {
   setAssets: (v: SpireAssetMap | ((l: SpireAssetMap) => SpireAssetMap)) => void
   setAssetPool: (v: SpireAssetPool | ((l: SpireAssetPool) => SpireAssetPool)) => void
   setMaps: (v: SpireMapDoc | ((l: SpireMapDoc) => SpireMapDoc)) => void
+  setBalance: (v: SpireBalance | ((l: SpireBalance) => SpireBalance)) => void
 
   /** 保存并应用（本地引擎立即生效，供卡面/角色预览） */
   save: () => Promise<void>
@@ -100,6 +104,7 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
   const [assets, setAssets] = useState<SpireAssetMap>({})
   const [assetPool, setAssetPool] = useState<SpireAssetPool>({})
   const [maps, setMaps] = useState<SpireMapDoc>({ packs: [] })
+  const [balance, setBalance] = useState<SpireBalance>({ totalActs: 3, mapRows: 16, actBossIds: ["king", "jadeGolem", "spireLord"], actScaleStep: 0.3 })
 
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -107,13 +112,14 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
   const [published, setPublished] = useState<boolean | null>(null)
   const [baseChars, setBaseChars] = useState<SpireBaseChar[]>([])
   const [baseEnemies, setBaseEnemies] = useState<SpireBaseEnemy[]>([])
+  const [baseBalance, setBaseBalance] = useState<SpireBalance>({ totalActs: 3, mapRows: 16, actBossIds: ["king", "jadeGolem", "spireLord"], actScaleStep: 0.3 })
   const [groups, setGroups] = useState<CGroup[]>([])
 
   /** 最近一次「已落库」状态的指纹；加载完成与每次保存成功后刷新 */
   const [baseline, setBaseline] = useState<string>("")
   // 用 ref 取当前文档做序列化，避免把 baseline 依赖进每个 setter
-  const docRef = useRef<Doc>({ cards, chars, skills, enemies, charAccess, assets, assetPool, maps })
-  docRef.current = { cards, chars, skills, enemies, charAccess, assets, assetPool, maps }
+  const docRef = useRef<Doc>({ cards, chars, skills, enemies, charAccess, assets, assetPool, maps, balance })
+  docRef.current = { cards, chars, skills, enemies, charAccess, assets, assetPool, maps, balance }
 
   useEffect(() => {
     let alive = true
@@ -133,18 +139,21 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
       const sh = c.characters.map((r) => sanitizeCharacter(r, CARDS)).filter(Boolean) as CharacterDef[]
       const sk = c.skills.map(cleanSkill).filter(Boolean) as SkillTpl[]
       const en = (c.enemies || []).map(sanitizeEnemy).filter(Boolean) as EnemyDef[]
+      const bal = sanitizeBalance(c.balance)
       const doc: Doc = {
         cards: sc, chars: sh, skills: sk, enemies: en,
         charAccess: c.charAccess || {}, assets: c.assets || {},
         assetPool: c.assetPool || {},
-        maps: c.maps || { packs: [] },
+        maps: c.maps || { packs: [] }, balance: bal,
       }
       setCards(sc); setChars(sh); setSkills(sk); setEnemies(en)
       setCharAccess(doc.charAccess); setAssets(doc.assets); setAssetPool(doc.assetPool); setMaps(doc.maps)
+      setBalance(bal)
       setBaseChars(c.baseCharacters || [])
       setBaseEnemies(c.baseEnemies || [])
+      setBaseBalance(sanitizeBalance(c.baseBalance))
       // 把自定义内容注册进本地引擎，卡面/角色预览才和游戏内一致
-      applyCustomContent(sc, sh, en)
+      applyCustomContent(sc, sh, en, bal)
       setBaseline(fingerprint(doc))
       setLoaded(true)
     })
@@ -155,7 +164,7 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
     () => loaded && fingerprint(docRef.current) !== baseline,
     // docRef.current 的每次渲染赋值不会触发 memo 重算，所以把各切片列进依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loaded, baseline, cards, chars, skills, enemies, charAccess, assets, assetPool, maps],
+    [loaded, baseline, cards, chars, skills, enemies, charAccess, assets, assetPool, maps, balance],
   )
 
   /** 整包提交（一定是全量，绝不只提交当前页那一片） */
@@ -165,12 +174,13 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
       await saveSpireContent({
         cards: d.cards, characters: d.chars, skills: d.skills, enemies: d.enemies,
         charAccess: d.charAccess, assets: d.assets, assetPool: d.assetPool, maps: d.maps,
+        balance: d.balance,
       })
     } catch (e: any) {
       toast.error(`保存失败：${e?.message || e}`)
       return false
     }
-    if (!silent) applyCustomContent(d.cards, d.chars, d.enemies)
+    if (!silent) applyCustomContent(d.cards, d.chars, d.enemies, d.balance)
     setBaseline(fingerprint(d))
     return true
   }, [])
@@ -220,9 +230,9 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
   const charPool = useMemo(() => allCharPool(baseChars, chars), [baseChars, chars])
 
   const store: SpireStore = {
-    cards, chars, skills, enemies, charAccess, assets, assetPool, maps,
-    loaded, busy, pubBusy, published, dirty, baseChars, baseEnemies, groups, charPool,
-    setCards, setChars, setSkills, setEnemies, setCharAccess, setAssets, setAssetPool, setMaps,
+    cards, chars, skills, enemies, charAccess, assets, assetPool, maps, balance,
+    loaded, busy, pubBusy, published, dirty, baseChars, baseEnemies, baseBalance, groups, charPool,
+    setCards, setChars, setSkills, setEnemies, setCharAccess, setAssets, setAssetPool, setMaps, setBalance,
     save, saveQuiet, publish, unpublish,
   }
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>

@@ -265,7 +265,7 @@ export function sanitizeCharacter(raw: any, pool: CardDef[]): CharacterDef | nul
 }
 
 /** 注册自定义内容：重建生效卡池/角色池与卡 id 索引（游戏页与编辑器共用） */
-export function applyCustomContent(cards: any[], chars: any[], enemies?: any[]) {
+export function applyCustomContent(cards: any[], chars: any[], enemies?: any[], balance?: any) {
   const cc = (Array.isArray(cards) ? cards : []).map(sanitizeCard).filter(Boolean) as CardDef[]
   const customIds = new Set(cc.map((c) => c.id))
   CARDS = [...BASE_CARDS.filter((c) => !customIds.has(c.id)), ...cc]
@@ -279,6 +279,8 @@ export function applyCustomContent(cards: any[], chars: any[], enemies?: any[]) 
     const eids = new Set(cust.map((e) => e.id))
     ENEMIES = [...BASE_ENEMIES.filter((e) => !eids.has(e.id)), ...cust]
   }
+  // 平衡/难度：B 端引擎为 C 端引擎的陈旧副本，此处仅接收参数保持签名一致，不做实质覆盖
+  void balance
 }
 
 // ---------------- 敌人 ----------------

@@ -21,6 +21,7 @@ export const SPIRE_PAGES: { href: string; label: string; icon: string }[] = [
   { href: "/spire-editor/chars", label: "角色制作", icon: "🧙" },
   { href: "/spire-editor/skills", label: "技能制作", icon: "⚡" },
   { href: "/spire-editor/enemies", label: "敌人制作", icon: "👾" },
+  { href: "/spire-editor/balance", label: "难度配置", icon: "⚖️" },
   { href: "/spire-editor/assets", label: "素材资源", icon: "🧩" },
   { href: "/spire-editor/map", label: "地图生成", icon: "🗺️" },
   { href: "/spire-editor/access", label: "角色授权", icon: "👥" },

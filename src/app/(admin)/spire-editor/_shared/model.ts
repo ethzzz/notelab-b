@@ -80,6 +80,34 @@ export const blankEnemy = (): EnemyDef => ({
   moves: [{ name: "普攻", kind: "atk", amt: 6, hits: 1, icon: "🗡️" }],
 })
 
+// ---------------- 平衡 / 难度参数 ----------------
+export interface SpireBalance {
+  totalActs: number
+  mapRows: number
+  actBossIds: string[]
+  actScaleStep: number
+}
+
+export const blankBalance = (): SpireBalance => ({
+  totalActs: 3, mapRows: 16, actBossIds: ["king", "jadeGolem", "spireLord"], actScaleStep: 0.3,
+})
+
+/** 规整 balance：数值夹到安全范围，actBossIds 补齐到 totalActs 个（不足循环复用） */
+export function sanitizeBalance(raw: any): SpireBalance {
+  const b = blankBalance()
+  if (!raw || typeof raw !== "object") return b
+  const totalActs = Math.max(1, Math.min(8, Math.floor(Number(raw.totalActs)) || b.totalActs))
+  const mapRows = Math.max(1, Math.min(400, Math.floor(Number(raw.mapRows)) || b.mapRows))
+  const step = Math.max(0, Math.min(5, Number(raw.actScaleStep)))
+  const ids = Array.isArray(raw.actBossIds)
+    ? raw.actBossIds.filter((x: any) => typeof x === "string" && x.trim()).map((x: string) => x.trim())
+    : [...b.actBossIds]
+  const pool = ids.length ? ids : [...b.actBossIds]
+  const filled: string[] = []
+  for (let i = 0; i < totalActs; i++) filled.push(pool[i % pool.length])
+  return { totalActs, mapRows, actBossIds: filled, actScaleStep: Number.isFinite(step) ? step : b.actScaleStep }
+}
+
 /** 净化单条敌人：id/name 缺、无合法 move 直接丢弃；数值夹到安全范围 */
 export function sanitizeEnemy(raw: any): EnemyDef | null {
   if (!raw || typeof raw !== "object") return null
