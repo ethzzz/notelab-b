@@ -32,7 +32,7 @@ import { toast } from "@/lib/toast"
 import { useSpire } from "../_shared/store"
 import { PageHead } from "../_shared/ui"
 import {
-  CATALOG_EMPTY, SLOT_GROUPS, configuredCount, pooledCount, seriesKey, seriesLabel, suggestedItems,
+  CATALOG_EMPTY, SLOT_GROUPS, cmpSeriesOrder, configuredCount, pooledCount, seriesKey, seriesLabel, suggestedItems,
   sanitizeAssetMap, sanitizeAssetPool, slotsWithChars,
   type AssetCatalog, type AssetGroup, type AssetItem, type AssetSlot,
 } from "@/lib/spire-assets"
@@ -68,6 +68,8 @@ function optionsOf(catalog: AssetCatalog, slot: AssetSlot) {
     }
     if (bySeries.size > 1) {
       for (const [k, list] of bySeries) {
+        // 系列内按「基础款 → 变体序号」排，避免出现 营火2/营火3/营火1 这种目录序
+        list.sort(cmpSeriesOrder)
         groups.push({ label: `${g.label} · ${seriesLabel(k)}（${list.length}）`, options: list.map(opt) })
       }
     } else {

@@ -288,6 +288,13 @@ function seriesOrder(rel: string): [number, number, string] {
   return [1, Number(m[1]), b]
 }
 
+/** 按 seriesOrder 排序的便捷比较器（供下拉分组内的排序复用） */
+export const cmpSeriesOrder = (a: AssetItem, b: AssetItem): number => {
+  const x = seriesOrder(a.rel)
+  const y = seriesOrder(b.rel)
+  return x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : x[2] > y[2] ? 1 : 0)
+}
+
 /**
  * 地牢元素包里的**系列**（同一个美术元素的若干变体算一个系列）→ 中文名。
  * 只用来做下拉分组与文案展示；判定素材属于哪个槽位仍走 suggest（前缀圈定），两者互不替代。
