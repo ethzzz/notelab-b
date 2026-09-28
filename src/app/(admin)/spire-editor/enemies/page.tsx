@@ -113,7 +113,7 @@ export default function SpireEnemiesPage() {
                       <span className="text-xs text-zinc-400 flex items-center">{m.kind === "debuff" ? "减益类型" : "（攻击/格挡/增益无需减益）"}</span>
                       {m.kind === "debuff" && (
                         <Select size="small" value={m.debuffKind || ""} placeholder="选择…"
-                          onChange={(v) => setMove(i, { debuffKind: v || undefined })}
+                          onChange={(v) => setMove(i, { debuffKind: (v || undefined) as Move["debuffKind"] })}
                           options={DEBUFF_KINDS.map((k) => ({ value: k, label: DEBUFF_KIND_LABEL[k] }))} />
                       )}
                     </div>
