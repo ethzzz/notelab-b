@@ -85,6 +85,8 @@ interface SpireStore extends Doc {
 
   /** 撤销全部未保存改动，回到上次「加载/保存成功」时的状态 */
   revert: () => void
+  /** 保存并应用（本地引擎立即生效，供卡面/角色预览） */
+  save: () => Promise<void>
   /** 仅保存（不刷本地引擎预览），供素材/地图页用；返回是否成功 */
   saveQuiet: () => Promise<boolean>
   publish: () => Promise<void>
