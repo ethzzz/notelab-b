@@ -83,8 +83,8 @@ interface SpireStore extends Doc {
   setBalance: (v: SpireBalance | ((l: SpireBalance) => SpireBalance)) => void
   setMapRules: (v: SpireMapRules | ((l: SpireMapRules) => SpireMapRules)) => void
 
-  /** 保存并应用（本地引擎立即生效，供卡面/角色预览） */
-  save: () => Promise<void>
+  /** 撤销全部未保存改动，回到上次「加载/保存成功」时的状态 */
+  revert: () => void
   /** 仅保存（不刷本地引擎预览），供素材/地图页用；返回是否成功 */
   saveQuiet: () => Promise<boolean>
   publish: () => Promise<void>
@@ -124,6 +124,14 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
 
   /** 最近一次「已落库」状态的指纹；加载完成与每次保存成功后刷新 */
   const [baseline, setBaseline] = useState<string>("")
+  /** 与 baseline 配套的**文档快照**：「撤销改动」要把各切片还原到这里。
+   *  存快照而不是只存指纹，是为了让撤销能真正回到旧值（指纹只能判断"脏不脏"）。 */
+  const baselineDoc = useRef<Doc | null>(null)
+  /** 把当前文档冻结为新的基线（深拷贝，避免后续编辑就地改到快照里的对象） */
+  const freezeBaseline = useCallback((d: Doc) => {
+    baselineDoc.current = JSON.parse(JSON.stringify(d)) as Doc
+    setBaseline(fingerprint(d))
+  }, [])
   // 用 ref 取当前文档做序列化，避免把 baseline 依赖进每个 setter
   const docRef = useRef<Doc>({ cards, chars, skills, enemies, charAccess, assets, assetPool, maps, balance, mapRules })
   docRef.current = { cards, chars, skills, enemies, charAccess, assets, assetPool, maps, balance, mapRules }
@@ -163,7 +171,7 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
       setBaseMapRules(sanitizeMapRules(c.baseMapRules))
       // 把自定义内容注册进本地引擎，卡面/角色预览才和游戏内一致
       applyCustomContent(sc, sh, en, bal)
-      setBaseline(fingerprint(doc))
+      freezeBaseline(doc)
       setLoaded(true)
     })
     return () => { alive = false }
@@ -190,8 +198,24 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
       return false
     }
     if (!silent) applyCustomContent(d.cards, d.chars, d.enemies, d.balance)
-    setBaseline(fingerprint(d))
+    freezeBaseline(d)
     return true
+  }, [freezeBaseline])
+
+  /**
+   * 撤销全部未保存改动。
+   * 只还原**前端内存里的草稿**，不动服务端（服务端那份本来就是基线，天然一致）。
+   * 跨子页生效：在素材页改了、再去卡面页撤销，两边一起回退 —— 因为它们是同一份文档。
+   */
+  const revert = useCallback(() => {
+    const b = baselineDoc.current
+    if (!b) return
+    setCards(b.cards); setChars(b.chars); setSkills(b.skills); setEnemies(b.enemies)
+    setCharAccess(b.charAccess); setAssets(b.assets); setAssetPool(b.assetPool); setMaps(b.maps)
+    setBalance(b.balance); setMapRules(b.mapRules)
+    // 本地引擎预览也要跟着回退，否则"撤销了但卡面预览还显示新改的"
+    applyCustomContent(b.cards, b.chars, b.enemies, b.balance)
+    toast.success("已撤销未保存的改动")
   }, [])
 
   const save = useCallback(async () => {
@@ -242,7 +266,7 @@ export function SpireStoreProvider({ children }: { children: React.ReactNode }) 
     cards, chars, skills, enemies, charAccess, assets, assetPool, maps, balance, mapRules,
     loaded, busy, pubBusy, published, dirty, baseChars, baseEnemies, baseBalance, baseMapRules, groups, charPool,
     setCards, setChars, setSkills, setEnemies, setCharAccess, setAssets, setAssetPool, setMaps, setBalance, setMapRules,
-    save, saveQuiet, publish, unpublish,
+    revert, save, saveQuiet, publish, unpublish,
   }
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>
 }

@@ -288,6 +288,37 @@ function seriesOrder(rel: string): [number, number, string] {
   return [1, Number(m[1]), b]
 }
 
+/**
+ * 地牢元素包里的**系列**（同一个美术元素的若干变体算一个系列）→ 中文名。
+ * 只用来做下拉分组与文案展示；判定素材属于哪个槽位仍走 suggest（前缀圈定），两者互不替代。
+ */
+const SERIES_LABELS: Record<string, string> = {
+  "stone-skull": "骷髅石环",
+  "stone-empty": "空石环",
+  "demon": "恶魔",
+  "demon-boss": "恶魔 BOSS",
+  "campfire": "营火",
+  "merchant": "商人",
+  "path-bridge": "岩桥",
+}
+
+/**
+ * 取素材所属的系列 key：先去掉变体序号（-2/-3），再从**最长前缀**往回退着查表。
+ * 例：merchant-tomb → merchant（商人）；demon-boss-2 → demon-boss（恶魔 BOSS，不会被误并进「恶魔」）。
+ * 查不到就退回第一段文件名（新素材包沿用前缀命名时也能自动成组）。
+ */
+export function seriesKey(rel: string): string {
+  let b = baseName(rel).replace(/-\d+$/, "")
+  while (b.includes("-")) {
+    if (SERIES_LABELS[b]) return b
+    b = b.slice(0, b.lastIndexOf("-"))
+  }
+  return b
+}
+
+/** 系列 key → 展示名（查表不到就用 key 本身，保证永远不会显示成空白） */
+export const seriesLabel = (key: string): string => SERIES_LABELS[key] || key
+
 /** 某槽位在素材清单里的**推荐项**（按 suggest 判定，没有 suggest 则为空数组） */
 export function suggestedItems(slot: AssetSlot, catalog: AssetCatalog): AssetItem[] {
   if (!slot.suggest) return []
