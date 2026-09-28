@@ -9,6 +9,13 @@ export interface SpireBaseChar {
   icon: string
 }
 
+/** 内置基础敌人（只读镜像，由后端 GET /api/spire-content 下发，仅 B 端「敌人制作」页用于打标签） */
+export interface SpireBaseEnemy {
+  id: string
+  name: string
+  icon: string
+}
+
 /**
  * 素材资源槽位取值：{槽位 key: 素材路径}。
  * 路径形如 `/games/spire/art/icon-normal.png`（**必须带 C 端 basePath 前缀 `/games`**，
@@ -55,6 +62,8 @@ export interface SpireCustomContent {
   cards: any[]
   characters: any[]
   skills: any[]
+  /** 敌人/Boss（缺失或空 → C 端回落内置 10） */
+  enemies?: any[]
   /** 角色授权：{C 端用户组码: [该组可选择的角色 id...]}；缺失/无该组键 → C 端不筛选（fail-open） */
   charAccess?: Record<string, string[]>
   /** 素材资源槽位取值（缺失 → C 端全部走内置默认） */
@@ -65,6 +74,8 @@ export interface SpireCustomContent {
   maps?: SpireMapDoc
   /** 只读：后端下发的内置角色清单，提交时可省 */
   baseCharacters?: SpireBaseChar[]
+  /** 只读：后端下发的内置敌人清单，提交时可省 */
+  baseEnemies?: SpireBaseEnemy[]
 }
 
 /** 净化后端返回的 charAccess：只保留 {字符串键: 字符串数组} 形态 */
@@ -154,6 +165,7 @@ export async function loadSpireContent(): Promise<SpireCustomContent> {
       cards: Array.isArray(d.cards) ? d.cards : [],
       characters: Array.isArray(d.characters) ? d.characters : [],
       skills: Array.isArray(d.skills) ? d.skills : [],
+      enemies: Array.isArray(d.enemies) ? d.enemies : [],
       charAccess: cleanCharAccess(d.charAccess),
       assets: cleanAssets(d.assets),
       assetPool: cleanAssetPool(d.assetPool),
@@ -161,20 +173,24 @@ export async function loadSpireContent(): Promise<SpireCustomContent> {
       baseCharacters: Array.isArray(d.baseCharacters)
         ? d.baseCharacters.filter((c: any) => c && typeof c.id === "string" && c.id)
         : [],
+      baseEnemies: Array.isArray(d.baseEnemies)
+        ? d.baseEnemies.filter((e: any) => e && typeof e.id === "string" && e.id)
+        : [],
     }
   } catch {
     return {
-      cards: [], characters: [], skills: [], charAccess: {},
-      assets: {}, assetPool: {}, maps: { packs: [] }, baseCharacters: [],
+      cards: [], characters: [], skills: [], enemies: [], charAccess: {},
+      assets: {}, assetPool: {}, maps: { packs: [] }, baseCharacters: [], baseEnemies: [],
     }
   }
 }
 
 export function saveSpireContent(c: SpireCustomContent) {
-  // baseCharacters 是后端只读常量，不回传
-  const { baseCharacters: _drop, ...body } = c
+  // baseCharacters / baseEnemies 是后端只读常量，不回传
+  const { baseCharacters: _dropC, baseEnemies: _dropE, ...body } = c
   return postJson("/api/spire-content", {
     ...body,
+    enemies: c.enemies && Array.isArray(c.enemies) ? c.enemies : [],
     charAccess: c.charAccess && typeof c.charAccess === "object" ? c.charAccess : {},
     assets: c.assets && typeof c.assets === "object" ? c.assets : {},
     assetPool: c.assetPool && typeof c.assetPool === "object" ? c.assetPool : {},

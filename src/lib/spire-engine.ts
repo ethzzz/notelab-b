@@ -265,7 +265,7 @@ export function sanitizeCharacter(raw: any, pool: CardDef[]): CharacterDef | nul
 }
 
 /** 注册自定义内容：重建生效卡池/角色池与卡 id 索引（游戏页与编辑器共用） */
-export function applyCustomContent(cards: any[], chars: any[]) {
+export function applyCustomContent(cards: any[], chars: any[], enemies?: any[]) {
   const cc = (Array.isArray(cards) ? cards : []).map(sanitizeCard).filter(Boolean) as CardDef[]
   const customIds = new Set(cc.map((c) => c.id))
   CARDS = [...BASE_CARDS.filter((c) => !customIds.has(c.id)), ...cc]
@@ -273,6 +273,12 @@ export function applyCustomContent(cards: any[], chars: any[]) {
   const cch = (Array.isArray(chars) ? chars : []).map((r) => sanitizeCharacter(r, CARDS)).filter(Boolean) as CharacterDef[]
   const charIds = new Set(cch.map((c) => c.id))
   CHARACTERS = [...BASE_CHARACTERS.filter((c) => !charIds.has(c.id)), ...cch]
+  // 敌人：同 id 用自定义覆盖内置（已是净化后的列表，直接合并）
+  if (Array.isArray(enemies) && enemies.length) {
+    const cust = enemies as EnemyDef[]
+    const eids = new Set(cust.map((e) => e.id))
+    ENEMIES = [...BASE_ENEMIES.filter((e) => !eids.has(e.id)), ...cust]
+  }
 }
 
 // ---------------- 敌人 ----------------
@@ -302,7 +308,7 @@ export interface EnemyState {
   move: Move; moveIdx: number
 }
 
-const ENEMIES: EnemyDef[] = [
+const ENEMIES_SEED: EnemyDef[] = [
   {
     id: "cultist", name: "邪教徒", icon: "👤", hp: 30, moves: [
       { name: "嚎叫", kind: "buff", amt: 2, hits: 1, icon: "📣" },
@@ -361,6 +367,11 @@ const ENEMIES: EnemyDef[] = [
     ],
   },
 ]
+
+/** 内置基础敌人（B 端引擎为 C 端引擎的陈旧副本，仅用于编辑器预览；完整 10 个以 C 端为准） */
+const BASE_ENEMIES: EnemyDef[] = ENEMIES_SEED
+/** 生效敌人池 = 基础敌人 + 工坊自定义敌人（同 id 时自定义覆盖基础） */
+export let ENEMIES = [...BASE_ENEMIES]
 
 // ---------------- 状态与特效事件 ----------------
 export type Phase = "map" | "combat" | "reward" | "rest" | "shop" | "event" | "over" | "win"

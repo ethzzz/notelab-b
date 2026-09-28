@@ -47,6 +47,70 @@ export const blankSkill = (stype: "active" | "passive"): SkillTpl => ({
   value: stype === "active" ? 2 : 1, cooldown: 3,
 })
 
+// ---------------- 敌人 / Boss ----------------
+export type MoveKind = "atk" | "block" | "buff" | "debuff"
+export const MOVE_KINDS: MoveKind[] = ["atk", "block", "buff", "debuff"]
+export const MOVE_KIND_LABEL: Record<MoveKind, string> = {
+  "atk": "攻击", "block": "格挡", "buff": "增益", "debuff": "减益",
+}
+export const DEBUFF_KINDS = ["weak", "vuln"] as const
+export const DEBUFF_KIND_LABEL: Record<string, string> = { weak: "虚弱", vuln: "易伤" }
+
+export interface Move {
+  name: string
+  kind: MoveKind
+  amt: number
+  hits: number
+  icon: string
+  debuffKind?: "weak" | "vuln"
+}
+
+export interface EnemyDef {
+  id: string
+  name: string
+  icon: string
+  hp: number
+  elite?: boolean
+  boss?: boolean
+  moves: Move[]
+}
+
+export const blankEnemy = (): EnemyDef => ({
+  id: `custom_e_${uid36()}`, name: "", icon: "👾", hp: 30,
+  moves: [{ name: "普攻", kind: "atk", amt: 6, hits: 1, icon: "🗡️" }],
+})
+
+/** 净化单条敌人：id/name 缺、无合法 move 直接丢弃；数值夹到安全范围 */
+export function sanitizeEnemy(raw: any): EnemyDef | null {
+  if (!raw || typeof raw !== "object") return null
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : null
+  const name = typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : null
+  if (!id || !name) return null
+  const moves = (Array.isArray(raw.moves) ? raw.moves : [])
+    .map((m: any): Move | null => {
+      if (!m || !MOVE_KINDS.includes(m.kind)) return null
+      const dk = m.debuffKind === "weak" || m.debuffKind === "vuln" ? m.debuffKind : undefined
+      return {
+        name: typeof m.name === "string" ? m.name : "",
+        kind: m.kind,
+        amt: Math.max(0, Math.min(99, Math.floor(Number(m.amt)) || 0)),
+        hits: Math.max(1, Math.min(9, Math.floor(Number(m.hits)) || 1)),
+        icon: typeof m.icon === "string" && m.icon.trim() ? m.icon.trim() : "❓",
+        debuffKind: dk,
+      }
+    })
+    .filter(Boolean) as Move[]
+  if (moves.length === 0) return null
+  return {
+    id, name,
+    icon: typeof raw.icon === "string" && raw.icon.trim() ? raw.icon.trim() : "👾",
+    hp: Math.max(1, Math.min(999, Math.floor(Number(raw.hp)) || 30)),
+    elite: !!raw.elite,
+    boss: !!raw.boss,
+    moves,
+  }
+}
+
 /** 轻量校验技能模板（结构非法的丢弃） */
 export function cleanSkill(raw: any): SkillTpl | null {
   if (!raw || typeof raw !== "object") return null
