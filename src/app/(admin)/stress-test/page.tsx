@@ -5,7 +5,7 @@
 import { useCallback, useMemo, useRef, useState } from "react"
 import {
   Alert, Button, Card, Collapse, Descriptions, Divider, Input, InputNumber, Progress,
-  Segmented, Space, Statistic, Table, Tag, Typography,
+  Segmented, Select, Space, Statistic, Table, Tag, Typography,
 } from "antd"
 import { PlayCircle, Square } from "lucide-react"
 
