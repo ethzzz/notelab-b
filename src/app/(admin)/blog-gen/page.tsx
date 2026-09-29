@@ -3,7 +3,7 @@
 // 默认走「先草稿审核再发布」：draft 默认开，确认发布时再决定是否转正式。
 import { useEffect, useState } from "react"
 import dynamic from "next/dynamic"
-import { Card, Tabs, Input, Select, Switch, Button, message, Space, Typography, Spin } from "antd"
+import { Card, Tabs, Input, InputNumber, Select, Switch, Button, message, Space, Typography, Spin } from "antd"
 import { apiJson, postJson } from "@/lib/api"
 
 const MdEditor = dynamic(() => import("@/components/md-editor"), { ssr: false })
