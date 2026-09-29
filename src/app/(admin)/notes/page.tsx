@@ -32,23 +32,34 @@ function safeFileName(name: string): string {
   return s.slice(0, 80) || "note"
 }
 
-/** 触发浏览器下载一个 Blob（md 文件） */
-function triggerDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
+/** 下载一个服务端文件：用隐藏 <a> 触发原生下载（携带会话 cookie，服务端返回 Content-Disposition: attachment） */
+function downloadViaAnchor(url: string) {
   const a = document.createElement("a")
   a.href = url
-  a.download = filename
+  a.style.display = "none"
   document.body.appendChild(a)
   a.click()
   a.remove()
-  URL.revokeObjectURL(url)
 }
 
-/** 时间戳文件名片段：YYYYMMDD-HHmmss */
-function stamp(): string {
-  const d = new Date()
-  const p = (n: number) => String(n).padStart(2, "0")
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+/** 导出客户端内容（草稿/当前编辑器）：提交隐藏表单到 /api/notes/export，由服务端回显为 .md 附件，避免 blob: 触发 Chrome 不安全下载拦截 */
+function downloadViaForm(filename: string, contentMd: string) {
+  const form = document.createElement("form")
+  form.method = "POST"
+  form.action = "/api/notes/export"
+  form.style.display = "none"
+  const add = (k: string, v: string) => {
+    const i = document.createElement("input")
+    i.type = "hidden"
+    i.name = k
+    i.value = v
+    form.appendChild(i)
+  }
+  add("filename", filename)
+  add("content_md", contentMd || "")
+  document.body.appendChild(form)
+  form.submit()
+  setTimeout(() => form.remove(), 1000)
 }
 
 export default function NotesPage() {
@@ -136,45 +147,21 @@ export default function NotesPage() {
     fetchData(page, pageSize, q)
   }
 
-  /** 单篇下载：拉详情 → 存成 `${标题}.md` */
-  async function downloadNote(id: number, fallbackTitle: string) {
-    try {
-      const d: NoteDetail = await apiJson(`/api/notes/${id}`)
-      const blob = new Blob([d.content_md || ""], { type: "text/markdown;charset=utf-8" })
-      triggerDownload(blob, `${safeFileName(d.title || fallbackTitle)}.md`)
-    } catch (e: any) { toast.error(e.message || "下载失败") }
+  /** 单篇下载：直接走服务端导出端点（/api/notes/{id}/export），原生下载 */
+  function downloadNote(id: number) {
+    downloadViaAnchor(`/api/notes/${id}/export`)
   }
 
-  /** 下载全部：分页拉完列表 → 逐个拉详情 → 合并为一个 md（以 `## 标题` 分隔） */
-  async function downloadAll() {
-    try {
-      const collected: NoteMeta[] = []
-      let p = 1; const s = 100
-      for (;;) {
-        const params = new URLSearchParams({ limit: String(s), offset: String((p - 1) * s) })
-        if (q.trim()) params.set("q", q.trim())
-        const j = await apiJson(`/api/notes?${params.toString()}`)
-        const items: NoteMeta[] = j.items || []
-        collected.push(...items)
-        if (items.length < s) break
-        p++
-      }
-      if (collected.length === 0) { toast.warning("没有可下载的笔记"); return }
-      let md = `# 笔记导出（共 ${collected.length} 篇）\n\n> 导出时间：${new Date().toLocaleString()}\n\n`
-      for (const n of collected) {
-        const d: NoteDetail = await apiJson(`/api/notes/${n.id}`)
-        md += `\n---\n\n## ${n.title}\n\n${(d.content_md || "").replace(/\s*$/, "")}\n\n`
-      }
-      triggerDownload(new Blob([md], { type: "text/markdown;charset=utf-8" }), `笔记-全部-${stamp()}.md`)
-      toast.success(`已导出 ${collected.length} 篇笔记`)
-    } catch (e: any) { toast.error(e.message || "导出失败") }
+  /** 下载全部：走服务端合并导出端点（/api/notes/export-all?q=），服务端拼装 */
+  function downloadAll() {
+    const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""
+    downloadViaAnchor(`/api/notes/export-all${qs}`)
   }
 
-  /** 编辑态直接下载草稿（无需发请求） */
+  /** 编辑态直接下载草稿（客户端内容 → 服务端回显） */
   function downloadDraft() {
     if (!draft) return
-    const blob = new Blob([draft.md || ""], { type: "text/markdown;charset=utf-8" })
-    triggerDownload(blob, `${safeFileName(draft.title || "未命名笔记")}.md`)
+    downloadViaForm(safeFileName(draft.title || "未命名笔记"), draft.md)
   }
 
   const columns = [
@@ -195,7 +182,7 @@ export default function NotesPage() {
         <Space>
           <Button size="small" icon={<Eye size={13} />} onClick={() => openView(r.id)}>查看</Button>
           <Button size="small" icon={<PenLine size={13} />} onClick={() => openEdit(r.id)}>编辑</Button>
-          <Button size="small" icon={<Download size={13} />} onClick={() => downloadNote(r.id, r.title)}>下载</Button>
+          <Button size="small" icon={<Download size={13} />} onClick={() => downloadNote(r.id)}>下载</Button>
           <Popconfirm title="删除后不可恢复，确定删除？" onConfirm={() => remove(r.id)} okText="删除" cancelText="取消" okButtonProps={{ danger: true }}>
             <Button size="small" danger icon={<Trash2 size={13} />}>删除</Button>
           </Popconfirm>
@@ -221,6 +208,7 @@ export default function NotesPage() {
         extra={
           <Space>
             <Button icon={<Download size={14} />} onClick={downloadDraft}>下载</Button>
+
             <Button type="primary" icon={<Save size={14} />} loading={saving} onClick={save}>保存</Button>
           </Space>
         }
@@ -247,7 +235,7 @@ export default function NotesPage() {
         }
         extra={
           <Space>
-            <Button icon={<Download size={14} />} onClick={() => triggerDownload(new Blob([view.md || ""], { type: "text/markdown;charset=utf-8" }), `${safeFileName(view.title)}.md`)}>下载</Button>
+            <Button icon={<Download size={14} />} onClick={() => downloadViaAnchor(`/api/notes/${view.id}/export`)}>下载</Button>
             <Button type="primary" icon={<PenLine size={14} />} onClick={() => openEdit(view.id)}>编辑</Button>
           </Space>
         }
