@@ -4,7 +4,7 @@
 import dynamic from "next/dynamic"
 import { useCallback, useEffect, useState } from "react"
 import { Card, Table, Button, Input, Space, Popconfirm } from "antd"
-import { Plus, ArrowLeft, Save, Eye, PenLine, Trash2, NotebookPen } from "lucide-react"
+import { Plus, ArrowLeft, Save, Eye, PenLine, Trash2, NotebookPen, Download } from "lucide-react"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { MdPreview } from "@/components/md-editor"
@@ -24,6 +24,31 @@ function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+
+/** 文件名清洗：去掉系统禁用的非法字符，过长截断 */
+function safeFileName(name: string): string {
+  const s = (name || "note").trim().replace(/[\\/:*?"<>|]/g, "_")
+  return s.slice(0, 80) || "note"
+}
+
+/** 触发浏览器下载一个 Blob（md 文件） */
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** 时间戳文件名片段：YYYYMMDD-HHmmss */
+function stamp(): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
 export default function NotesPage() {
@@ -111,6 +136,47 @@ export default function NotesPage() {
     fetchData(page, pageSize, q)
   }
 
+  /** 单篇下载：拉详情 → 存成 `${标题}.md` */
+  async function downloadNote(id: number, fallbackTitle: string) {
+    try {
+      const d: NoteDetail = await apiJson(`/api/notes/${id}`)
+      const blob = new Blob([d.content_md || ""], { type: "text/markdown;charset=utf-8" })
+      triggerDownload(blob, `${safeFileName(d.title || fallbackTitle)}.md`)
+    } catch (e: any) { toast.error(e.message || "下载失败") }
+  }
+
+  /** 下载全部：分页拉完列表 → 逐个拉详情 → 合并为一个 md（以 `## 标题` 分隔） */
+  async function downloadAll() {
+    try {
+      const collected: NoteMeta[] = []
+      let p = 1; const s = 100
+      for (;;) {
+        const params = new URLSearchParams({ limit: String(s), offset: String((p - 1) * s) })
+        if (q.trim()) params.set("q", q.trim())
+        const j = await apiJson(`/api/notes?${params.toString()}`)
+        const items: NoteMeta[] = j.items || []
+        collected.push(...items)
+        if (items.length < s) break
+        p++
+      }
+      if (collected.length === 0) { toast.warning("没有可下载的笔记"); return }
+      let md = `# 笔记导出（共 ${collected.length} 篇）\n\n> 导出时间：${new Date().toLocaleString()}\n\n`
+      for (const n of collected) {
+        const d: NoteDetail = await apiJson(`/api/notes/${n.id}`)
+        md += `\n---\n\n## ${n.title}\n\n${(d.content_md || "").replace(/\s*$/, "")}\n\n`
+      }
+      triggerDownload(new Blob([md], { type: "text/markdown;charset=utf-8" }), `笔记-全部-${stamp()}.md`)
+      toast.success(`已导出 ${collected.length} 篇笔记`)
+    } catch (e: any) { toast.error(e.message || "导出失败") }
+  }
+
+  /** 编辑态直接下载草稿（无需发请求） */
+  function downloadDraft() {
+    if (!draft) return
+    const blob = new Blob([draft.md || ""], { type: "text/markdown;charset=utf-8" })
+    triggerDownload(blob, `${safeFileName(draft.title || "未命名笔记")}.md`)
+  }
+
   const columns = [
     {
       title: "标题", dataIndex: "title", key: "title",
@@ -124,11 +190,12 @@ export default function NotesPage() {
     { title: "创建时间", dataIndex: "created_at", key: "created_at", width: 170 },
     { title: "更新时间", dataIndex: "updated_at", key: "updated_at", width: 170 },
     {
-      title: "操作", key: "op", width: 240,
+      title: "操作", key: "op", width: 320,
       render: (_: any, r: NoteMeta) => (
         <Space>
           <Button size="small" icon={<Eye size={13} />} onClick={() => openView(r.id)}>查看</Button>
           <Button size="small" icon={<PenLine size={13} />} onClick={() => openEdit(r.id)}>编辑</Button>
+          <Button size="small" icon={<Download size={13} />} onClick={() => downloadNote(r.id, r.title)}>下载</Button>
           <Popconfirm title="删除后不可恢复，确定删除？" onConfirm={() => remove(r.id)} okText="删除" cancelText="取消" okButtonProps={{ danger: true }}>
             <Button size="small" danger icon={<Trash2 size={13} />}>删除</Button>
           </Popconfirm>
@@ -152,7 +219,10 @@ export default function NotesPage() {
           </Space>
         }
         extra={
-          <Button type="primary" icon={<Save size={14} />} loading={saving} onClick={save}>保存</Button>
+          <Space>
+            <Button icon={<Download size={14} />} onClick={downloadDraft}>下载</Button>
+            <Button type="primary" icon={<Save size={14} />} loading={saving} onClick={save}>保存</Button>
+          </Space>
         }
       >
         <MdEditor value={draft.md} onChange={(md) => setDraft({ ...draft, md })} />
@@ -176,7 +246,10 @@ export default function NotesPage() {
           </Space>
         }
         extra={
-          <Button type="primary" icon={<PenLine size={14} />} onClick={() => openEdit(view.id)}>编辑</Button>
+          <Space>
+            <Button icon={<Download size={14} />} onClick={() => triggerDownload(new Blob([view.md || ""], { type: "text/markdown;charset=utf-8" }), `${safeFileName(view.title)}.md`)}>下载</Button>
+            <Button type="primary" icon={<PenLine size={14} />} onClick={() => openEdit(view.id)}>编辑</Button>
+          </Space>
         }
       >
         <MdPreview value={view.md} />
@@ -192,6 +265,7 @@ export default function NotesPage() {
       extra={
         <Space>
           <Input.Search placeholder="搜索标题" allowClear onSearch={(v) => { setPage(1); setQ(v) }} style={{ width: 200 }} />
+          <Button icon={<Download size={14} />} onClick={downloadAll}>下载全部</Button>
           <Button type="primary" icon={<Plus size={14} />} onClick={newNote}>新建笔记</Button>
         </Space>
       }
