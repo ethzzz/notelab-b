@@ -237,7 +237,7 @@ function PoolCard({ url, item, name, active, invalid, usedBy, index, total, onUs
   ].filter(Boolean).join("\n\n")
   return (
     <div
-      className={`flex w-[124px] shrink-0 cursor-pointer flex-col items-center gap-1 rounded-lg border p-1.5 transition ${invalid
+      className={`flex w-[124px] shrink-0 cursor-pointer flex-col items-center gap-1 overflow-hidden rounded-lg border p-1.5 transition ${invalid
         ? "border-red-500 bg-red-50 dark:bg-red-500/10"
         : active
           ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/15"
@@ -264,24 +264,25 @@ function PoolCard({ url, item, name, active, invalid, usedBy, index, total, onUs
           <Tag color="purple" className="!mr-0 !text-[10px]">另 {shared.length} 槽位在用</Tag>
         </Tooltip>
       )}
-      <div className="flex items-center gap-1">
+      {/* 底部拆两行：状态行（当前用/选它）+ 操作行（复制/换位/移出）。124px 卡片塞一行必溢出 */}
+      <div className="flex max-w-full flex-wrap items-center justify-center gap-1">
         {active
           ? <Tag color="blue" className="!mr-0 !text-[10px]">当前使用</Tag>
           : <Button size="small" type="text" className="!h-5 !px-1 !text-[10px]" onClick={(e) => { e.stopPropagation(); onUse() }}>用这个</Button>}
         {invalid && <Tag color="red" className="!mr-0 !text-[10px]">清单无此文件</Tag>}
+      </div>
+      <div className="flex max-w-full items-center justify-center gap-0.5">
         <Tooltip title="复制到其它槽位的资源池">
-          <Button size="small" type="text" className="!h-5 !px-1 !text-[10px]" icon={<Copy size={10} />}
+          <Button size="small" type="text" className="!h-5 !px-0.5 !text-[10px]" icon={<Copy size={10} />}
             onClick={(e) => { e.stopPropagation(); onCopy() }} />
         </Tooltip>
-        <span className="flex items-center">
-          <Button size="small" type="text" className="!h-5 !px-0.5 !text-[10px]" icon={<ArrowLeft size={10} />}
-            disabled={index <= 0}
-            onClick={(e) => { e.stopPropagation(); onMove(-1) }} />
-          <Button size="small" type="text" className="!h-5 !px-0.5 !text-[10px]" icon={<ArrowRight size={10} />}
-            disabled={index >= total - 1}
-            onClick={(e) => { e.stopPropagation(); onMove(1) }} />
-        </span>
-        <Button size="small" type="text" danger className="!h-5 !px-1 !text-[10px]"
+        <Button size="small" type="text" className="!h-5 !px-0.5 !text-[10px]" icon={<ArrowLeft size={10} />}
+          disabled={index <= 0}
+          onClick={(e) => { e.stopPropagation(); onMove(-1) }} />
+        <Button size="small" type="text" className="!h-5 !px-0.5 !text-[10px]" icon={<ArrowRight size={10} />}
+          disabled={index >= total - 1}
+          onClick={(e) => { e.stopPropagation(); onMove(1) }} />
+        <Button size="small" type="text" danger className="!h-5 !px-0.5 !text-[10px]"
           onClick={(e) => { e.stopPropagation(); onRemove() }}>移出</Button>
       </div>
     </div>
