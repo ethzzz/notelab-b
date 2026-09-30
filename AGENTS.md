@@ -11,7 +11,7 @@
 | pm2 进程 | `notelab-b` |
 | 端口 | **3020** |
 | nginx | `location ^~ /admin`，保留前缀转发 |
-| 线上入口 | http://117.72.32.87/admin/ |
+| 线上入口 | https://haolo.cloud/admin/ |
 | GitHub | `git@github.com:ethzzz/notelab-b.git`（main） |
 | 关键依赖 | next 16.2.12 / react 19.2.4 / antd ^6.6.1 / tailwindcss ^4 |
 
