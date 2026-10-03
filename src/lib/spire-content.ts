@@ -1,6 +1,7 @@
 // 爬塔尖塔内容工坊：自定义卡/角色/技能 + 角色授权 + 素材资源 + 地图方案
 // 的服务端存取（存 ui_config JSON 的 spire 键，整包覆盖写）
 import { apiJson, postJson } from "./api"
+import { track } from "./track"
 
 /** 内置基础角色（只读镜像，由后端 GET /api/spire-content 下发，仅 B 端授权界面用于展示） */
 export interface SpireBaseChar {
@@ -210,5 +211,6 @@ export function saveSpireContent(c: SpireCustomContent) {
     assets: c.assets && typeof c.assets === "object" ? c.assets : {},
     assetPool: c.assetPool && typeof c.assetPool === "object" ? c.assetPool : {},
     maps: c.maps && typeof c.maps === "object" ? c.maps : { packs: [] },
-  })
+  }).then((r) => { track("content_save", { entity: "spire", ok: true }); return r },
+    (e) => { track("content_save", { entity: "spire", ok: false }); throw e })
 }

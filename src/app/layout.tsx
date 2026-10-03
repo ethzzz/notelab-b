@@ -3,6 +3,7 @@ import { AntdRegistry } from "@ant-design/nextjs-registry"
 import { App as AntApp } from "antd"
 import AntdProvider from "@/components/AntdProvider"
 import ToastHost from "@/components/ToastHost"
+import TrackPageView from "@/components/TrackPageView"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -27,6 +28,7 @@ export default function RootLayout({
           <AntdProvider>
             <AntApp style={{ minHeight: "100vh" }}>
               <ToastHost />
+              <TrackPageView />
               {children}
             </AntApp>
           </AntdProvider>

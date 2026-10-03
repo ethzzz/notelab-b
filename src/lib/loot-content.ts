@@ -3,6 +3,7 @@
 //
 // ⚠️ baseBalance 是后端只读常量（懒 seed 的默认值），提交时不回传。
 import { apiJson, postJson } from "./api"
+import { track } from "./track"
 
 export interface LootCustomContent {
   items: any[]
@@ -32,6 +33,7 @@ export async function loadLootContent(): Promise<LootCustomContent> {
 
 export function saveLootContent(c: LootCustomContent) {
   const { baseBalance: _drop, ...body } = c
+  // 埋点（PRD-P0 §4.2 content_save）：所有摸金后台页的保存都汇聚到这一个函数
   return postJson("/api/loot-content", {
     ...body,
     items: Array.isArray(c.items) ? c.items : [],
@@ -39,5 +41,6 @@ export function saveLootContent(c: LootCustomContent) {
     tables: Array.isArray(c.tables) ? c.tables : [],
     maps: Array.isArray(c.maps) ? c.maps : [],
     balance: c.balance && typeof c.balance === "object" ? c.balance : {},
-  })
+  }).then((r) => { track("content_save", { entity: "loot", ok: true }); return r },
+    (e) => { track("content_save", { entity: "loot", ok: false }); throw e })
 }
