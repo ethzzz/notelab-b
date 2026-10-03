@@ -9,7 +9,7 @@ import { DataTable, actionColumn } from "@/components/admin"
 import { useLoot } from "../_shared/store"
 import { actBtns, emptyHint, PageHead } from "../_shared/ui"
 import {
-  blankContainer, sanitizeContainer, sanitizeWeights, DEFAULT_WEIGHTS,
+  blankContainer, sanitizeContainer, DEFAULT_WEIGHTS,
   RARITIES, RARITY_LABEL, RARITY_COLOR,
   type ContainerDef, type Rarity,
 } from "../_shared/model"
@@ -106,7 +106,7 @@ export default function LootContainersPage() {
               <Form.Item label="风险成本（0-10，开容器一次性加）"><InputNumber min={0} max={10} className="!w-full" value={draft.riskCost} onChange={(v) => setDraft({ ...draft, riskCost: v ?? 1 })} /></Form.Item>
               <Form.Item label="绑定掉落表" required>
                 <Select value={draft.tableId || undefined} placeholder="选择掉落表…" options={tableOptions}
-                  onChange={(v) => setDraft({ ...draft, tableId: v })} />
+                  onChange={(v) => { if (typeof v === "string") setDraft({ ...draft, tableId: v }) }} />
               </Form.Item>
             </div>
 
@@ -138,7 +138,7 @@ export default function LootContainersPage() {
                       onChange={(v) => setDraft({ ...draft, pity: { ...draft.pity!, afterRuns: v ?? 12 } })} />
                     <span className="text-sm">则必出</span>
                     <Select className="!w-28" value={draft.pity.minRarity}
-                      onChange={(v) => setDraft({ ...draft, pity: { ...draft.pity!, minRarity: v } })}
+                      onChange={(v) => { if (v) setDraft({ ...draft, pity: { ...draft.pity!, minRarity: v } }) }}
                       options={RARITIES.map((r) => ({ value: r, label: RARITY_LABEL[r] }))} />
                   </>
                 )}

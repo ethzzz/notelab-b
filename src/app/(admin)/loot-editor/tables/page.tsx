@@ -93,7 +93,7 @@ export default function LootTablesPage() {
                       ))}
                       <Select size="small" className="!w-52" placeholder="+ 添加该档物品…" value={undefined}
                         showSearch optionFilterProp="label"
-                        onChange={(id) => addItem(t.id, id)}
+                        onChange={(id) => { if (typeof id === "string" && id) addItem(t.id, id) }}
                         options={itemsByRarity[r]
                           .filter((it) => !t.pool.some((p) => p.itemId === it.id))
                           .map((it) => ({ value: it.id, label: `${it.emoji} ${it.name}（💰${it.baseValue}）` }))} />

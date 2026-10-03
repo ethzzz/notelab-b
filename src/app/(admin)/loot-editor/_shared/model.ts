@@ -301,9 +301,7 @@ export interface MapEv {
 export function slotEv(ctn: ContainerDef, table: TableDef | undefined, items: ItemDef[]): number {
   if (!table) return 0
   const byId = new Map(items.map((i) => [i.id, i]))
-  const boost = 1 // 容器自身的 tierBoost 由地图提供，见 mapEv
   const w = { ...ctn.rarityWeights } as RarityWeights
-  void boost
   const total = RARITIES.reduce((s, r) => s + (w[r] || 0), 0)
   if (total <= 0) return 0
   let ev = 0

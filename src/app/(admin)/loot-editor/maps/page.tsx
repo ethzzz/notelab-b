@@ -100,7 +100,7 @@ export default function LootMapsPage() {
                 {draft.containers.map((c, i) => (
                   <div key={i} className="flex items-center gap-2">
                     <Select className="!w-72" value={c.containerId || undefined} placeholder="选择容器…" options={ctnOptions}
-                      onChange={(v) => setCtn(i, { containerId: v })} />
+                      onChange={(v) => { if (typeof v === "string") setCtn(i, { containerId: v }) }} />
                     <InputNumber min={0} max={99} addonAfter="个" value={c.count} onChange={(v) => setCtn(i, { count: v ?? 1 })} />
                     <Button size="small" type="text" danger onClick={() => setDraft({ ...draft, containers: draft.containers.filter((_, j) => j !== i) })}>✕</Button>
                   </div>

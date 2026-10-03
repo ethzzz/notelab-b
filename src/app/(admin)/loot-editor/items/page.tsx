@@ -86,7 +86,7 @@ export default function LootItemsPage() {
               <Form.Item label="名称" required><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Form.Item>
               <Form.Item label="图标 emoji"><Input value={draft.emoji} maxLength={4} onChange={(e) => setDraft({ ...draft, emoji: e.target.value })} /></Form.Item>
               <Form.Item label="稀有度">
-                <Select value={draft.rarity} onChange={(r) => setDraft({ ...draft, rarity: r })}
+                <Select value={draft.rarity} onChange={(r) => { if (r) setDraft({ ...draft, rarity: r }) }}
                   options={RARITIES.map((r) => ({ value: r, label: RARITY_LABEL[r] }))} />
               </Form.Item>
               <Form.Item label="面值（1-9999999）"><InputNumber min={1} max={9999999} className="!w-full" value={draft.baseValue} onChange={(v) => setDraft({ ...draft, baseValue: v ?? 50 })} /></Form.Item>

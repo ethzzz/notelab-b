@@ -35,7 +35,7 @@ export default function LootBalancePage() {
   const num = (k: keyof Balance, label: string, min: number, max: number, step = 1, tip?: string) => (
     <Form.Item label={<span title={tip}>{label}</span>} className="!mb-0">
       <InputNumber min={min} max={max} step={step} className="!w-full" value={balance[k]}
-        onChange={(v) => setBalance({ ...balance, [k]: v ?? (balance[k] as number) })} />
+        onChange={(v) => setBalance((b) => ({ ...b, [k]: v ?? b[k] } as Balance))} />
     </Form.Item>
   )
 
