@@ -15,6 +15,9 @@ const GAMES: { code: string; name: string; desc: string }[] = [
   { code: "vs", name: "幸存者割草", desc: "吸血鬼幸存者风，自动开火割草" },
   { code: "trpg", name: "文字冒险", desc: "TRPG 分支剧情选择" },
   { code: "spire", name: "爬塔 Roguelike", desc: "杀戮尖塔风，三幕爬塔" },
+  // 2026-10-03 补登记：地牢领主此前漏了（既不在本列表、也无 RequireAuth layout），无法配置登录要求
+  { code: "dungeon", name: "地牢领主", desc: "地下城经营 + 英雄派遣放置" },
+  { code: "loot", name: "摸金行动", desc: "搜刮撤离：进图摸金、风险博弈" },
 ]
 
 export default function GameAccessPage() {

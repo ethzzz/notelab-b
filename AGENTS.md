@@ -7,7 +7,7 @@
 
 | 项 | 值 |
 |---|---|
-| 服务器目录 | `/root/notelab-b` |
+| 服务器目录 | `/root/Notelab/notelab-b` |
 | pm2 进程 | `notelab-b` |
 | 端口 | **3020** |
 | nginx | `location ^~ /admin`，保留前缀转发 |
@@ -68,7 +68,7 @@ users.role → perm_role_routes（该组持有的 page:* / api:* 权限码）
 ## ⚠️ 本地镜像停留在 P6 之前的旧快照
 `E:\code\NoteLab\notelab-b` 里存在一批**从未入库、服务器上也没有**的文件：`src/app/(admin)/spire/`、`(admin)/trpg/page.tsx`、`(admin)/trpg/play/`、`(admin)/vs/`、`src/lib/vs-engine.ts`、`src/components/ThemePicker.tsx`、`src/components/ui/`。
 
-它们正是 P6「B 端移除游玩功能」删掉的那批残留。**不要把它们当成本仓结构，更不要据此恢复入口**。需要准确版本时以服务器 `/root/notelab-b` 为准。
+它们正是 P6「B 端移除游玩功能」删掉的那批残留。**不要把它们当成本仓结构，更不要据此恢复入口**。需要准确版本时以服务器 `/root/Notelab/notelab-b` 为准。
 
 ## 爬塔尖塔内容工坊：6 个子页共享一份文档（2026-09-26 拆分）
 
@@ -153,9 +153,9 @@ ssh myapp "sh /root/restore-uiconfig.sh"                                        
 # 本地：改完提交推送
 git push origin main
 # 服务器：同步 + 构建 + 重启一条命令搞定
-ssh myapp "/root/notelab-java/ops/sync-deploy.sh notelab-b"
+ssh myapp "/root/Notelab/notelab-java/ops/sync-deploy.sh notelab-b"
 ```
-- **不要在 `/root/notelab-b` 里手改代码**——服务器是只读部署目标；脚本发现工作区脏会直接拒绝执行。完整行为与参数见根 `AGENTS.md`「开发流程」。
+- **不要在 `/root/Notelab/notelab-b` 里手改代码**——服务器是只读部署目标；脚本发现工作区脏会直接拒绝执行。完整行为与参数见根 `AGENTS.md`「开发流程」。
 - 脚本只在**有变更**时构建；仅文档变更自动跳过（强制构建加 `--build`）；**构建失败不会重启服务**，老进程继续服务。
 - **只用 npm**（镜像已配在 `/root/.npmrc`）。
 - 会话 Cookie 为 `notelab_session`（HMAC，与 Java / Python 版兼容）；改认证相关代码前先确认这一点，不要换格式。
@@ -163,4 +163,4 @@ ssh myapp "/root/notelab-java/ops/sync-deploy.sh notelab-b"
 ## 纪律与禁区
 - 不动 `myapp`（旧前端，可随时回切）、`notelab`（旧 Python 版）、`notelab-c`（C 端）。
 - 玩法功能已整体移到 C 端：**本端不再新增游玩入口**（后端玩法 API 仍保留）。
-- 本目录是本地工作副本，**改这里**；服务器 `/root/notelab-b` 是只读部署目标（由 `ops/sync-deploy.sh notelab-b` 从 git 拉取）。别去服务器上改。
+- 本目录是本地工作副本，**改这里**；服务器 `/root/Notelab/notelab-b` 是只读部署目标（由 `ops/sync-deploy.sh notelab-b` 从 git 拉取）。别去服务器上改。
