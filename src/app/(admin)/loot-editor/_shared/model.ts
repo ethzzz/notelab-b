@@ -287,65 +287,106 @@ export function sanitizeBalance(raw: any): Balance {
 }
 
 // ---------------- EV 计算（B 端 balance 页校验面板用） ----------------
+//
+// ⚠️ 2026-10-03 修的两处**模型错误**（跑 10k 局模拟才暴露，模拟值 vs 面板值差 2.6 倍）：
+//   ① 池内平均面值必须**按 weight 加权**，旧代码用候选的算术平均（权重 22:2 的池子里
+//      便宜货的份量被放大 10 倍）。
+//   ② **必须考虑背包上限**。旧的"全清毛收益"把 33 个槽位全算进去，但玩家只背得动 8 件 ——
+//      港口那张图的 EV 因此被高估到 3.00×（真实值 2.30×，门槛还按错的数定成了 900）。
+//      现在按"会算账的玩家"建模：单格期望值从高到低开容器，装满/风险放不下就收手。
 export interface MapEv {
   mapId: string
   name: string
-  /** 全摸满并成功撤离的期望金币（未乘门槛） */
+  /** 全部槽位的毛收益（不设上限，只作参考，不要拿它判经济） */
+  grossAll: number
+  /** 按背包上限择优能带走的毛收益（**这个才是真实可达值**） */
   gross: number
   /** 期望收益 / 门槛金币 */
   ratio: number
   level: "ok" | "warn" | "reject"
+  /** 吃满背包所需风险（容器风险成本 + 每件风险） */
+  riskNeeded: number
+  riskLimit: number
+  /** 风险放得下吗（false = 风险先于背包成为瓶颈，玩家被迫少拿） */
+  riskOk: boolean
+  /** 背包装不下的槽位数（> 0 说明容器配比偏多） */
+  wastedSlots: number
 }
 
-/** 单容器单槽的期望面值：按容器权重抽档 → 取该档在掉落表池子里的平均面值 */
-export function slotEv(ctn: ContainerDef, table: TableDef | undefined, items: ItemDef[]): number {
-  if (!table) return 0
+/** 单容器单槽的期望面值：按容器权重抽档 → 取该档在掉落表池子里的**加权**平均面值 */
+export function slotEv(ctn: ContainerDef, table: TableDef | undefined, items: ItemDef[], tierBoost = 0): number {
+  if (!table || !table.pool.length) return 0
   const byId = new Map(items.map((i) => [i.id, i]))
   const w = { ...ctn.rarityWeights } as RarityWeights
-  const total = RARITIES.reduce((s, r) => s + (w[r] || 0), 0)
+  if (tierBoost > 0) {
+    for (const r of RARITIES) {
+      if (r === "common" || r === "uncommon") continue
+      w[r] = (w[r] || 0) * (1 + tierBoost)
+    }
+  }
+  const total = RARITIES.reduce((s, r) => s + Math.max(0, w[r] || 0), 0)
   if (total <= 0) return 0
   let ev = 0
   for (const r of RARITIES) {
-    const share = (w[r] || 0) / total
+    const share = Math.max(0, w[r] || 0) / total
     if (share <= 0) continue
-    const candidates = table.pool.filter((p) => byId.get(p.itemId)?.rarity === r)
-    if (!candidates.length) continue // 该档池子空 → 贡献 0（也是"该档轮盘空手"的量化体现）
-    const avg = candidates.reduce((s, p) => s + (byId.get(p.itemId)?.baseValue || 0), 0) / candidates.length
-    ev += share * avg
+    const cands = table.pool.filter((p) => byId.get(p.itemId)?.rarity === r && p.weight > 0)
+    if (!cands.length) continue // 该档池子空 → 引擎会降档，这里记 0（别假装有收益）
+    const wsum = cands.reduce((s, p) => s + p.weight, 0)
+    const wavg = cands.reduce((s, p) => s + p.weight * (byId.get(p.itemId)?.baseValue || 0), 0) / wsum
+    ev += share * wavg
   }
   return ev
 }
 
-/** 地图期望收益与 EV 倍率：gross → ×价值倍率 ×回收率 ×撤离率 → ÷门票 */
+/** 地图期望收益与 EV 倍率：毛收益（择优带入背包）→ ×价值倍率 ×回收率 ×撤离率 → ÷门票 */
 export function evalMap(map: MapDef, containers: ContainerDef[], tables: TableDef[], items: ItemDef[], balance: Balance): MapEv {
   const ctnById = new Map(containers.map((c) => [c.id, c]))
   const tblById = new Map(tables.map((t) => [t.id, t]))
-  let gross = 0
+
+  // 按地图配比展开成「容器实例」，每个实例记自己的单格期望值 / 槽位 / 风险成本
+  const groups: { ev: number; slots: number; riskCost: number }[] = []
+  let grossAll = 0
+  let allSlots = 0
   for (const mc of map.containers) {
     const c = ctnById.get(mc.containerId)
     if (!c) continue
-    const table = tblById.get(c.tableId)
-    // tierBoost 只作用于 rare/epic/legendary
-    let ev = 0
-    const byId = new Map(items.map((i) => [i.id, i]))
-    if (table) {
-      const total = RARITIES.reduce((s, r) => s + (c.rarityWeights[r] || 0), 0)
-      if (total > 0) {
-        for (const r of RARITIES) {
-          const w = (c.rarityWeights[r] || 0) * (map.tierBoost > 0 && r !== "common" && r !== "uncommon" ? 1 + map.tierBoost : 1)
-          if (w <= 0) continue
-          const candidates = table.pool.filter((p) => byId.get(p.itemId)?.rarity === r)
-          if (!candidates.length) continue
-          const avg = candidates.reduce((s, p) => s + (byId.get(p.itemId)?.baseValue || 0), 0) / candidates.length
-          ev += (w / total) * avg
-        }
-      }
+    const ev = slotEv(c, tblById.get(c.tableId), items, map.tierBoost)
+    const sl = Math.max(1, c.slots)
+    const n = Math.max(0, Math.floor(mc.count))
+    for (let i = 0; i < n; i++) {
+      groups.push({ ev, slots: sl, riskCost: c.riskCost })
+      grossAll += ev * sl
+      allSlots += sl
     }
-    gross += ev * c.slots * mc.count
   }
+
+  // 会算账的玩家：单格期望值高的容器先开；装满背包就撤；会把自己撑爆的格子不拿
+  const cap = Math.max(1, Math.floor(balance.backpackCap))
+  const limit = Math.max(1, Math.floor(map.riskLimit))
+  const per = Math.max(0, balance.riskPerSlot)
+  let bag = 0, risk = 0, gross = 0
+  for (const g of [...groups].sort((a, b) => b.ev - a.ev)) {
+    if (bag >= cap) break
+    if (risk + g.riskCost > limit) continue
+    const want = Math.min(g.slots, cap - bag)
+    const room = per > 0 ? Math.floor((limit - risk - g.riskCost) / per) : want
+    const take = Math.max(0, Math.min(want, room))
+    if (take <= 0) continue
+    risk += g.riskCost + take * per
+    bag += take
+    gross += g.ev * take
+  }
+
   const net = gross * map.valueMult * balance.recycleRate * balance.extractRate
   const gate = Math.max(1, map.entry.coins)
   const ratio = net / gate
   const level: MapEv["level"] = ratio > balance.evRejectRatio ? "reject" : ratio > balance.evWarnRatio ? "warn" : "ok"
-  return { mapId: map.id, name: map.name, gross: Math.round(gross), ratio, level }
+  return {
+    mapId: map.id, name: map.name,
+    grossAll: Math.round(grossAll), gross: Math.round(gross),
+    ratio, level,
+    riskNeeded: risk, riskLimit: limit, riskOk: risk <= limit,
+    wastedSlots: Math.max(0, allSlots - cap),
+  }
 }

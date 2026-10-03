@@ -15,25 +15,47 @@ import {
 } from "../_shared/model"
 
 export default function LootContainersPage() {
-  const { containers, setContainers, tables, busy, save, dirty } = useLoot()
+  const { containers, setContainers, tables, items, busy, save, dirty } = useLoot()
   const [draft, setDraft] = useState<ContainerDef | null>(null)
 
   const tableOptions = useMemo(() => tables.map((t) => ({ value: t.id, label: `${t.name}（${t.id}）` })), [tables])
 
-  /** 某容器的池子每档是否都有候选；没有则提示（不阻断保存） */
+  /**
+   * 有权重、但掉落表里**没有该档候选**的档位。
+   * ⚠️ 这类配置下引擎会「降档找最近的有货档」——权重表看着正常，实际出货不是那个分布。
+   *    （旧实现只判了"整表为空"，等于没查，跑出来的分布偏差反而找不到原因。）
+   */
   const missingTiers = useMemo(() => {
+    const itemById = new Map(items.map((i) => [i.id, i]))
     const out: Record<string, Rarity[]> = {}
     for (const c of containers) {
       const t = tables.find((x) => x.id === c.tableId)
       const miss = RARITIES.filter((r) => {
-        const w = c.rarityWeights[r] || 0
-        if (w <= 0) return false
-        return !t || !t.pool.length
+        if ((c.rarityWeights[r] || 0) <= 0) return false
+        if (!t || !t.pool.length) return true
+        return !t.pool.some((p) => itemById.get(p.itemId)?.rarity === r)
       })
       if (miss.length) out[c.id] = miss
     }
     return out
-  }, [containers, tables])
+  }, [containers, tables, items])
+
+  /** 保底目标档在池子里没有候选 → 触发时只能退档（引擎兜住不会白等，但要去补候选） */
+  const pityUncovered = useMemo(() => {
+    const itemById = new Map(items.map((i) => [i.id, i]))
+    const out: Record<string, boolean> = {}
+    for (const c of containers) {
+      if (!c.pity) continue
+      const t = tables.find((x) => x.id === c.tableId)
+      const from = RARITIES.indexOf(c.pity.minRarity)
+      const covered = !!t && t.pool.some((p) => {
+        const it = itemById.get(p.itemId)
+        return !!it && RARITIES.indexOf(it.rarity) >= from
+      })
+      if (!covered) out[c.id] = true
+    }
+    return out
+  }, [containers, tables, items])
 
   const upsert = () => {
     if (!draft) return
@@ -55,16 +77,21 @@ export default function LootContainersPage() {
     { title: "槽位", dataIndex: "slots", width: 70 },
     { title: "单格耗时", dataIndex: "slotMs", width: 100, render: (v: number) => `${(v / 1000).toFixed(1)}s` },
     { title: "风险成本", dataIndex: "riskCost", width: 90 },
-    { title: "保底", dataIndex: "pity", width: 150, render: (p: ContainerDef["pity"]) => p
-      ? <Tag color="purple">{p.afterRuns} 次未出 → 必出 {RARITY_LABEL[p.minRarity]}</Tag>
+    { title: "保底", dataIndex: "pity", width: 190, render: (p: ContainerDef["pity"], c: ContainerDef) => p
+      ? <span className="flex flex-wrap items-center gap-1">
+          <Tag color="purple">{p.afterRuns} 次未出 → 必出 {RARITY_LABEL[p.minRarity]}</Tag>
+          {pityUncovered[c.id] && <Tag color="red">池内无该档</Tag>}
+        </span>
       : <span className="text-zinc-400">无</span> },
-    { title: "掉落表", dataIndex: "tableId", width: 150, render: (id: string, c: ContainerDef) => {
+    { title: "掉落表", dataIndex: "tableId", width: 200, render: (id: string, c: ContainerDef) => {
       const ok = tables.some((t) => t.id === id)
       const miss = missingTiers[c.id]
-      return <span className="flex items-center gap-1">
+      return <span className="flex flex-wrap items-center gap-1">
         <code className="text-xs">{id}</code>
         {!ok && <Tag color="red">表不存在</Tag>}
-        {ok && miss && miss.length > 0 && <Tag color="orange">表内无线索</Tag>}
+        {ok && miss && miss.length > 0 && (
+          <Tag color="orange">缺 {miss.map((r) => RARITY_LABEL[r]).join("/")} 候选</Tag>
+        )}
       </span>
     } },
     actionColumn((_: any, c: ContainerDef) => actBtns(
