@@ -27,22 +27,14 @@ export default function LootBalancePage() {
     () => maps.map((m) => evalMap(m, containers, tables, items, balance)),
     [maps, containers, tables, items, balance],
   )
-  const rejected = evs.filter((e) => e.level === "reject")
-  const warned = evs.filter((e) => e.level === "warn")
 
   const [runs, setRuns] = useState(10_000)
   const [simming, setSimming] = useState(false)
   const [reports, setReports] = useState<SimReport[] | null>(null)
 
-  /** 保存前先跑 EV 校验：超标直接拒绝（防止手滑把经济做崩） */
-  const doSave = () => {
-    if (rejected.length) {
-      toast.error(`EV 倍率超过 ${balance.evRejectRatio}×（${rejected.map((r) => r.name).join("、")}），已拒绝保存；请调低价值倍率或提高门槛`)
-      return
-    }
-    if (warned.length) toast.warning(`注意：${warned.map((r) => r.name).join("、")} 的 EV 倍率超过 ${balance.evWarnRatio}×`)
-    save()
-  }
+  // 保存守卫（EV 超阈值拒绝 / 偏高警告）在 _shared/store 的 commit 里 —— 那是唯一的写入口，
+  // 从「地图配置」页保存也拦得住。这里只管把校验结果画出来。
+  const doSave = () => save()
 
   const resetDefault = () => { setBalance(sanitizeBalance(baseBalance)); toast.info("已恢复为内置默认参数") }
 

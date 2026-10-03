@@ -13,7 +13,7 @@ import { toast } from "@/lib/toast"
 import { apiJson, postJson } from "@/lib/api"
 import { loadLootContent, saveLootContent } from "@/lib/loot-content"
 import {
-  sanitizeItem, sanitizeContainer, sanitizeTable, sanitizeMap, sanitizeBalance,
+  sanitizeItem, sanitizeContainer, sanitizeTable, sanitizeMap, sanitizeBalance, evalMap,
   blankBalance,
   type ItemDef, type ContainerDef, type TableDef, type MapDef, type Balance, type LootDoc,
 } from "./model"
@@ -103,6 +103,19 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
   /** 整包提交（一定是全量，绝不只提交当前页那一片） */
   const commit = useCallback(async (): Promise<boolean> => {
     const d = docRef.current
+    // ⚠️ EV 守卫必须放在**唯一的写入口**这里，而不是某个页面的保存按钮上：
+    //    EV 面板在「全局参数」页，但 valueMult 是在「地图配置」页改的 ——
+    //    守卫挂在页面按钮上时，从地图页保存就把它绕过去了（等于没有守卫）。
+    const evs = d.maps.map((m) => evalMap(m, d.containers, d.tables, d.items, d.balance))
+    const bad = evs.filter((e) => e.level === "reject")
+    if (bad.length) {
+      toast.error(`EV 倍率超过 ${d.balance.evRejectRatio}×（${bad.map((b) => `${b.name} ${b.ratio.toFixed(2)}×`).join("、")}），已拒绝保存：调低价值倍率/物品面值，或提高门槛`)
+      return false
+    }
+    const hot = evs.filter((e) => e.level === "warn")
+    if (hot.length) {
+      toast.warning(`EV 倍率偏高（${hot.map((b) => `${b.name} ${b.ratio.toFixed(2)}×`).join("、")}），已保存；建议落在 [1.5, 3.5]`)
+    }
     try {
       await saveLootContent({
         items: d.items, containers: d.containers, tables: d.tables, maps: d.maps, balance: d.balance,
