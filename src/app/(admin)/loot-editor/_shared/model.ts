@@ -160,7 +160,10 @@ export const blankMap = (): MapDef => ({
 
 export const blankBalance = (): Balance => ({
   recycleRate: 0.6, extractRate: 0.55, backpackCap: 8, initialCoins: 500, rescueCoins: 200,
-  rescueCooldownSec: 86400, extractHoldMs: 5000, riskPerSlot: 1, evWarnRatio: 1.15, evRejectRatio: 3.0,
+  // ⚠️ 阈值必须与设计目标区间 [1.5, 3.5] 自洽：warn 取区间上限（超了才提示），reject 取 10× 门槛（崩到
+  //    这个量级才拒绝保存）。旧值 1.15/3.0 的毛病是 warn 低于区间下限 → 健康图常驻告警；reject 紧贴上限
+  //    → 手改 valueMult 一点点就被拒。W3 实测（线上配置）：depot 1.71× / port 2.30× 应静默通过。
+  rescueCooldownSec: 86400, extractHoldMs: 5000, riskPerSlot: 1, evWarnRatio: 3.5, evRejectRatio: 10.0,
 })
 
 // ---------------- 净化（结构非法丢该条；数值夹取与后端同口径） ----------------

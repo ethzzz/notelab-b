@@ -7,7 +7,8 @@
 //   · 平衡模拟器：**抽样**（真实引擎跑 N 局），用来证明"配置权重真的按说的那样出"，
 //     并给解析公式做交叉验证（两者差 > 0.3× 就说明公式或实现有偏差）。
 //   · 建议区间 [1.5, 3.5] 是**内容设计目标**（PRD 验收），不是保存阈值；
-//     保存阈值是 evWarnRatio / evRejectRatio 两个参数（默认 1.15 / 3.0）。
+//     保存阈值是 evWarnRatio / evRejectRatio 两个参数（默认 3.5 / 10.0）——
+//     warn 取设计上限（超了才提示），reject 取 10× 门槛（崩到那量级才拒绝保存）。
 import { useMemo, useState } from "react"
 import { InputNumber, Button, Card, Form, Tag, Table, Select, Alert } from "antd"
 import { Play, RotateCcw } from "lucide-react"
@@ -198,8 +199,8 @@ export default function LootBalancePage() {
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           {num("extractHoldMs", "撤离读条（ms，500-60000）", 500, 60000, 500)}
           {num("riskPerSlot", "每搜一格风险（0-10）", 0, 10)}
-          {num("evWarnRatio", "EV 警告阈值（默认 1.15）", 1, 100, 0.05)}
-          {num("evRejectRatio", "EV 拒绝阈值（默认 3.0）", 1, 100, 0.1)}
+          {num("evWarnRatio", "EV 警告阈值（默认 3.5）", 1, 100, 0.05)}
+          {num("evRejectRatio", "EV 拒绝阈值（默认 10.0）", 1, 100, 0.1)}
         </div>
       </Card>
     </div>
