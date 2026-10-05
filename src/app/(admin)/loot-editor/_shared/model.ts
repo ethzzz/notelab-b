@@ -13,9 +13,31 @@ export const RARITY_LABEL: Record<Rarity, string> = {
   common: "普通", uncommon: "精良", rare: "稀有", epic: "史诗", legendary: "传说",
 }
 
-/** 中文语境：越高档越"红"（暖），普通用灰 */
+/**
+ * 稀有度配色：**白 → 蓝 → 紫 → 黄 → 红**，由低到高。
+ * ⚠️ 与 C 端 `notelab-c/app/(play)/play/loot/page.tsx` 的 RARITY_CLS / TIER_CLS 同序同语义，
+ *    改一边必须改另一边（antd 预设色名：default=白灰 / blue / purple / gold=黄 / red）。
+ */
 export const RARITY_COLOR: Record<Rarity, string> = {
-  common: "default", uncommon: "green", rare: "blue", epic: "purple", legendary: "orange",
+  common: "default", uncommon: "blue", rare: "purple", epic: "gold", legendary: "red",
+}
+
+/**
+ * 容器档位 = 产出稀有度的期望档（rarityWeights 加权平均后就近取整）。
+ * 与 C 端 `loot-engine.containerTier` 同一口径 —— 后台显示什么档，前台就染什么色。
+ * 口径理由（别改成"权重最高的档"或"能出的最高档"）见 C 端那份注释。
+ */
+export function containerTier(c: { rarityWeights?: RarityWeights | null }): Rarity {
+  let sum = 0
+  let acc = 0
+  for (let i = 0; i < RARITIES.length; i++) {
+    const w = Math.max(0, c.rarityWeights?.[RARITIES[i]] ?? 0)
+    sum += w
+    acc += w * i
+  }
+  if (sum <= 0) return "common"
+  const idx = Math.min(RARITIES.length - 1, Math.max(0, Math.round(acc / sum)))
+  return RARITIES[idx]
 }
 
 export type RarityWeights = Record<Rarity, number>

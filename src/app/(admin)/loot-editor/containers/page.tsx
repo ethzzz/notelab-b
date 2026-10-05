@@ -10,7 +10,7 @@ import { useLoot } from "../_shared/store"
 import { actBtns, emptyHint, PageHead } from "../_shared/ui"
 import {
   blankContainer, sanitizeContainer, DEFAULT_WEIGHTS,
-  RARITIES, RARITY_LABEL, RARITY_COLOR,
+  RARITIES, RARITY_LABEL, RARITY_COLOR, containerTier,
   type ContainerDef, type Rarity,
 } from "../_shared/model"
 
@@ -74,12 +74,16 @@ export default function LootContainersPage() {
 
   const columns = [
     { title: "容器", dataIndex: "name", render: (_: any, c: ContainerDef) => <span className="font-medium text-zinc-800 dark:text-zinc-100">{c.emoji} {c.name}</span> },
+    { title: "档位", dataIndex: "id", width: 84, render: (_: any, c: ContainerDef) => {
+      const t = containerTier(c)
+      return <Tag color={RARITY_COLOR[t]} className="!m-0">{RARITY_LABEL[t]}</Tag>
+    } },
     { title: "槽位", dataIndex: "slots", width: 70 },
     { title: "单格耗时", dataIndex: "slotMs", width: 100, render: (v: number) => `${(v / 1000).toFixed(1)}s` },
     { title: "风险成本", dataIndex: "riskCost", width: 90 },
     { title: "保底", dataIndex: "pity", width: 190, render: (p: ContainerDef["pity"], c: ContainerDef) => p
       ? <span className="flex flex-wrap items-center gap-1">
-          <Tag color="purple">{p.afterRuns} 次未出 → 必出 {RARITY_LABEL[p.minRarity]}</Tag>
+          <Tag color="geekblue">{p.afterRuns} 次未出 → 必出 {RARITY_LABEL[p.minRarity]}</Tag>
           {pityUncovered[c.id] && <Tag color="red">池内无该档</Tag>}
         </span>
       : <span className="text-zinc-400">无</span> },
