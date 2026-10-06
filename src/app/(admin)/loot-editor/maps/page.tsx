@@ -11,14 +11,20 @@ import { actBtns, emptyHint, PageHead } from "../_shared/ui"
 import { blankMap, sanitizeMap, evalMap, type MapDef } from "../_shared/model"
 
 export default function LootMapsPage() {
-  const { maps, setMaps, containers, tables, items, balance, busy, save, dirty } = useLoot()
+  const { maps, setMaps, containers, tables, items, balance, rarities, busy, save, dirty } = useLoot()
   const [draft, setDraft] = useState<MapDef | null>(null)
 
+  // ⚠️ evalMap 是柯里化的：先吃整份文档（把 rarities / 背包网格这些"上下文"绑定好），
+  //    再对每张地图求值。别把 doc 拼在每个格子里重复构造。
+  const evOf = useMemo(
+    () => evalMap({ rarities, items, containers, tables, maps, balance }),
+    [rarities, items, containers, tables, maps, balance],
+  )
   const evByMap = useMemo(() => {
-    const m: Record<string, ReturnType<typeof evalMap>> = {}
-    for (const mp of maps) m[mp.id] = evalMap(mp, containers, tables, items, balance)
+    const m: Record<string, ReturnType<typeof evOf>> = {}
+    for (const mp of maps) m[mp.id] = evOf(mp)
     return m
-  }, [maps, containers, tables, items, balance])
+  }, [maps, evOf])
 
   const ctnOptions = useMemo(() => containers.map((c) => ({ value: c.id, label: `${c.emoji} ${c.name}（${c.id}）` })), [containers])
 
@@ -111,7 +117,7 @@ export default function LootMapsPage() {
 
             <div className="rounded-lg bg-black/[0.02] dark:bg-white/[0.04] p-3 text-xs text-zinc-500">
               {(() => {
-                const ev = evalMap(draft, containers, tables, items, balance)
+                const ev = evOf(draft)
                 const color = ev.level === "reject" ? "text-rose-500" : ev.level === "warn" ? "text-amber-500" : "text-emerald-600"
                 return <>当前 EV 倍率：<b className={color}>{ev.ratio.toFixed(2)}×</b>（全摸满毛收益约 {ev.gross} 面值；门槛 {draft.entry.coins}）</>
               })()}

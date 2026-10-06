@@ -13,9 +13,9 @@ import { toast } from "@/lib/toast"
 import { apiJson, postJson } from "@/lib/api"
 import { loadLootContent, saveLootContent } from "@/lib/loot-content"
 import {
-  sanitizeItem, sanitizeContainer, sanitizeTable, sanitizeMap, sanitizeBalance, evalMap,
-  blankBalance,
-  type ItemDef, type ContainerDef, type TableDef, type MapDef, type Balance, type LootDoc,
+  sanitizeItem, sanitizeContainer, sanitizeTable, sanitizeMap, sanitizeBalance, sanitizeRarities, evalMap,
+  blankBalance, rarityOrder,
+  type ItemDef, type ContainerDef, type TableDef, type MapDef, type Balance, type LootDoc, type RarityDef,
 } from "./model"
 
 interface LootStore extends LootDoc {
@@ -29,11 +29,15 @@ interface LootStore extends LootDoc {
   /** 内置平衡默认（后端只读下发，供「全局参数」页展示/恢复默认） */
   baseBalance: Balance
 
+  setRarities: (v: RarityDef[] | ((l: RarityDef[]) => RarityDef[])) => void
   setItems: (v: ItemDef[] | ((l: ItemDef[]) => ItemDef[])) => void
   setContainers: (v: ContainerDef[] | ((l: ContainerDef[]) => ContainerDef[])) => void
   setTables: (v: TableDef[] | ((l: TableDef[]) => TableDef[])) => void
   setMaps: (v: MapDef[] | ((l: MapDef[]) => MapDef[])) => void
   setBalance: (v: Balance | ((l: Balance) => Balance)) => void
+
+  /** 当前稀有度顺序（数组顺序 = 由低到高），子页的所有"比大小"都要用它 */
+  order: string[]
 
   revert: () => void
   save: () => Promise<void>
@@ -51,6 +55,7 @@ export function useLoot(): LootStore {
 }
 
 export function LootStoreProvider({ children }: { children: React.ReactNode }) {
+  const [rarities, setRarities] = useState<RarityDef[]>(() => sanitizeRarities(null))
   const [items, setItems] = useState<ItemDef[]>([])
   const [containers, setContainers] = useState<ContainerDef[]>([])
   const [tables, setTables] = useState<TableDef[]>([])
@@ -70,8 +75,9 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
     setBaseline(JSON.stringify(d))
   }, [])
 
-  const docRef = useRef<LootDoc>({ items, containers, tables, maps, balance })
-  docRef.current = { items, containers, tables, maps, balance }
+  const docRef = useRef<LootDoc>({ rarities, items, containers, tables, maps, balance })
+  docRef.current = { rarities, items, containers, tables, maps, balance }
+  const order = useMemo(() => rarityOrder({ rarities }), [rarities])
 
   useEffect(() => {
     let alive = true
@@ -80,13 +86,17 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {})
     loadLootContent().then((c) => {
       if (!alive) return
-      const it = c.items.map(sanitizeItem).filter(Boolean) as ItemDef[]
-      const ct = c.containers.map(sanitizeContainer).filter(Boolean) as ContainerDef[]
+      // ⚠️ 顺序很重要：rarities 必须先净出来 —— 物品/容器的净化要按它校验稀有度 key，
+      //    先净化物品的话，后台新增的档位会因为"不在旧顺序里"被整条丢掉。
+      const rs = sanitizeRarities((c as any)?.rarities)
+      const ord = rarityOrder({ rarities: rs })
+      const it = c.items.map((x: any) => sanitizeItem(x, ord)).filter(Boolean) as ItemDef[]
+      const ct = c.containers.map((x: any) => sanitizeContainer(x, ord)).filter(Boolean) as ContainerDef[]
       const tb = c.tables.map(sanitizeTable).filter(Boolean) as TableDef[]
       const mp = c.maps.map(sanitizeMap).filter(Boolean) as MapDef[]
       const ba = sanitizeBalance(c.balance)
-      const doc: LootDoc = { items: it, containers: ct, tables: tb, maps: mp, balance: ba }
-      setItems(it); setContainers(ct); setTables(tb); setMaps(mp); setBalance(ba)
+      const doc: LootDoc = { rarities: rs, items: it, containers: ct, tables: tb, maps: mp, balance: ba }
+      setRarities(rs); setItems(it); setContainers(ct); setTables(tb); setMaps(mp); setBalance(ba)
       setBaseBalance(sanitizeBalance(c.baseBalance))
       freezeBaseline(doc)
       setLoaded(true)
@@ -97,7 +107,7 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
   const dirty = useMemo(
     () => loaded && JSON.stringify(docRef.current) !== baseline,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loaded, baseline, items, containers, tables, maps, balance],
+    [loaded, baseline, rarities, items, containers, tables, maps, balance],
   )
 
   /** 整包提交（一定是全量，绝不只提交当前页那一片） */
@@ -106,7 +116,8 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
     // ⚠️ EV 守卫必须放在**唯一的写入口**这里，而不是某个页面的保存按钮上：
     //    EV 面板在「全局参数」页，但 valueMult 是在「地图配置」页改的 ——
     //    守卫挂在页面按钮上时，从地图页保存就把它绕过去了（等于没有守卫）。
-    const evs = d.maps.map((m) => evalMap(m, d.containers, d.tables, d.items, d.balance))
+    const ev = evalMap(d)
+    const evs = d.maps.map(ev)
     const bad = evs.filter((e) => e.level === "reject")
     if (bad.length) {
       toast.error(`EV 倍率超过 ${d.balance.evRejectRatio}×（${bad.map((b) => `${b.name} ${b.ratio.toFixed(2)}×`).join("、")}），已拒绝保存：调低价值倍率/物品面值，或提高门槛`)
@@ -118,7 +129,7 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       await saveLootContent({
-        items: d.items, containers: d.containers, tables: d.tables, maps: d.maps, balance: d.balance,
+        rarities: d.rarities, items: d.items, containers: d.containers, tables: d.tables, maps: d.maps, balance: d.balance,
       })
     } catch (e: any) {
       toast.error(`保存失败：${e?.message || e}`)
@@ -132,7 +143,7 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
   const revert = useCallback(() => {
     const b = baselineDoc.current
     if (!b) return
-    setItems(b.items); setContainers(b.containers); setTables(b.tables); setMaps(b.maps); setBalance(b.balance)
+    setRarities(b.rarities); setItems(b.items); setContainers(b.containers); setTables(b.tables); setMaps(b.maps); setBalance(b.balance)
     toast.success("已撤销未保存的改动")
   }, [])
 
@@ -169,9 +180,10 @@ export function LootStoreProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const store: LootStore = {
-    items, containers, tables, maps, balance,
+    rarities, items, containers, tables, maps, balance,
     loaded, busy, pubBusy, published, dirty, baseBalance,
-    setItems, setContainers, setTables, setMaps, setBalance,
+    order,
+    setRarities, setItems, setContainers, setTables, setMaps, setBalance,
     revert, save, publish, unpublish,
   }
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>

@@ -22,12 +22,14 @@ import { simulateMap, type SimReport } from "../_shared/sim"
 const BAND: [number, number] = [1.5, 3.5]
 
 export default function LootBalancePage() {
-  const { balance, setBalance, baseBalance, maps, containers, tables, items, busy, dirty, save } = useLoot()
+  const { balance, setBalance, baseBalance, maps, containers, tables, items, rarities, busy, dirty, save } = useLoot()
 
-  const evs = useMemo(
-    () => maps.map((m) => evalMap(m, containers, tables, items, balance)),
-    [maps, containers, tables, items, balance],
+  // evalMap 柯里化：先绑整份文档（rarities / 背包网格…），再对每张地图求值
+  const evOf = useMemo(
+    () => evalMap({ rarities, items, containers, tables, maps, balance }),
+    [rarities, items, containers, tables, maps, balance],
   )
+  const evs = useMemo(() => maps.map(evOf), [maps, evOf])
 
   const [runs, setRuns] = useState(10_000)
   const [simming, setSimming] = useState(false)
@@ -48,7 +50,8 @@ export default function LootBalancePage() {
     setReports(null)
     await new Promise((r) => setTimeout(r, 30))
     try {
-      const doc = { items, containers, tables, maps, balance }
+      // ⚠️ rarities 必须带上：sim 的稀有度顺序 / 档位校验全靠它，漏了会回落内置五档
+      const doc = { rarities, items, containers, tables, maps, balance }
       const out = maps.map((m) => simulateMap(doc, m, { runs }))
       setReports(out)
       const bad = out.filter((r) => r.maxDelta > 0.015 || r.p <= 0.05)
@@ -104,7 +107,8 @@ export default function LootBalancePage() {
         <Table size="small" rowKey="mapId" columns={evColumns as any} dataSource={evs} pagination={false}
           locale={{ emptyText: "暂无地图，去「地图配置」页新建" }} />
         <div className="mt-2 text-xs leading-relaxed text-zinc-400">
-          「全清毛收益」把地图上所有槽位都算进去，但玩家只背得动 <b>{balance.backpackCap}</b> 格 ——
+          「全清毛收益」把地图上所有格子都算进去，但玩家只背得动 <b>{balance.backpackCols * balance.backpackRows}</b> 格
+          （{balance.backpackCols}×{balance.backpackRows}）——
           判断经济要看「<b>可带走毛收益</b>」那一列（按单格期望值高的容器优先装）。
           <br />
           设计目标区间 [{BAND[0]}, {BAND[1]}]；保存守卫：&gt; {balance.evWarnRatio}× 警告、&gt; {balance.evRejectRatio}× 拒绝保存。
@@ -137,7 +141,7 @@ export default function LootBalancePage() {
                   <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-100">
                     🗺️ {r.mapName}（{r.mapId}）
                     <span className="text-xs font-normal text-zinc-400">
-                      门槛 💰{r.gate} · 背包 {r.cap} 格 · 地图 {r.totalSlots} 槽 · {r.runs.toLocaleString()} 局 / {r.rolls.toLocaleString()} 次抽取
+                      门槛 💰{r.gate} · 背包 {r.bagCells} 格 · 地图期望 {r.totalCells} 格 · {r.runs.toLocaleString()} 局 / {r.rolls.toLocaleString()} 次抽取
                     </span>
                     {distOk ? <Tag color="green">分布通过</Tag> : <Tag color="red">分布不通过</Tag>}
                   </div>
@@ -157,8 +161,8 @@ export default function LootBalancePage() {
                   <div className="mt-2 grid gap-x-6 gap-y-1 text-xs text-zinc-500 md:grid-cols-2">
                     <div>χ² = <b>{r.chi2.toFixed(2)}</b>（df {r.df}）　p = <b className={r.p > 0.05 ? "" : "text-rose-500"}>{r.p.toFixed(4)}</b>　最大偏差 <b>{(r.maxDelta * 100).toFixed(3)}%</b></div>
                     <div>模拟 EV：每次撤离 <b>{r.ratioExtract.toFixed(2)}×</b>　× 撤离率 <b>{r.ratioWithRate.toFixed(2)}×</b>{ev ? <>　解析 <b>{ev.ratio.toFixed(2)}×</b></> : null}</div>
-                    <div>平均开 {r.avgContainers.toFixed(1)} 容器 / 摸 {r.avgSlots.toFixed(1)} 槽　带出展示 💰{r.avgKept.toFixed(0)}　回收 💰{r.avgPayout.toFixed(0)}</div>
-                    <div>风险 {r.avgRisk.toFixed(1)}　因背包满丢弃 {r.avgDiscarded.toFixed(2)} 件</div>
+                    <div>平均开 {r.avgContainers.toFixed(1)} 容器 / 摸 {r.avgCells.toFixed(1)} 格　带出展示 💰{r.avgKept.toFixed(0)}　回收 💰{r.avgPayout.toFixed(0)}</div>
+                    <div>风险 {r.avgRisk.toFixed(1)}　因背包塞不下丢弃 {r.avgDiscarded.toFixed(2)} 件</div>
                   </div>
 
                   {r.pity.length > 0 && (
@@ -177,6 +181,11 @@ export default function LootBalancePage() {
                       message="分布检验未通过"
                       description="先检查该图用到的容器：有没有「有权重但掉落表里没有该档候选」的容器 —— 引擎会降档，实测频率自然对不上配置权重。" />
                   )}
+                  {r.issues.length > 0 && (
+                    <ul className="mt-2 space-y-0.5 text-xs text-amber-600 dark:text-amber-400">
+                      {r.issues.map((s, i) => <li key={i}>· {s}</li>)}
+                    </ul>
+                  )}
                 </div>
               )
             })}
@@ -188,7 +197,8 @@ export default function LootBalancePage() {
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           {num("recycleRate", "回收率（0-1，展示价 × 该值 = 回收价）", 0, 1, 0.05)}
           {num("extractRate", "撤离率（0-1，仅用于 EV 校验与折算）", 0, 1, 0.05)}
-          {num("backpackCap", "背包格数（1-50）", 1, 50)}
+          {num("backpackCols", "背包列数（1-8）", 1, 8)}
+          {num("backpackRows", "背包行数（1-8）", 1, 8)}
           {num("initialCoins", "首次建档赠送金币", 0, 9999999, 50)}
           {num("rescueCoins", "破产救济金额", 0, 9999999, 50)}
           {num("rescueCooldownSec", "救济冷却（秒，默认 86400）", 0, 30 * 86400, 3600)}
