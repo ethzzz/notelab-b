@@ -6,29 +6,17 @@
 // ⚠️ 2026-10-06：物品多了「形状」和「图片」两个维度 ——
 //   形状决定它占背包几格，面值应该 ≈ 该稀有度的每格基准价 × 占格数（见 suggestValue）。
 //   价配高了/低了这里会给提示，但不拦保存（数值裁决交给「全局参数」页的 EV 守卫）。
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { Input, Select, Button, Tag, Card, Modal, Form, InputNumber, Alert } from "antd"
 import { Plus } from "lucide-react"
 import { toast } from "@/lib/toast"
-import { apiJson } from "@/lib/api"
 import { DataTable, actionColumn } from "@/components/admin"
 import { useLoot } from "../_shared/store"
-import { actBtns, emptyHint, PageHead } from "../_shared/ui"
+import { actBtns, emptyHint, ImageSelect, PageHead, useLootImages } from "../_shared/ui"
 import {
   blankItem, sanitizeItem, suggestValue, shapeSize, SHAPES, labelMap, tagColorMap,
   type ItemDef, type Rarity,
 } from "../_shared/model"
-
-/** 图片候选：后端扫 C 端 public/loot 目录下发（B 端浏览器读不到 C 端仓库，只能让后端扫） */
-function useLootImages() {
-  const [files, setFiles] = useState<string[]>([])
-  useEffect(() => {
-    apiJson("/api/loot-assets")
-      .then((j: any) => setFiles(Array.isArray(j?.files) ? j.files : []))
-      .catch(() => setFiles([]))   // 接口没起来就只用 emoji，不报错打扰配置
-  }, [])
-  return files
-}
 
 export default function LootItemsPage() {
   const { rarities, items, setItems, order, busy, save, dirty } = useLoot()
@@ -150,9 +138,8 @@ export default function LootItemsPage() {
               <Form.Item label="面值（1-9999999）"><InputNumber min={1} max={9999999} className="!w-full" value={draft.baseValue} onChange={(v) => setDraft({ ...draft, baseValue: v ?? 50 })} /></Form.Item>
               <Form.Item label="图标 emoji（没图片时显示）"><Input value={draft.emoji} maxLength={4} onChange={(e) => setDraft({ ...draft, emoji: e.target.value })} /></Form.Item>
               <Form.Item label="图片（留空则用 emoji）">
-                <Select allowClear showSearch placeholder={images.length ? "选择图片…" : "暂无图片（把图放到 C 端 public/loot/）"}
-                  value={draft.image || undefined} options={images.map((f) => ({ value: f, label: f }))}
-                  onChange={(v) => setDraft({ ...draft, image: typeof v === "string" ? v : "" })} />
+                <ImageSelect value={draft.image} images={images}
+                  onChange={(v) => setDraft({ ...draft, image: v })} />
               </Form.Item>
               <Form.Item label="回收价覆盖（留空 = 按比例）">
                 <InputNumber min={0} max={9999999} className="!w-full" placeholder="留空即可"

@@ -10,7 +10,7 @@ import { Plus } from "lucide-react"
 import { toast } from "@/lib/toast"
 import { DataTable, actionColumn } from "@/components/admin"
 import { useLoot } from "../_shared/store"
-import { actBtns, emptyHint, PageHead } from "../_shared/ui"
+import { actBtns, emptyHint, ImageSelect, PageHead, useLootImages } from "../_shared/ui"
 import {
   blankContainer, sanitizeContainer, DEFAULT_WEIGHTS, labelMap, tagColorMap, containerTier,
   type ContainerDef, type Rarity,
@@ -26,6 +26,7 @@ const gridText = (c: ContainerDef) => {
 export default function LootContainersPage() {
   const { rarities, containers, setContainers, tables, items, order, busy, save, dirty } = useLoot()
   const [draft, setDraft] = useState<ContainerDef | null>(null)
+  const images = useLootImages()
 
   const LABEL = useMemo(() => labelMap({ rarities }), [rarities])
   const TAG = useMemo(() => tagColorMap({ rarities }), [rarities])
@@ -85,7 +86,15 @@ export default function LootContainersPage() {
     setDraft((d) => d ? { ...d, rarityWeights: { ...d.rarityWeights, [r]: v } } : d)
 
   const columns = [
-    { title: "容器", dataIndex: "name", render: (_: any, c: ContainerDef) => <span className="font-medium text-zinc-800 dark:text-zinc-100">{c.emoji} {c.name}</span> },
+    { title: "容器", dataIndex: "name", render: (_: any, c: ContainerDef) => (
+      <span className="flex items-center gap-2 font-medium text-zinc-800 dark:text-zinc-100">
+        {c.image
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img src={c.image} alt={c.name} className="h-6 w-6 object-contain" />
+          : <span className="text-base">{c.emoji}</span>}
+        {c.name}
+      </span>
+    ) },
     { title: "档位", dataIndex: "id", width: 84, render: (_: any, c: ContainerDef) => {
       const t = containerTier(c, order)
       return <Tag color={TAG[t]} className="!m-0">{LABEL[t] ?? t}</Tag>
@@ -147,6 +156,9 @@ export default function LootContainersPage() {
             <div className="grid grid-cols-2 gap-x-4">
               <Form.Item label="名称" required><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Form.Item>
               <Form.Item label="外观 emoji"><Input value={draft.emoji} maxLength={4} onChange={(e) => setDraft({ ...draft, emoji: e.target.value })} /></Form.Item>
+              <Form.Item label="图标（留空则用 emoji）">
+                <ImageSelect value={draft.image} images={images} onChange={(v) => setDraft({ ...draft, image: v })} />
+              </Form.Item>
             </div>
 
             {/* 网格：列/行各给一个区间，开局按 seed 掷一个值 */}

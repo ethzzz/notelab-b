@@ -217,6 +217,8 @@ export interface ContainerDef {
   pity: Pity | null
   tableId: string
   emoji: string
+  /** 容器图标（相对 C 端 public 根，如 `/loot/ct-crate.png`）；有图前台优先显示图 */
+  image: string
 }
 
 // ---------------- 掉落表 ----------------
@@ -307,7 +309,7 @@ export const blankItem = (): ItemDef => ({
 export const blankContainer = (order: string[]): ContainerDef => ({
   id: `ct-${uid36()}`, name: "", colsMin: 2, colsMax: 2, rowsMin: 2, rowsMax: 2,
   fillRate: 0.75, slotMs: 800, rarityWeights: DEFAULT_WEIGHTS(order),
-  riskCost: 1, pity: null, tableId: "", emoji: "📦",
+  riskCost: 1, pity: null, tableId: "", emoji: "📦", image: "",
 })
 
 export const blankTable = (): TableDef => ({ id: `lt-${uid36()}`, name: "", pool: [] })
@@ -425,6 +427,7 @@ export function sanitizeContainer(raw: any, order: string[]): ContainerDef | nul
     pity: sanitizePity(raw.pity, order),
     tableId,
     emoji: str(raw.emoji, "📦"),
+    image: str(raw.image),
   }
 }
 
