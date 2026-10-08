@@ -153,6 +153,12 @@ const wss = new WebSocketServer({ noServer: true })
 
 // 握手即鉴权：未登录 / 非 B 端会话一律不升级
 server.on('upgrade', async (req, socket, head) => {
+  // 只处理**真正的** WebSocket 升级。其它带 Upgrade 头的请求（典型：Java HttpClient 默认
+  // HTTP/2，对明文 http:// 会先发 h2c 探测）必须放行给 HTTP 处理器语义，不能当非法 WS 路径拒掉。
+  if (String(req.headers.upgrade || '').toLowerCase() !== 'websocket') {
+    console.log(`[ws] 忽略非 websocket 的 upgrade（${req.headers.upgrade || '空'} ${req.url}）`)
+    return rejectUpgrade(socket, 400, 'Bad Request')
+  }
   let pathname = ''
   try {
     pathname = new URL(req.url || '/', 'http://localhost').pathname
