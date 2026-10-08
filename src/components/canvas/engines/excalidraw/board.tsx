@@ -240,11 +240,14 @@ export default function Board({ roomId }: { roomId: string }) {
     })
     collabRef.current = collab
     collab.connect()
+    // ⚠️ **必须在 return 之前**：useEffect 的回调在 return 之后就结束了，
+    //    写在 return 之后等于死代码 —— 曾经就这么错过一次，表现为「光标标签一直是空的」。
+    //    刻意不 await：显示名只是光标旁的标签，晚到一会儿无妨，不该阻塞连接。
+    void loadMyName().then((n) => { meNameRef.current = n })
     return () => {
       collab.close()
       collabRef.current = null
     }
-    void loadMyName().then((n) => { meNameRef.current = n })
   }, [roomId, applyRemote, renderPeers])
 
   const initialData = useMemo(() => {
