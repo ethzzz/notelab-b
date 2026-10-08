@@ -222,7 +222,7 @@ export class ExcalidrawCollab {
    * 补发出去毫无意义，反而会在重连瞬间闪现一串过时位置。丢了就等下一帧。
    * （节流在调用方 board.tsx 做，因为它才知道画布的实际事件频率。）
    */
-  sendPresence(p: { x: number; y: number; tool?: string; button?: string }) {
+  sendPresence(p: { x: number; y: number; tool?: string; button?: string; username?: string }) {
     const ws = this.ws
     if (!ws || ws.readyState !== 1) return
     try {
@@ -232,6 +232,8 @@ export class ExcalidrawCollab {
         y: p.y,
         tool: p.tool || "pointer",
         button: p.button || "up",
+        // 显示名由客户端提供、服务端原样转发（光标标签只是提示，不参与任何鉴权）
+        username: p.username || "",
       }))
     } catch {
       /* ignore */
