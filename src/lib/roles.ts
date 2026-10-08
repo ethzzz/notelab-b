@@ -33,7 +33,7 @@ export function roleIcon(code: string): string {
 export function roleHint(code: string): string {
   if (code === ROLE_SUPER_ADMIN) return "默认拥有全部路由（含未来自动注册的新路由），无需分配"
   if (code === ROLE_USER) return "分配路由组后，成员菜单即时生效"
-  if (code === ROLE_EXTERNAL) return "外部账号：默认只有仪表盘，其余路由需手工分配；不可删除、不可提升为超管"
+  if (code === ROLE_EXTERNAL) return "外部账号：默认只给仪表盘，其余需手工分配"
   return "分配路由组后，成员菜单即时生效"
 }
 
