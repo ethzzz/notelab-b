@@ -170,6 +170,9 @@ export default function EnglishPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
+        // 该 route handler 现在要求 B 端会话（见 lib/server-auth.ts）。
+        // 同源请求本就会带 cookie，这里显式写出来是为了让「需要登录」在调用点可见。
+        credentials: "include",
         signal: ac.signal,
       })
       clearTimeout(timer)

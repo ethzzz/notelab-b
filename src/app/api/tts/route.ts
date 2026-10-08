@@ -3,6 +3,7 @@
 // POST /api/tts  body: { text: string, voice?: string, rate?: "default" | "slow" }  -> audio/mpeg
 import { NextResponse } from "next/server"
 import { EdgeTTS } from "node-edge-tts"
+import { bSession } from "@/lib/server-auth"
 import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -104,6 +105,13 @@ async function edgeSynthesizeOnce(voice: string, lang: string, rate: string, tex
 }
 
 export async function POST(req: Request) {
+  // ⚠️ 鉴权放**最前面**（在解析 body、查缓存之前）—— 匿名请求不该享受到任何后续处理，
+  //    也不该有机会命中缓存去探测「哪些文本已经被合成过」。
+  //    背景：route handler 不受前端页面守卫保护，此前匿名调用直接 200 + 返回音频（见 lib/server-auth.ts）。
+  if (!(await bSession(req))) {
+    return NextResponse.json({ error: "请先登录" }, { status: 401 })
+  }
+
   let body: any
   try {
     body = await req.json()
