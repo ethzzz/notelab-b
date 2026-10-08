@@ -1,0 +1,19 @@
+{
+  "name": "notelab-collab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "NoteLab 协作画布的同步服务：每房间一个 TLSocketRoom，内容持久化到本地 SQLite",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "health": "node -e \"fetch('http://127.0.0.1:3030/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e.message);process.exit(1)})\""
+  },
+  "dependencies": {
+    "@tldraw/sync-core": "5.5.2",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

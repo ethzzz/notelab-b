@@ -1,0 +1,4 @@
+# 协作服务产物：SQLite 数据文件与依赖都不入库
+node_modules/
+data/
+*.log
