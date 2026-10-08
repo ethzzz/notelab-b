@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "NoteLab 协作画布的同步服务：每房间一个 TLSocketRoom，内容持久化到本地 SQLite",
+  "description": "NoteLab 协作画布的同步服务：多引擎（tldraw / excalidraw）按 URL 分派，内容持久化到本地 SQLite",
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs",
