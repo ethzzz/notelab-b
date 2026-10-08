@@ -7,6 +7,7 @@ import { toast } from "@/lib/toast"
 import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result, Tabs } from "antd"
 import { Plus, ShieldCheck, Pencil, Users } from "lucide-react"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
+import { ROLE_EXTERNAL, ROLE_SUPER_ADMIN, ROLE_USER, isBuiltinRole, roleAssignNotice, roleHint, roleIcon } from "@/lib/roles"
 
 type Route = { code: string; path: string; method: string; kind: string; name: string }
 type Role = { code: string; name: string; route_codes: string[] }
@@ -106,7 +107,7 @@ export default function UserRolesPage() {
     try {
       // 先加后移：这样中途失败时已生效的是「加入」，不会先把人踢出组造成临时失去权限
       if (nAdd) await postJson("/api/perm/users/batch-role", { ids: addIds, role: managing.code })
-      if (nDel) await postJson("/api/perm/users/batch-role", { ids: removeIds, role: "user" })
+      if (nDel) await postJson("/api/perm/users/batch-role", { ids: removeIds, role: ROLE_USER })
       toast.success(`「${managing.name}」成员已更新：加入 ${nAdd} 人、移出 ${nDel} 人`)
       setManaging(null)
       load()
@@ -185,7 +186,8 @@ export default function UserRolesPage() {
         <Space size={6}>
           <span className="font-medium text-zinc-800 dark:text-zinc-100">{v}</span>
           {u.id === ov.me.id && <Tag color="processing">我</Tag>}
-          {u.role === "super_admin" && <Tag color="gold">👑 超管</Tag>}
+          {u.role === ROLE_SUPER_ADMIN && <Tag color="gold">👑 超管</Tag>}
+          {u.role === ROLE_EXTERNAL && <Tag color="cyan">🏷️ 外部</Tag>}
         </Space>
       ),
     },
@@ -198,36 +200,35 @@ export default function UserRolesPage() {
       title: "角色组", dataIndex: "name",
       render: (_: any, r: Role) => (
         <Space size={6}>
-          <span>{r.code === "super_admin" ? "👑" : r.code === "user" ? "🙋" : "🛡️"}</span>
+          <span>{roleIcon(r.code)}</span>
           <span className="font-medium text-zinc-800 dark:text-zinc-100">{r.name}</span>
           <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono">{r.code}</span>
-          {(r.code === "super_admin" || r.code === "user") && <Tag>内置</Tag>}
+          {isBuiltinRole(r.code) && <Tag>内置</Tag>}
         </Space>
       ),
     },
     { title: "成员数", width: 110, render: (_: any, r: Role) => <Tag>👤 {memberCount(r.code)} 名</Tag> },
     {
       title: "路由授权", width: 150,
-      render: (_: any, r: Role) => r.code === "super_admin"
+      render: (_: any, r: Role) => r.code === ROLE_SUPER_ADMIN
         ? <Tag color="gold">全部路由</Tag>
         : <Tag color="blue">🧭 {r.route_codes.length} 条</Tag>,
     },
     {
       title: "说明", dataIndex: "code",
-      render: (code: string) => code === "super_admin"
-        ? <span className="text-xs text-zinc-400 dark:text-zinc-500">默认拥有全部路由（含未来自动注册的新路由），无需分配</span>
-        : <span className="text-xs text-zinc-400 dark:text-zinc-500">分配路由组后，成员菜单即时生效</span>,
+      render: (code: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500">{roleHint(code)}</span>,
     },
-    actionColumn((_: any, r: Role) => r.code === "super_admin" ? null : (
+    actionColumn((_: any, r: Role) => r.code === ROLE_SUPER_ADMIN ? null : (
       <Space size={4}>
         <Button size="small" type="primary" ghost icon={<ShieldCheck size={13} />} onClick={() => openAssign(r)}>分配路由</Button>
         {/* 内置「普通用户」组不给批量入口：它的成员 = 所有未分到其它组的人，且「移出普通用户」无处可去，
             变更内置组成员请去「账户管理」用单人或批量设置 */}
-        {r.code !== "user" && (
+        {r.code !== ROLE_USER && (
           <Button size="small" type="text" icon={<Users size={13} />} onClick={() => openMembers(r)}>成员</Button>
         )}
         <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(r); setRenameVal(r.name) }}>重命名</Button>
-        {r.code !== "user" && (
+        {/* 内置角色组不提供删除入口（后端也会拒）—— external 与 user 同属内置 */}
+        {!isBuiltinRole(r.code) && (
           <Popconfirm title="删除角色组"
             description={`删除角色组「${r.name}」？${memberCount(r.code) > 0 ? `其下 ${memberCount(r.code)} 名成员将并入「普通用户」。` : ""}该操作不可恢复。`}
             okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => removeRole(r)}>
@@ -290,6 +291,9 @@ export default function UserRolesPage() {
               （受限的 /api/perm、/api/c-admin、/api/ui-config 不给，其余全给），在这里手工改的 api 勾选会在重启后被覆盖；
               页面路由（page:*）不受影响，任意调整都会被保留。
             </div>
+            {roleAssignNotice(assigning.code) && (
+              <div className="mt-2 text-xs text-cyan-700 dark:text-cyan-400">{roleAssignNotice(assigning.code)}</div>
+            )}
           </div>
         </Modal>
       )}

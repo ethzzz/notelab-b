@@ -7,6 +7,7 @@ import { toast } from "@/lib/toast"
 import { Modal, Form, Input, Select, Button, Tag, Popconfirm, Space, Result } from "antd"
 import { Plus, Pencil, KeyRound, Users } from "lucide-react"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
+import { ROLE_EXTERNAL, ROLE_SUPER_ADMIN, ROLE_USER, isExternalRole } from "@/lib/roles"
 
 type Role = { code: string; name: string; route_codes: string[] }
 type User = { id: number; username: string; email: string | null; role: string; created_at: string }
@@ -26,7 +27,7 @@ export default function UserAccountsPage() {
   const [loading, setLoading] = useState(false)
 
   const [createOpen, setCreateOpen] = useState(false)
-  const [nu, setNu] = useState({ username: "", email: "", password: "", role: "user" })
+  const [nu, setNu] = useState({ username: "", email: "", password: "", role: ROLE_USER })
   const [editing, setEditing] = useState<User | null>(null)
   const [editForm, setEditForm] = useState({ username: "", email: "" })
   const [pwdUser, setPwdUser] = useState<User | null>(null)
@@ -74,6 +75,10 @@ export default function UserAccountsPage() {
 
   const roleOptions = (ov?.roles || []).map((r) => ({ value: r.code, label: r.name }))
   const roleLabel = (code: string) => roleOptions.find((r) => r.value === code)?.label || code
+  /** 外部账号的「切换角色组」下拉里去掉「超级管理员」：后端也会 400 拦下，
+   *  这里先把它藏掉，避免点了才报错（要比的是"改之前"的角色，不能按目标角色算） */
+  const roleOptionsFor = (u: User) =>
+    isExternalRole(u.role) ? roleOptions.filter((o) => o.value !== ROLE_SUPER_ADMIN) : roleOptions
 
   async function createUser() {
     if (!nu.username || !nu.password) { toast.warning("用户名和密码必填"); return }
@@ -82,7 +87,7 @@ export default function UserAccountsPage() {
       await postJson("/api/perm/users", nu)
       toast.success("账户已创建")
       setCreateOpen(false)
-      setNu({ username: "", email: "", password: "", role: "user" })
+      setNu({ username: "", email: "", password: "", role: ROLE_USER })
       refresh({ gotoLastPage: true })
     } catch (e: any) { toast.error(e.message || "创建失败") }
     setBusy(false)
@@ -165,14 +170,15 @@ export default function UserAccountsPage() {
         <Space size={6}>
           <span className="font-medium text-zinc-800 dark:text-zinc-100">{u.username}</span>
           {u.id === ov.me.id && <Tag color="processing">我</Tag>}
-          {u.role === "super_admin" && <Tag color="gold">👑 超管</Tag>}
+          {u.role === ROLE_SUPER_ADMIN && <Tag color="gold">👑 超管</Tag>}
+          {u.role === ROLE_EXTERNAL && <Tag color="cyan">🏷️ 外部</Tag>}
         </Space>
       ),
     },
     { title: "邮箱", dataIndex: "email", render: (v: string | null) => <span className="text-zinc-500 dark:text-zinc-400">{v || "—"}</span> },
     {
       title: "角色", dataIndex: "role", width: 170,
-      render: (_: any, u: User) => <Select size="small" value={u.role} onChange={(v) => confirmChangeRole(u, v)} options={roleOptions} className="w-36" />,
+      render: (_: any, u: User) => <Select size="small" value={u.role} onChange={(v) => confirmChangeRole(u, v)} options={roleOptionsFor(u)} className="w-36" />,
     },
     { title: "创建时间", dataIndex: "created_at", render: (v: string) => <span className="text-zinc-400 dark:text-zinc-500 text-xs">{String(v || "").slice(0, 16)}</span> },
     actionColumn((_: any, u: User) => (
@@ -188,7 +194,7 @@ export default function UserAccountsPage() {
   ]
 
   return (
-    <AdminPage title="账户管理" description="管理 B 端账户：创建、编辑信息、重置密码、切换角色组与批量改属。注册入口已关闭，统一由此建号。">
+    <AdminPage title="账户管理" description="管理 B 端账户：创建、编辑信息、重置密码、切换角色组与批量改属。注册入口已关闭，统一由此建号。给外部人员用的账号请选「外部账号」角色组——只能由你建号/改密，且只能登录本后台。">
       <div className="flex flex-wrap items-center gap-2">
         <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>创建账户</Button>
         <Button icon={<Users size={14} />} disabled={!selIds.length}
@@ -228,7 +234,9 @@ export default function UserAccountsPage() {
           <Form.Item label="密码" required extra="至少 6 位">
             <Input.Password placeholder="设置登录密码" value={nu.password} onChange={(e) => setNu({ ...nu, password: e.target.value })} />
           </Form.Item>
-          <Form.Item label="角色">
+          <Form.Item label="角色" extra={nu.role === ROLE_EXTERNAL
+            ? "外部账号：默认只能看到「仪表盘」，权限到「角色组管理 → 分配路由」里加；密码只能由超管重置。"
+            : undefined}>
             <Select value={nu.role} onChange={(v) => setNu({ ...nu, role: v })} options={roleOptions} />
           </Form.Item>
         </Form>
@@ -273,8 +281,11 @@ export default function UserAccountsPage() {
         </Form>
         <div className="text-xs text-zinc-400 dark:text-zinc-500">
           一个账户只属于一个用户组，故这是「改属」而非「追加」。
-          {batchRole === "super_admin" && (
-            <span className="text-amber-600 dark:text-amber-500">批量移入「超级管理员」会赋予全部路由权限（含未来新增），请谨慎。</span>
+          {batchRole === ROLE_SUPER_ADMIN && (
+            <span className="text-amber-600 dark:text-amber-500">
+              批量移入「超级管理员」会赋予全部路由权限（含未来新增），请谨慎。
+              所选账户中若含「外部账号」，后端会整批拒绝——外部账号不可直接提升为超管。
+            </span>
           )}
         </div>
       </Modal>
