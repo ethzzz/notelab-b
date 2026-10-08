@@ -36,6 +36,21 @@ const assets: TLAssetStore = {
   },
 }
 
+/**
+ * ⚠️ tldraw SDK 自 4.0 起为**商业授权**（source available，非 MIT/Apache）：
+ *    - 开发环境不需要 key（HTTP 页面 / localhost/127.x / NODE_ENV≠production，满足任一即可）
+ *    - **生产环境必须提供有效 license key**，否则 SDK 先渲染约 5 秒、然后停止渲染编辑器
+ *      （DOM 里只剩一个隐藏的 license 占位），表现为白屏 —— 不是代码 bug，是授权校验。
+ *
+ *    非商业项目可申请免费的 **Hobby License**：https://tldraw.dev/pricing
+ *    （需保留 "made with tldraw" 水印；提交后官方一般先发 14 天临时 key，正式 key 随后）
+ *
+ *    拿到 key 后：写进服务器 `/root/Notelab/notelab-b/.env.production` 的
+ *    `NEXT_PUBLIC_TLDRAW_LICENSE_KEY=...`，然后重新 `npm run build`（NEXT_PUBLIC_ 前缀在
+ *    **构建期内联**，改完必须重新构建，光 restart 不生效）。
+ */
+const LICENSE_KEY = process.env.NEXT_PUBLIC_TLDRAW_LICENSE_KEY || ""
+
 export default function CanvasBoard({ roomId }: { roomId: string }) {
   const uri = useMemo(() => collabUri(roomId), [roomId])
   // useSync：建立到协作服务的 WebSocket，并把远端文档当作 store 的真相来源
@@ -43,7 +58,7 @@ export default function CanvasBoard({ roomId }: { roomId: string }) {
 
   return (
     <div className="absolute inset-0 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm">
-      <Tldraw store={store} />
+      <Tldraw store={store} licenseKey={LICENSE_KEY || undefined} />
     </div>
   )
 }
