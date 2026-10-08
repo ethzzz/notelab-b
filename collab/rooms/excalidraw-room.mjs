@@ -14,10 +14,19 @@
 //
 // ── 协议（JSON over WebSocket）──────────────────────────────────────────────
 //   服务端 → 客户端
-//     {type:"init",   elements:[...], files:{...}}        连上时下发全量
-//     {type:"update", elements:[...], files:{...}, removed:[ids]}   别人的增量
+//     {type:"init",     elements:[...], files:{...}}      连上时下发全量
+//     {type:"update",   elements:[...], files:{...}, removed:[ids]}  别人的增量
+//     {type:"presence", peers:[...] | peer:{...} | gone:"p3"}       光标（见下）
 //   客户端 → 服务端
-//     {type:"update", elements:[...], files:{...}, removed:[ids]}   自己的增量
+//     {type:"update",   elements:[...], files:{...}, removed:[ids]}  自己的增量
+//     {type:"presence", x, y, tool?, button?, username?}             自己的光标
+//
+// ── presence（协作者光标）与文档内容**完全分道**──────────────────────────────
+// presence **不落盘、不判重、不参与版本协调**，只做「改一下内存里的字段 + 转发给其他人」。
+// 它丢一帧无所谓（下一帧就补上了），所以刻意不做任何可靠性处理 —— 反过来，
+// 如果把它混进 update 流，光标移动会污染 dirty 标记（每动一下就触发落盘）。
+// ⚠️ 坐标是**场景坐标**：客户端用 Excalidraw 的 viewportCoordsToSceneCoords 换算过，
+//    这样别人缩放/平移画布后，你的光标仍钉在同一个图形上。
 //
 // ── 协调策略：元素级 LWW ─────────────────────────────────────────────────────
 // 同 id 比 version，version 相同比 versionNonce。这与 Excalidraw 官方
@@ -43,6 +52,35 @@ const MAX_SCENE_BYTES = 12 * 1024 * 1024
 const rooms = new Map()
 
 let seq = 0
+
+/** 协作者光标配色（沿用 Excalidraw 官方协作那套，视觉上和别处一致） */
+const PEER_COLORS = [
+  { background: '#FFC9C9', stroke: '#E03131' },
+  { background: '#B2F2BB', stroke: '#2F9E44' },
+  { background: '#A5D8FF', stroke: '#1971C2' },
+  { background: '#FFEC99', stroke: '#F08C00' },
+  { background: '#D0BFFF', stroke: '#7048E8' },
+  { background: '#FFD8A8', stroke: '#E8590C' },
+  { background: '#C3FAE8', stroke: '#0CA678' },
+  { background: '#E599F7', stroke: '#9C36B5' },
+]
+
+/** 显示名上限：光标标签只是提示，截断防脏数据 */
+const MAX_USERNAME = 40
+
+/** 把一个连接上的 presence 字段聚成 peer 对象（给客户端直接喂 Collaborator 用） */
+function peerOf(ws) {
+  return {
+    peerId: ws.__peerId,
+    userId: ws.__userId ?? null,
+    username: ws.__username || '',
+    color: ws.__color,
+    x: ws.__x ?? 0,
+    y: ws.__y ?? 0,
+    tool: ws.__tool || 'pointer',
+    button: ws.__button || 'up',
+  }
+}
 
 function getState(roomId) {
   let st = rooms.get(roomId)
@@ -177,14 +215,27 @@ function safeSend(ws, obj) {
   }
 }
 
-export function attach(roomId, ws) {
+export function attach(roomId, ws, who) {
   const st = getState(roomId)
   const cid = ++seq
   ws.__cid = cid
+  // presence 身份：peerId 进程内唯一，颜色轮转分配，userId 来自服务端验过的会话
+  ws.__peerId = `p${cid}`
+  ws.__color = PEER_COLORS[cid % PEER_COLORS.length]
+  ws.__userId = who && who.id != null ? who.id : null
+  ws.__username = ''
+  ws.__x = 0
+  ws.__y = 0
+  ws.__tool = 'pointer'
+  ws.__button = 'up'
   st.clients.add(ws)
 
   // 连上先给全量：客户端拿到后作为 initialData 挂载编辑器
   safeSend(ws, { type: 'init', elements: [...st.elements.values()], files: st.files })
+  // 再把"房间里当前有谁"推给新人（不含自己）—— 否则要等别人先动一下才看得到光标
+  const others = []
+  for (const peer of st.clients) if (peer !== ws) others.push(peerOf(peer))
+  safeSend(ws, { type: 'presence', peers: others })
   console.log(`[excalidraw] join ${roomId} #${cid} (clients=${st.clients.size})`)
 
   ws.on('message', (raw) => {
@@ -194,7 +245,26 @@ export function attach(roomId, ws) {
     } catch {
       return
     }
-    if (!msg || msg.type !== 'update') return
+    if (!msg) return
+
+    // ── 光标：纯转发，不落盘、不判重、不碰 dirty ──────────────────────────
+    if (msg.type === 'presence') {
+      if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y)) return
+      ws.__x = msg.x
+      ws.__y = msg.y
+      if (msg.tool === 'laser' || msg.tool === 'pointer') ws.__tool = msg.tool
+      if (msg.button === 'down' || msg.button === 'up') ws.__button = msg.button
+      if (typeof msg.username === 'string' && msg.username) {
+        ws.__username = msg.username.slice(0, MAX_USERNAME)
+      }
+      const out = { type: 'presence', peer: peerOf(ws) }
+      for (const peer of st.clients) {
+        if (peer !== ws) safeSend(peer, out)
+      }
+      return
+    }
+
+    if (msg.type !== 'update') return
     const changed = applyUpdate(st, msg)
     if (!changed.elements.length && !Object.keys(changed.files).length && !changed.removed.length) {
       return // 无实质变化 → 不广播，回声放大在此终止
@@ -208,6 +278,10 @@ export function attach(roomId, ws) {
 
   ws.on('close', () => {
     st.clients.delete(ws)
+    // 广播"某人走了"，否则他的光标会一直停在最后的位置不消失。
+    // ⚠️ 必须在 delete 之后发（否则退出的那个人自己也会收到）。
+    const gone = { type: 'presence', gone: ws.__peerId }
+    for (const peer of st.clients) safeSend(peer, gone)
     // 最后一个人走了就立刻落盘，不等防抖（否则进程正好在这 800ms 内挂掉会丢数据）
     if (st.clients.size === 0) {
       if (st.timer) {

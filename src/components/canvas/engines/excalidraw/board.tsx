@@ -12,19 +12,34 @@
 //    服务端也是按这两个字段判新旧（同口径），所以直接用官方函数最不容易出偏差。
 // 3. **远端更新必须重置「已同步基线」**。否则远端内容会被 onChange 当成"本地新变化"再回发，
 //    A→B→A 来回放大（虽然服务端有判重能兜住，但会白烧带宽）。见 applyRemote 里的注释。
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CaptureUpdateAction, Excalidraw, reconcileElements } from "@excalidraw/excalidraw"
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import { CaptureUpdateAction, Excalidraw, reconcileElements, viewportCoordsToSceneCoords } from "@excalidraw/excalidraw"
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types"
 import "@excalidraw/excalidraw/index.css"
 import { Spin } from "antd"
+import { apiJson } from "@/lib/api"
 import { collabUri } from "@/lib/canvas"
 import {
   ExcalidrawCollab, stampOf,
-  type ConnStatus, type Diff, type RawElement, type RawFile, type Scene,
+  type ConnStatus, type Diff, type Peer, type RawElement, type RawFile, type Scene,
 } from "./collab"
 
 /** 发送节流：拖动一个矩形会触发几十次 onChange，攒 120ms 再发一次，手感不变但流量降一个量级 */
 const SEND_INTERVAL_MS = 120
+
+/** 光标广播节流。与内容发送同频但**互不影响**：presence 丢了下一帧就补上，不需要可靠性 */
+const PRESENCE_INTERVAL_MS = 120
+
+/** 自己的显示名：整页只取一次，多个画布组件共享同一个 Promise（取不到就匿名显示，不影响协作） */
+let myNamePromise: Promise<string> | null = null
+function loadMyName(): Promise<string> {
+  if (!myNamePromise) {
+    myNamePromise = apiJson<{ username?: string }>("/api/me")
+      .then((me) => me?.username || "")
+      .catch(() => "")
+  }
+  return myNamePromise
+}
 
 type Pending = {
   elements: Map<string, RawElement>
@@ -48,6 +63,52 @@ export default function Board({ roomId }: { roomId: string }) {
   const pendingRef = useRef<Pending>(emptyPending())
   /** 是否已经用 init 挂载过编辑器（重连时的 init 要走 updateScene 而不是重新挂载） */
   const mountedRef = useRef(false)
+  /** 别人的光标：peerId → Peer。与文档元素两条**完全独立**的通道，不参与版本判定 */
+  const peersRef = useRef<Map<string, Peer>>(new Map())
+  const meNameRef = useRef<string>("")
+  const lastPresenceRef = useRef(0)
+
+  /**
+   * 把 peersRef 渲染成 Excalidraw 的 `appState.collaborators`。
+   *
+   * <p>⚠️ 这里走的是 `updateScene({ collaborators })`，**不碰 elements** ——
+   * 所以既不会触发我们的 onChange 发送（diff 为空），也不会进 undo 栈。
+   */
+  const renderPeers = useCallback(() => {
+    const api = apiRef.current
+    if (!api) return
+    const map = new Map<string, unknown>()
+    for (const p of peersRef.current.values()) {
+      map.set(p.peerId, {
+        id: p.peerId,
+        username: p.username || undefined,
+        color: p.color,
+        pointer: { x: p.x, y: p.y, tool: p.tool === "laser" ? "laser" : "pointer" },
+        button: p.button === "down" ? "down" : "up",
+      })
+    }
+    api.updateScene({ collaborators: map as never })
+  }, [])
+
+  /**
+   * 广播自己的光标。
+   *
+   * <p>⚠️ 必须把**视口坐标换算成场景坐标**：Excalidraw 的 `Collaborator.pointer` 用的是场景坐标，
+   * 这样别人缩放 / 平移画布后，你的光标仍然钉在同一个图形上（直接用屏幕坐标会随缩放飘走）。
+   */
+  const onPointerMove = useCallback((e: ReactPointerEvent) => {
+    const api = apiRef.current
+    const collab = collabRef.current
+    if (!api || !collab) return
+    const now = Date.now()
+    if (now - lastPresenceRef.current < PRESENCE_INTERVAL_MS) return
+    lastPresenceRef.current = now
+    const scene = viewportCoordsToSceneCoords(
+      { clientX: e.clientX, clientY: e.clientY },
+      api.getAppState() as never,
+    )
+    collab.sendPresence({ x: scene.x, y: scene.y, username: meNameRef.current })
+  }, [])
 
   const flush = useCallback(() => {
     const q = pendingRef.current
@@ -166,6 +227,16 @@ export default function Board({ roomId }: { roomId: string }) {
       },
       onDiff: (d) => applyRemote(d.elements, d.files, d.removed),
       onStatus: setStatus,
+      onPresence: (ev) => {
+        if (ev.kind === "snapshot") {
+          peersRef.current = new Map(ev.peers.map((p) => [p.peerId, p]))
+        } else if (ev.kind === "update") {
+          peersRef.current.set(ev.peer.peerId, ev.peer)
+        } else {
+          peersRef.current.delete(ev.peerId)
+        }
+        renderPeers()
+      },
     })
     collabRef.current = collab
     collab.connect()
@@ -173,7 +244,8 @@ export default function Board({ roomId }: { roomId: string }) {
       collab.close()
       collabRef.current = null
     }
-  }, [roomId, applyRemote])
+    void loadMyName().then((n) => { meNameRef.current = n })
+  }, [roomId, applyRemote, renderPeers])
 
   const initialData = useMemo(() => {
     if (!scene) return null
@@ -196,12 +268,17 @@ export default function Board({ roomId }: { roomId: string }) {
   }
 
   return (
-    <div className="absolute inset-0 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm">
+    <div
+      className="absolute inset-0 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm"
+      onPointerMove={onPointerMove}
+    >
       <Excalidraw
         initialData={initialData}
         onChange={onChange as never}
         excalidrawAPI={(api) => {
           apiRef.current = api
+          // 编辑器就绪时把已经收到的 peers 补渲一次（presence 可能比 api 先到）
+          renderPeers()
         }}
         isCollaborating
         langCode="zh-CN"

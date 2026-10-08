@@ -41,10 +41,38 @@ export type Diff = {
 
 export type ConnStatus = "connecting" | "open" | "closed"
 
+/** 一位协作者的光标状态（peerId 与颜色由服务端在握手时分配，客户端只负责渲染） */
+export type Peer = {
+  peerId: string
+  /** 服务端验过的账号 id（握手已要求 B 端登录，所以一定有值；仅作展示用） */
+  userId?: number | null
+  username?: string
+  color: { background: string; stroke: string }
+  /** ⚠️ **场景坐标**，不是屏幕坐标 —— Excalidraw 的 `Collaborator.pointer` 用的就是场景坐标
+   *  （这样 A 缩放/平移画布后，B 看到的 A 光标仍钉在同一个图形上） */
+  x: number
+  y: number
+  tool?: string
+  button?: string
+}
+
+/**
+ * presence 事件。三种形态共用一个回调，免得调用方注册三个 handler：
+ *   snapshot —— 刚连上时服务端推的「当前房间有哪些人」
+ *   update   —— 某人的光标动了
+ *   gone     —— 某人断开
+ */
+export type PresenceEvent =
+  | { kind: "snapshot"; peers: Peer[] }
+  | { kind: "update"; peer: Peer }
+  | { kind: "gone"; peerId: string }
+
 export type CollabHandlers = {
   onInit: (scene: Scene) => void
   onDiff: (d: Required<Diff>) => void
   onStatus: (s: ConnStatus) => void
+  /** 可选：不看别人光标时可以不实现 */
+  onPresence?: (ev: PresenceEvent) => void
 }
 
 /** 版本戳：与服务端 isNewer() 同口径 */
@@ -100,7 +128,15 @@ export class ExcalidrawCollab {
     }
 
     ws.onmessage = (ev) => {
-      let msg: { type?: string; elements?: RawElement[]; files?: Record<string, RawFile>; removed?: string[] } | null = null
+      let msg: {
+        type?: string
+        elements?: RawElement[]
+        files?: Record<string, RawFile>
+        removed?: string[]
+        peers?: Peer[]
+        peer?: Peer
+        gone?: string
+      } | null = null
       try {
         msg = JSON.parse(typeof ev.data === "string" ? ev.data : String(ev.data))
       } catch {
@@ -111,6 +147,12 @@ export class ExcalidrawCollab {
         this.h.onInit({ elements: msg.elements || [], files: msg.files || {} })
       } else if (msg.type === "update") {
         this.h.onDiff({ elements: msg.elements || [], files: msg.files || {}, removed: msg.removed || [] })
+      } else if (msg.type === "presence") {
+        // presence 与文档内容**完全分道**：不入库、不参与版本判定、不进 backlog。
+        // 丢一帧下一帧就补上了，所以这里不做任何可靠性处理。
+        if (Array.isArray(msg.peers)) this.h.onPresence?.({ kind: "snapshot", peers: msg.peers })
+        else if (msg.peer) this.h.onPresence?.({ kind: "update", peer: msg.peer })
+        else if (typeof msg.gone === "string") this.h.onPresence?.({ kind: "gone", peerId: msg.gone })
       }
     }
 
@@ -170,6 +212,29 @@ export class ExcalidrawCollab {
     for (const id of diff.removed || []) {
       b.removed.add(id)
       b.elements.delete(id)
+    }
+  }
+
+  /**
+   * 发送自己的光标位置（场景坐标）。
+   *
+   * ⚠️ 刻意**不走 backlog**：presence 是**瞬时状态**不是内容 —— 断线期间攒下的旧坐标
+   * 补发出去毫无意义，反而会在重连瞬间闪现一串过时位置。丢了就等下一帧。
+   * （节流在调用方 board.tsx 做，因为它才知道画布的实际事件频率。）
+   */
+  sendPresence(p: { x: number; y: number; tool?: string; button?: string }) {
+    const ws = this.ws
+    if (!ws || ws.readyState !== 1) return
+    try {
+      ws.send(JSON.stringify({
+        type: "presence",
+        x: p.x,
+        y: p.y,
+        tool: p.tool || "pointer",
+        button: p.button || "up",
+      }))
+    } catch {
+      /* ignore */
     }
   }
 
