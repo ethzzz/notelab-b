@@ -89,6 +89,8 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
   const [collabLoading, setCollabLoading] = useState(false)
   const [inviteForm] = Form.useForm()
   const [inviting, setInviting] = useState(false)
+  /** 当前选中的受邀账户（用来「没选就禁用邀请按钮」—— 见表单处关于不用 rules 的说明） */
+  const [pickId, setPickId] = useState<number | null>(null)
 
   // 对账（元数据 ↔ 内容）
   const [reconOpen, setReconOpen] = useState(false)
@@ -157,6 +159,7 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
     setCollabList(null)
     setCollabLoading(true)
     inviteForm.resetFields()
+    setPickId(null)
     try {
       setCollabList(await listCollaborators(c.room_id))
       // 账户简表：列表接口通常会带，没带过就补一次（选人下拉要用）
@@ -171,12 +174,22 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
     }
   }
 
-  const doInvite = async (v: { user_id: number; permission: "view" | "edit" }) => {
+  /**
+   * 邀请 / 改权限。**刻意手动校验而不是用 antd 的 rules**：
+   * inline 表单里 rules 的校验提示会插到 Select 下方，把这一行从 32px 撑到 54px（实测），
+   * 「邀请」按钮随之错位到第二行的观感。这里改成「没选就禁用按钮 + 提交时 toast 兜底」，
+   * 一点布局空间都不占。
+   */
+  const doInvite = async () => {
     if (!collabOf) return
+    const v = inviteForm.getFieldsValue() as { user_id?: number; permission?: "view" | "edit" }
+    if (!v.user_id) { toast.warning("请先选择要邀请的账户"); return }
     setInviting(true)
     try {
-      setCollabList(await upsertCollaborator(collabOf.room_id, v.user_id, v.permission))
+      setCollabList(await upsertCollaborator(
+        collabOf.room_id, v.user_id, v.permission === "view" ? "view" : "edit"))
       inviteForm.resetFields()
+      setPickId(null)
       toast.success("已保存协作者权限")
       search(searchForm.getFieldsValue())
     } catch (e: unknown) {
@@ -419,22 +432,32 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
             <Tag className="!m-0">只读</Tag> 只能查看（服务端会拒掉写入）。未受邀的账户看不到入口、也打不开。
           </div>
 
+          {/* ⚠️ 邀请表单**刻意不给 Form.Item 加 rules**：inline 布局下 antd 的校验提示会插到
+              Select 下面（实测行高 32px → 54px），「邀请」按钮看起来就跳到另一行了。
+              改为「没选账户就禁用按钮」+ 提交时 toast 兜底 —— 不占布局空间，也不会提交空值。 */}
           {ownerCanManage && (
             <Form form={inviteForm} layout="inline" className="mb-4 flex flex-wrap items-center gap-2"
               initialValues={{ permission: "edit" }}
-              onFinish={(v) => void doInvite(v as { user_id: number; permission: "view" | "edit" })}>
-              <Form.Item name="user_id" rules={[{ required: true, message: "请选择账户" }]}>
+              onFinish={() => void doInvite()}>
+              <Form.Item name="user_id" className="!mb-0">
                 <Select showSearch placeholder="选择要邀请的后台账户" style={{ width: 250 }}
                   optionFilterProp="label"
+                  onChange={(v) => setPickId((v as number) ?? null)}
                   options={users
                     .filter((u) => u.id !== collabOf.created_by && u.role !== "super_admin" && !collaboratorIds.has(u.id))
                     .map((u) => ({ value: u.id, label: `${u.username}（#${u.id}）` }))} />
               </Form.Item>
-              <Form.Item name="permission">
+              <Form.Item name="permission" className="!mb-0">
                 <Select style={{ width: 120 }}
                   options={[{ value: "edit", label: "可编辑" }, { value: "view", label: "只读" }]} />
               </Form.Item>
-              <Button type="primary" htmlType="submit" loading={inviting} icon={<UserPlus size={14} />}>邀请</Button>
+              {/* 禁用按钮不触发 hover，Tooltip 要套一层 span 才生效 */}
+              <Tooltip title={pickId ? "" : "先从左侧选择要邀请的后台账户"}>
+                <span className="inline-flex">
+                  <Button type="primary" htmlType="submit" loading={inviting} disabled={!pickId}
+                    icon={<UserPlus size={14} />}>邀请</Button>
+                </span>
+              </Tooltip>
             </Form>
           )}
 
