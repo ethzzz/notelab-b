@@ -3,15 +3,28 @@
 // 说明：后端菜单树（Java MenuTree 常量）暂无本页面菜单项，入口由「权限管理」页提供（不改 Java 代码）
 import { useCallback, useEffect, useState } from "react"
 import {
-  Tabs, Button, Input, Select, Tag, Modal, Form, Space, Popconfirm, Card,
+  Tabs, Button, Input, Select, Tag, Modal, Form, Space, Popconfirm, Card, Tree,
 } from "antd"
-import { Plus, Pencil, KeyRound, Users, UserPlus } from "lucide-react"
+import { Plus, Pencil, KeyRound, Users, UserPlus, ShieldCheck } from "lucide-react"
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 
 type CUser = { id: number; username: string; nickname: string; group_code: string; status: string; created_at: string }
 type CGroup = { code: string; name: string; created_at: string; member_count: number }
+// C 端权限总览：只含 side='c' 的路由（C 端页面 + /api/c/** 接口），与 B 端「角色组管理」互不相通
+type CRoute = {
+  code: string; path: string; method: string; kind: string; name: string
+  /** 后端算好的模块键与展示名（model/ApiModules） */
+  module?: string
+  module_name?: string
+}
+type CPermOverview = {
+  routes: CRoute[]
+  groups: { code: string; name: string; member_count: number; route_codes: string[] }[]
+}
+/** 会话基础端点：CPermGuard 对它们一律放行，勾选与否不影响（界面标灰说明，仍可勾） */
+const C_SESSION_PATHS = ["/api/c/auth/login", "/api/c/auth/logout", "/api/c/auth/me", "/api/c/auth/register"]
 
 export default function CUsersPage() {
   const [tab, setTab] = useState("users")
@@ -27,6 +40,12 @@ export default function CUsersPage() {
 
   const [groups, setGroups] = useState<CGroup[]>([])
 
+  // ---------------- C 端用户组的路由授权（与 B 端角色组完全分开） ----------------
+  const [cRoutes, setCRoutes] = useState<CRoute[]>([])
+  const [groupRouteCodes, setGroupRouteCodes] = useState<Record<string, string[]>>({})
+  const [assigning, setAssigning] = useState<CGroup | null>(null)
+  const [draft, setDraft] = useState<string[]>([])
+
   const [createOpen, setCreateOpen] = useState(false)
   const [nu, setNu] = useState({ username: "", password: "", nickname: "", group_code: "default" })
   const [editing, setEditing] = useState<CUser | null>(null)
@@ -37,6 +56,18 @@ export default function CUsersPage() {
 
   const loadGroups = useCallback(() => {
     apiJson("/api/c-admin/groups").then((j) => setGroups(j.items || [])).catch(() => {})
+  }, [])
+
+  /** C 端路由清单 + 各用户组已持有的码（同一个接口里下发，避免两次请求拿到不一致的快照） */
+  const loadPerm = useCallback(() => {
+    apiJson<CPermOverview>("/api/c-admin/perm/overview")
+      .then((d) => {
+        setCRoutes(d.routes || [])
+        const m: Record<string, string[]> = {}
+        for (const g of d.groups || []) m[g.code] = g.route_codes || []
+        setGroupRouteCodes(m)
+      })
+      .catch(() => {})
   }, [])
 
   const fetchUsers = useCallback((p: number, s: number, kw: string, g?: string) => {
@@ -51,6 +82,7 @@ export default function CUsersPage() {
   }, [])
 
   useEffect(() => { loadGroups() }, [loadGroups])
+  useEffect(() => { loadPerm() }, [loadPerm])
   useEffect(() => { fetchUsers(page, pageSize, q, groupFilter) }, [page, pageSize, q, groupFilter, fetchUsers])
 
   /** 变更后刷新当前页；删页后当前页为空则回退一页 */
@@ -195,6 +227,24 @@ export default function CUsersPage() {
     } catch (e: any) { toast.error(e.message || "删除失败") }
   }
 
+  // ---------------- 分配 C 端路由 ----------------
+  function openAssign(g: CGroup) {
+    setAssigning(g)
+    setDraft([...(groupRouteCodes[g.code] || [])])
+  }
+
+  async function saveRoutes() {
+    if (!assigning) return
+    setBusy(true)
+    try {
+      const res: any = await postJson(`/api/c-admin/groups/${assigning.code}/routes`, { codes: draft })
+      toast.success(`「${assigning.name}」C 端路由已保存（${res.count ?? draft.length} 条）`)
+      setAssigning(null)
+      loadPerm()
+    } catch (e: any) { toast.error(e.message || "保存失败") }
+    setBusy(false)
+  }
+
   function openAddToGroup(g: CGroup) {
     setAddGroup(g)
     setIdsText("")
@@ -244,11 +294,16 @@ export default function CUsersPage() {
     { title: "名称", dataIndex: "name", render: (v: string, g: CGroup) => <span className="font-medium">{v}{g.code === "default" && <Tag className="!ml-2">默认</Tag>}</span> },
     { title: "成员数", dataIndex: "member_count", width: 110, render: (n: number) => <Tag>👤 {n} 名</Tag> },
     {
+      title: "C端路由", width: 120,
+      render: (_: any, g: CGroup) => <Tag color="blue">🧭 {(groupRouteCodes[g.code] || []).length} 条</Tag>,
+    },
+    {
       title: "创建时间", dataIndex: "created_at", width: 150,
       render: (v: string) => <span className="text-xs text-zinc-400 dark:text-zinc-500">{String(v || "").slice(0, 16)}</span>,
     },
     actionColumn((_: any, g: CGroup) => (
       <Space size={4}>
+        <Button size="small" type="primary" ghost icon={<ShieldCheck size={13} />} onClick={() => openAssign(g)}>分配路由</Button>
         <Button size="small" type="text" icon={<UserPlus size={13} />} onClick={() => openAddToGroup(g)}>添加用户</Button>
         <Button size="small" type="text" icon={<Pencil size={13} />} onClick={() => { setRenaming(g); setRenameVal(g.name) }}>重命名</Button>
         {g.code !== "default" && (
@@ -258,8 +313,64 @@ export default function CUsersPage() {
           </Popconfirm>
         )}
       </Space>
-    ), 230),
+    ), 300),
   ]
+
+  // ---------------- 分配路由弹窗的树（C 端页面 + 接口按模块分组） ----------------
+  const cPageRoutes = cRoutes.filter((r) => r.kind === "page")
+  const cApiRoutes = cRoutes.filter((r) => r.kind === "api")
+  const cByModule = new Map<string, CRoute[]>()
+  for (const r of cApiRoutes) {
+    const m = r.module || "c"
+    if (!cByModule.has(m)) cByModule.set(m, [])
+    cByModule.get(m)!.push(r)
+  }
+  const cApiNode = (r: CRoute) => ({
+    title: (
+      <span className={`text-xs font-mono ${C_SESSION_PATHS.includes(r.path)
+        ? "text-zinc-400 dark:text-zinc-500" : "text-zinc-500 dark:text-zinc-400"}`}>
+        {r.method} {r.path}
+      </span>
+    ),
+    key: r.code,
+    selectable: false,
+  })
+  const cRouteTree: any[] = []
+  if (cPageRoutes.length) {
+    cRouteTree.push({
+      title: `📱 C 端页面 · ${cPageRoutes.length} 条`,
+      key: "grp:cpages", selectable: false,
+      children: cPageRoutes.map((r) => ({
+        title: (
+          <span>
+            <span className="text-sm text-zinc-700 dark:text-zinc-200">{r.name}</span>
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono ml-1.5">{r.path}</span>
+          </span>
+        ),
+        key: r.code, selectable: false,
+      })),
+    })
+  }
+  if (cApiRoutes.length) {
+    cRouteTree.push({
+      title: `🔌 C 端接口 · ${cApiRoutes.length} 条`,
+      key: "grp:capis", selectable: false,
+      children: [...cByModule.entries()].map(([m, rs]) => {
+        const session = rs.every((r) => C_SESSION_PATHS.includes(r.path))
+        return {
+          title: (
+            <span className={`text-xs ${session ? "text-zinc-400 dark:text-zinc-500" : ""}`}>
+              {session ? "🔑" : "🔌"} {rs[0]?.module_name || m} · {rs.length} 条
+              {session && <span className="ml-1.5 font-sans not-italic">（会话基础，始终放行）</span>}
+            </span>
+          ),
+          key: `grp:cmod:${m}`, selectable: false,
+          children: rs.map(cApiNode),
+        }
+      }),
+    })
+  }
+  const cTopKeys = cRouteTree.map((n) => n.key)
 
   return (
     <AdminPage title="C 端用户管理" description="管理游戏中心（C 端）账号 · 接口 /api/c-admin/*">
@@ -406,6 +517,31 @@ export default function CUsersPage() {
           </Modal>
         )
       }      )()}
+
+      {/* 分配 C 端路由（只含 side='c' 的页面与接口） */}
+      {assigning && (
+        <Modal open onCancel={() => { if (!busy) setAssigning(null) }} title={`🛡️ 分配 C 端路由 · ${assigning.name}`} width={820}
+          okText={`保存（已选 ${draft.length}）`} cancelText="取消" confirmLoading={busy} onOk={saveRoutes} maskClosable={false}>
+          <div className="mt-2">
+            <Tree checkable defaultExpandedKeys={cTopKeys} height={420} treeData={cRouteTree}
+              checkedKeys={draft}
+              onCheck={(keys) => {
+                const arr = Array.isArray(keys) ? keys : keys.checked
+                // 只留真正的权限码（分组节点 key 以 grp: 开头，勾父节点时会带进来）
+                setDraft(arr.filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:")) as string[])
+              }} />
+            <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+              这里只配置 <b>C 端</b>路由（C 端页面 + <span className="font-mono">/api/c/**</span> 接口）。
+              B 端后台的页面与接口请到「角色组管理」分配 —— 两端身份体系不同，交叉配置不生效。
+              共 {cRoutes.length} 条 · 已勾选 {draft.length} 条
+            </div>
+            <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              新建用户组默认持有全部 C 端路由（不打断线上用户），所以在这里<b>取消勾选 = 收回权限</b>；
+              未登录用户不受影响（C 端内容下发 / 埋点本来就匿名可用）。
+            </div>
+          </div>
+        </Modal>
+      )}
     </AdminPage>
   )
 }

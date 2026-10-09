@@ -58,7 +58,7 @@ export default function PermPage() {
       </Card>
 
       <Card size="small" className="shadow-sm"
-        title={<span className="text-sm">🧭 权限路由表（共 {ov.routes.length} 条，启动时自动注册）</span>}>
+        title={<span className="text-sm">🧭 B 端权限路由表（共 {ov.routes.length} 条，启动时自动注册）</span>}>
         <DataTable size="small" rowKey="code" columns={columns as any}
           dataSource={[...pageRoutes, ...apiRoutes]} pagination={false} scroll={{ x: 720 }} />
         <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2 mb-0">
@@ -67,6 +67,9 @@ export default function PermPage() {
           <span className="text-teal-700 dark:text-teal-400">API 路由 api:*</span> 由后端 ApiPermInterceptor 按「默认拒绝」校验（缺码即 403）。
           <span className="font-medium text-amber-700 dark:text-amber-400">配权限时两层都要勾</span>
           —— 只勾页面会出现「页面能进、功能全 403」，只勾接口则「页面进不去、接口却能直接调」。
+          <br />
+          本表只列 <b>B 端</b>路由；C 端页面与 <span className="font-mono">/api/c/**</span> 接口归 C 端用户组持有，
+          在「C端用户管理 → 用户组 → 分配路由」里配置。
         </p>
       </Card>
     </AdminPage>

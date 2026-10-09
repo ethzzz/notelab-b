@@ -336,7 +336,7 @@ export default function UserRolesPage() {
   ]
 
   return (
-    <AdminPage title="角色组管理" description="给角色分配路由组后，成员菜单即时生效。">
+    <AdminPage title="角色组管理（B端）" description="给 B 端角色分配 B 端路由组后，成员菜单即时生效；C 端另有「C端用户管理 → 用户组」。">
       <div className="flex items-center gap-2">
         <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>创建角色组</Button>
         <span className="text-xs text-zinc-400 dark:text-zinc-500">共 {ov.roles.length} 个角色组 · 给角色分配路由组后，成员菜单即时生效</span>
@@ -387,6 +387,11 @@ export default function UserRolesPage() {
             <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
               按页面分组：展开页面即见它用到的接口，<b>勾选页面会连同接口一起勾上</b>（可单独取消）；
               爬塔/摸金等共用的接口挂在其分组节点上。共 {ov.routes.length} 条路由 · 已勾选 {draft.length} 条
+            </div>
+            {/* B/C 分流：本页只下发 B 端路由，C 端那套在 C 端用户管理页（按 c_user_groups 分配） */}
+            <div className="mt-1 text-xs text-cyan-700 dark:text-cyan-400">
+              本页只配置 <b>B 端后台</b>的页面与接口。C 端页面和 <span className="font-mono">/api/c/**</span> 接口
+              请到「C端用户管理 → 用户组 → 分配路由」配置 —— 两端身份体系不同，交叉配置不生效。
             </div>
             {/* 2026-09-27 起接口层是「默认拒绝」，api:* 真正生效。说明两件容易被误解的事。 */}
             <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
