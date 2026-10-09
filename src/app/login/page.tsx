@@ -18,7 +18,7 @@ export default function LoginPage() {
   async function externalLogin() {
     setExtLoading(true)
     try {
-      await postJson("/api/auth/external-login")
+      await postJson("/api/auth/external-login", {})
       await goNext()
     } catch (e: any) {
       toast.error(e.message || "外部登录失败")
