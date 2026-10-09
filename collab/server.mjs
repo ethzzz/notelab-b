@@ -14,6 +14,7 @@
 //   WS     /connect/<engine>/<roomId>   协作连接（engine ∈ tldraw|excalidraw）
 //   WS     /connect/<roomId>            兼容旧路径，等同 tldraw
 //   GET    /health                      健康检查（仅本机）
+//   GET    /rooms                       磁盘上的房间清单（仅本机）—— 供 Java 侧「元数据 ↔ 内容」对账
 //   DELETE /rooms/<roomId>              清理房间：**遍历所有引擎**逐个清（仅本机）
 //
 // ⚠️ 新增引擎只需两步：写 rooms/<name>-room.mjs（导出 engine/attach/drop/stats），
@@ -58,6 +59,22 @@ const server = createServer(async (req, res) => {
     if (!local) return json(res, 404, { error: 'not found' })
     const engines = {}
     for (const [name, mod] of ENGINES) engines[name] = mod.stats()
+    return json(res, 200, { ok: true, engines })
+  }
+
+  // 内部端点：磁盘上的房间清单（对账用）。与 /health、DELETE /rooms 同级别 —— 仅本机。
+  // ⚠️ 返回的是**磁盘现状**（扫 sqlite_master），不是进程内存里的活跃房间 ——
+  //    对账要回答「删元数据时清房间失败了没」，重启过的进程缓存回答不了这个问题。
+  if (req.method === 'GET' && url.pathname === '/rooms') {
+    if (!local) return json(res, 404, { error: 'not found' })
+    const engines = {}
+    for (const [name, mod] of ENGINES) {
+      try {
+        engines[name] = mod.inventory()
+      } catch (e) {
+        engines[name] = { error: String(e && e.message ? e.message : e) }
+      }
+    }
     return json(res, 200, { ok: true, engines })
   }
 

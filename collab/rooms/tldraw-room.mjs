@@ -9,11 +9,13 @@
 // 两个实例同时写同一个 storage 会互相覆盖。所以用 Map 缓存，进程内唯一。
 import { randomUUID } from 'node:crypto'
 import { TLSocketRoom, SQLiteSyncStorage, NodeSqliteWrapper } from '@tldraw/sync-core'
-import { db, tablesWithPrefix, dropTables } from '../lib/db.mjs'
+import { db, tablesWithPrefix, dropTables, roomIdsWithPrefix, rowsUnderPrefix } from '../lib/db.mjs'
 
 export const engine = 'tldraw'
 
-const prefixOf = (roomId) => `room_${roomId}_`
+/** 表名前缀基座；具体房间为 `${BASE}${roomId}_` */
+const BASE = 'room_'
+const prefixOf = (roomId) => `${BASE}${roomId}_`
 
 /** roomId → TLSocketRoom（进程内全局唯一） */
 const rooms = new Map()
@@ -60,6 +62,19 @@ export function drop(roomId) {
 
 export function stats() {
   return { open: rooms.size }
+}
+
+/**
+ * 磁盘上的房间清单（**只看表，不看内存缓存**）—— 供 server.mjs 的内部 `/rooms` 端点对账用。
+ * ⚠️ 不能用 `rooms` 这个 Map：它是进程内的活跃房间缓存，重启即空，
+ *    而磁盘上的表还在；对账要的恰恰是「磁盘上还剩什么」。
+ */
+export function inventory() {
+  return roomIdsWithPrefix(BASE).map((roomId) => ({
+    roomId,
+    tables: tablesWithPrefix(prefixOf(roomId)).length,
+    rows: rowsUnderPrefix(prefixOf(roomId)),
+  }))
 }
 
 export function closeAll() {

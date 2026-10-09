@@ -36,6 +36,38 @@ export function tableExists(name) {
   return !!row
 }
 
+/**
+ * 从表名反解出 roomId 集合（表名形如 `<prefix><roomId>_<suffix>`）。
+ *
+ * 用途：**对账**。房间表是懒建的，进程内存里的 `rooms` 缓存重启就空 —— 但磁盘上的表还在。
+ * 只扫 sqlite_master 才能拿到「真正有内容的房间」全集，这也是 Java 侧拿不到的那一半信息
+ * （元数据在 MySQL，内容在 SQLite，两边必须靠这份清单对账）。
+ * 返回按字典序，便于日志与断言比对。
+ */
+export function roomIdsWithPrefix(prefix) {
+  const ids = new Set()
+  for (const name of tablesWithPrefix(prefix)) {
+    const rest = name.slice(prefix.length)
+    const cut = rest.indexOf('_')
+    const id = cut === -1 ? rest : rest.slice(0, cut)
+    if (/^[0-9a-f]{16}$/.test(id)) ids.add(id)
+  }
+  return [...ids].sort()
+}
+
+/** 某前缀下所有表的总行数（粗粒度的「内容有多少」信号，别当字节数用） */
+export function rowsUnderPrefix(prefix) {
+  let total = 0
+  for (const name of tablesWithPrefix(prefix)) {
+    try {
+      total += Number(db.prepare(`SELECT COUNT(*) AS c FROM ${quoteIdent(name)}`).get().c)
+    } catch {
+      /* 表可能正被 drop（并发），忽略这一张 */
+    }
+  }
+  return total
+}
+
 /** 删除给定表，返回删掉的张数 */
 export function dropTables(names) {
   for (const n of names) {

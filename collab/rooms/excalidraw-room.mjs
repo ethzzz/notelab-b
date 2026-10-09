@@ -36,11 +36,13 @@
 // ⚠️ 服务端**只广播真正发生变化的元素**（version 变了 / 新元素 / 真删除）。
 //    这是打断「A 发→B 应用→B 回发→A 应用→…」回声放大循环的关键：B 应用远端更新后
 //    必然触发一次 onChange，如果服务端不判重，这条回发会再次广播，形成无限往返。
-import { db, tablesWithPrefix, dropTables, tableExists, quoteIdent } from '../lib/db.mjs'
+import { db, tablesWithPrefix, dropTables, tableExists, quoteIdent, roomIdsWithPrefix, rowsUnderPrefix } from '../lib/db.mjs'
 
 export const engine = 'excalidraw'
 
-const prefixOf = (roomId) => `exc_${roomId}_`
+/** 表名前缀基座；具体房间为 `${BASE}${roomId}_` */
+const BASE = 'exc_'
+const prefixOf = (roomId) => `${BASE}${roomId}_`
 const tableOf = (roomId) => `${prefixOf(roomId)}scene`
 
 /** 落盘防抖：拖动一个矩形会触发几十次 onChange，攒一下再写 */
@@ -322,6 +324,18 @@ export function drop(roomId) {
 
 export function stats() {
   return { open: rooms.size }
+}
+
+/**
+ * 磁盘上的房间清单（**只看表，不看内存缓存**）—— 供 server.mjs 的内部 `/rooms` 端点对账用。
+ * 与 tldraw 侧同构：重启后 `rooms` 缓存是空的，但表还在，对账要的是磁盘现状。
+ */
+export function inventory() {
+  return roomIdsWithPrefix(BASE).map((roomId) => ({
+    roomId,
+    tables: tablesWithPrefix(prefixOf(roomId)).length,
+    rows: rowsUnderPrefix(prefixOf(roomId)),
+  }))
 }
 
 /** 进程退出前把所有脏房间落盘 */

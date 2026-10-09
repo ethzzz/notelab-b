@@ -49,9 +49,12 @@ export type CanvasMeta = {
   updated_at: string
 }
 
-/** 列表：q 可选（模糊匹配标题） */
-export async function listCanvases(q?: string): Promise<CanvasMeta[]> {
-  const qs = q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""
+/** 列表：q 模糊匹配标题；engine 精确筛选（后端白名单校验，非法值会 400） */
+export async function listCanvases(q?: string, engine?: string): Promise<CanvasMeta[]> {
+  const p = new URLSearchParams()
+  if (q && q.trim()) p.set("q", q.trim())
+  if (engine) p.set("engine", engine)
+  const qs = p.toString() ? `?${p.toString()}` : ""
   const j = await apiJson<{ items: CanvasMeta[] }>(`/api/canvas${qs}`)
   return j.items || []
 }
@@ -75,8 +78,38 @@ export async function renameCanvas(roomId: string, title: string): Promise<void>
   })
 }
 
-export async function deleteCanvas(roomId: string): Promise<void> {
-  await apiJson(`/api/canvas/${roomId}`, { method: "DELETE" })
+/**
+ * 删除画布。返回值带 `purged` —— 元数据（MySQL）与内容（协作服务 SQLite）是**两个库**，
+ * 删除是跨进程两步且不回滚：`purged: false` 表示元数据已删、但协作服务没清掉房间，
+ * 已留下孤儿表（可在「对账」里清理）。调用方应当把这种情况提示给用户。
+ */
+export async function deleteCanvas(roomId: string): Promise<{ purged?: boolean; warning?: string }> {
+  return apiJson(`/api/canvas/${roomId}`, { method: "DELETE" })
+}
+
+// ---------------- 对账（元数据 ↔ 内容） ----------------
+// 背景：元数据在 MySQL，内容在协作服务的 SQLite，只靠 room_id 关联、删除又是跨进程两步，
+// 所以会攒下两类不一致。这里把后端的对账结果透出来。
+
+/** 有内容、没元数据 —— 删画布时清房间失败留下的垃圾，**可以清理** */
+export type OrphanContent = { roomId: string; engine: string; tables: number; rows: number }
+/** 有元数据、没内容 —— ⚠️ 绝大多数是正常的：房间表懒建，没打开过编辑器就没有表 */
+export type OrphanMeta = { roomId: string; title: string; engine: string; updated_at: string }
+
+export type ReconcileResult = {
+  metaCount: number
+  contentCount: number
+  orphanContent: OrphanContent[]
+  orphanMeta: OrphanMeta[]
+}
+
+export async function reconcileCanvas(): Promise<ReconcileResult> {
+  return apiJson<ReconcileResult>("/api/canvas/reconcile")
+}
+
+/** 清理「有内容没元数据」的孤儿房间表；只清这一个方向，元数据一律不动 */
+export async function purgeCanvasOrphans(): Promise<{ removed: OrphanContent[]; removedCount: number }> {
+  return apiJson("/api/canvas/orphans", { method: "DELETE" })
 }
 
 /**
