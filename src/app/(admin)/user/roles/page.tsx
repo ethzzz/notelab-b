@@ -8,13 +8,33 @@ import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result
 import { Plus, ShieldCheck, Pencil, Users } from "lucide-react"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 import { ROLE_EXTERNAL, ROLE_SUPER_ADMIN, ROLE_USER, isBuiltinRole, roleAssignNotice, roleHint, roleIcon } from "@/lib/roles"
-import { MODULE_NAMES, PAGE_MODULES, SHARED_MODULES, apiModuleKey } from "@/lib/route-groups"
+import { PAGE_MODULES, SHARED_MODULES } from "@/lib/route-groups"
 
-type Route = { code: string; path: string; method: string; kind: string; name: string }
+// 模块键/展示名由后端下发（PermService.listRoutes 附加 module / module_name）——
+// 本页不持有任何「路径 → 模块」映射，避免「后端加了模块、前端忘了加」的静默失配。
+// PAGE_MODULES / SHARED_MODULES 仍是前端约定（页面 ↔ 模块的**归属**，属展示层分组骨架）。
+type Route = {
+  code: string; path: string; method: string; kind: string; name: string
+  /** 1 = 仅超管（受限前缀）。树里锁死不可勾，后端也会拒绝授予 */
+  super_only?: number | boolean
+  /** 后端算好的模块键（admin/ops、perm/users 这类细分键） */
+  module?: string
+  /** 模块展示名 */
+  module_name?: string
+}
 type Role = { code: string; name: string; route_codes: string[] }
 type User = { id: number; username: string; email: string | null; role: string; created_at: string }
 type Overview = { me: { id: number; username: string; role: string }; routes: Route[]; roles: Role[]; users: User[] }
 type MenuItem = { key: string; name: string; icon?: string; path?: string; children?: MenuItem[] }
+
+/**
+ * 宽松判定「仅超管」：MySQL TINYINT 经 Jackson 出来通常是 0/1 数字，
+ * 但不同驱动/序列化路径也可能是 true / "1" —— 三种都认，宁严勿宽。
+ */
+function isSuperOnly(r: Route): boolean {
+  const v = r.super_only
+  return v === 1 || v === true || (v as unknown) === "1"
+}
 
 export default function UserRolesPage() {
   const [ov, setOv] = useState<Overview | null>(null)
@@ -76,12 +96,13 @@ export default function UserRolesPage() {
   }
 
   function openAssign(r: Role) {
-    const cur = new Set<string>(r.route_codes || [])
+    // 「仅超管」的码不进草稿：后端已拒绝授予，界面也不该显示成已勾选（那会让人以为配上了）
+    const cur = new Set<string>((r.route_codes || []).filter((c) => !superOnlySet.has(c)))
     // 勾了页面但没勾其接口的历史数据：加载时自动补上，与树的「勾页面连带接口」语义一致
     for (const code of [...cur]) {
       if (!code.startsWith("page:")) continue
       for (const m of PAGE_MODULES[code.slice("page:".length)] || []) {
-        for (const rt of byModule.get(m) || []) cur.add(rt.code)
+        for (const rt of byModule.get(m) || []) if (!isSuperOnly(rt)) cur.add(rt.code)
       }
     }
     setAssigning(r)
@@ -137,25 +158,45 @@ export default function UserRolesPage() {
   // ---------- 分配路由树（按页面分组：页面与其用到的接口同级展示） ----------
   // 归属规则见 src/lib/route-groups.ts：页面节点下挂自己的接口模块；多页面共用的模块
   // （爬塔/摸金）挂其菜单分组；没归属的落「系统通用」，/api/c/** 单独一组（PermGuard 豁免）。
+  // ⚠️ 模块键（r.module）与展示名（r.module_name）来自后端 —— 本页不再自己推导路径段。
   const byModule = new Map<string, Route[]>()
   for (const r of apiRoutes) {
-    const m = apiModuleKey(r.path)
+    const m = r.module || "base"
     if (!byModule.has(m)) byModule.set(m, [])
     byModule.get(m)!.push(r)
   }
   const consumedModules = new Set<string>()
+  const superOnlySet = new Set(apiRoutes.filter(isSuperOnly).map((r) => r.code))
 
-  const apiNode = (r: Route) => ({
-    title: <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">{r.method} {r.path}</span>,
-    key: r.code, selectable: false,
-  })
+  const apiNode = (r: Route) => {
+    const locked = isSuperOnly(r)
+    return {
+      title: (
+        <span className={`text-xs font-mono ${locked ? "text-amber-600 dark:text-amber-400" : "text-zinc-500 dark:text-zinc-400"}`}>
+          {locked ? "🔒 " : ""}{r.method} {r.path}
+          {locked && <span className="ml-1.5 font-sans not-italic">仅超管</span>}
+        </span>
+      ),
+      key: r.code,
+      selectable: false,
+      // 后端会拒绝授予；这里禁掉复选框，让「不能勾」在动手前就看得见
+      disableCheckbox: locked,
+    }
+  }
   /** 接口模块节点（同时登记「已消费」，避免同一模块重复出现在树里 → key 冲突） */
   const moduleNode = (m: string) => {
     consumedModules.add(m)
     const rs = byModule.get(m) || []
+    const allLocked = rs.length > 0 && rs.every(isSuperOnly)
+    const label = rs[0]?.module_name || m
     return {
-      title: <span className="text-xs">🔌 {MODULE_NAMES[m] || m} · {rs.length} 条</span>,
+      title: (
+        <span className={`text-xs ${allLocked ? "text-amber-600 dark:text-amber-400" : ""}`}>
+          {allLocked ? "🔒" : "🔌"} {label} · {rs.length} 条
+        </span>
+      ),
       key: `grp:mod:${m}`, selectable: false,
+      disableCheckbox: allLocked,
       children: rs.map(apiNode),
     }
   }
@@ -337,7 +378,11 @@ export default function UserRolesPage() {
               checkedKeys={draft}
               onCheck={(keys) => {
                 const arr = Array.isArray(keys) ? keys : keys.checked
-                setDraft(arr.filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:")) as string[])
+                // 只留真正的权限码，并**剔除「仅超管」的码** —— antd 勾父节点会把禁勾的子节点
+                // 也带进 checkedKeys，不剔的话草稿里会混进后端必然拒绝的码（保存后静默消失）
+                setDraft(arr
+                  .filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:"))
+                  .filter((k) => !superOnlySet.has(String(k))) as string[])
               }} />
             <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
               按页面分组：展开页面即见它用到的接口，<b>勾选页面会连同接口一起勾上</b>（可单独取消）；
@@ -345,12 +390,19 @@ export default function UserRolesPage() {
             </div>
             {/* 2026-09-27 起接口层是「默认拒绝」，api:* 真正生效。说明两件容易被误解的事。 */}
             <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-              后端按「默认拒绝」校验 api 权限：没勾选的接口会被 403 拦下。注意<b>普通用户组（user）的 api 权限由后端每次启动时按模块自动重算</b>
-              （受限的 /api/perm、/api/c-admin、/api/ui-config 不给，其余全给），在这里手工改的 api 勾选会在重启后被覆盖；
+              后端按「默认拒绝」校验 api 权限：没勾选的接口会被 403 拦下。注意<b>普通用户组（user）的 api 权限由后端每次启动时自动重算</b>
+              （🔒 仅超管的那些不给，其余全给），在这里手工改的 api 勾选会在重启后被覆盖；
               页面路由（page:*）不受影响，任意调整都会被保留。
             </div>
             {roleAssignNotice(assigning.code) && (
               <div className="mt-2 text-xs text-cyan-700 dark:text-cyan-400">{roleAssignNotice(assigning.code)}</div>
+            )}
+            {/* 仅超管的接口：四道防线（后端拒绝授予 + 启动收回历史授予 + denyReason 兜底 + 这里禁勾） */}
+            {superOnlySet.size > 0 && (
+              <div className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                🔒 <b>仅超管</b>的接口（共 {superOnlySet.size} 条：运营与运维、权限管理、C端用户管理、数据看板、界面配置等）
+                一律不可分配 —— 它们后端自带零超管校验，给出去等于送权限。节点已锁定、保存时也会被后端拒绝。
+              </div>
             )}
           </div>
         </Modal>
