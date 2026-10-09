@@ -40,6 +40,6 @@ export function roleHint(code: string): string {
 /** 分配路由弹窗里针对该角色组的额外提示（无则返回 null） */
 export function roleAssignNotice(code: string): string | null {
   if (code !== ROLE_EXTERNAL) return null
-  return "外部账号默认只勾了「仪表盘」。它不持有任何 api 权限码，所以只加页面路由可能仍打不开功能——" +
-    "需要连同该功能用到的 api 路由一起勾（可整组勾选）。"
+  return "外部账号默认只勾了「仪表盘」。树里已按页面分组：勾选页面会自动带上它用到的接口；" +
+    "如只要部分接口，展开页面单独勾选即可。"
 }

@@ -8,6 +8,7 @@ import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result
 import { Plus, ShieldCheck, Pencil, Users } from "lucide-react"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 import { ROLE_EXTERNAL, ROLE_SUPER_ADMIN, ROLE_USER, isBuiltinRole, roleAssignNotice, roleHint, roleIcon } from "@/lib/roles"
+import { MODULE_NAMES, PAGE_MODULES, SHARED_MODULES, apiModuleKey } from "@/lib/route-groups"
 
 type Route = { code: string; path: string; method: string; kind: string; name: string }
 type Role = { code: string; name: string; route_codes: string[] }
@@ -75,8 +76,16 @@ export default function UserRolesPage() {
   }
 
   function openAssign(r: Role) {
+    const cur = new Set<string>(r.route_codes || [])
+    // 勾了页面但没勾其接口的历史数据：加载时自动补上，与树的「勾页面连带接口」语义一致
+    for (const code of [...cur]) {
+      if (!code.startsWith("page:")) continue
+      for (const m of PAGE_MODULES[code.slice("page:".length)] || []) {
+        for (const rt of byModule.get(m) || []) cur.add(rt.code)
+      }
+    }
     setAssigning(r)
-    setDraft([...(r.route_codes || [])])
+    setDraft([...cur])
   }
 
   async function saveRoutes() {
@@ -125,52 +134,98 @@ export default function UserRolesPage() {
   const apiRoutes = ov.routes.filter((r) => r.kind === "api")
   const pageByPath = new Map(pageRoutes.map((r) => [r.path, r]))
 
-  // 分配路由树（三层结构）：根分组 → 菜单分组/API 模块 → 具体路由
+  // ---------- 分配路由树（按页面分组：页面与其用到的接口同级展示） ----------
+  // 归属规则见 src/lib/route-groups.ts：页面节点下挂自己的接口模块；多页面共用的模块
+  // （爬塔/摸金）挂其菜单分组；没归属的落「系统通用」，/api/c/** 单独一组（PermGuard 豁免）。
+  const byModule = new Map<string, Route[]>()
+  for (const r of apiRoutes) {
+    const m = apiModuleKey(r.path)
+    if (!byModule.has(m)) byModule.set(m, [])
+    byModule.get(m)!.push(r)
+  }
+  const consumedModules = new Set<string>()
+
+  const apiNode = (r: Route) => ({
+    title: <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">{r.method} {r.path}</span>,
+    key: r.code, selectable: false,
+  })
+  /** 接口模块节点（同时登记「已消费」，避免同一模块重复出现在树里 → key 冲突） */
+  const moduleNode = (m: string) => {
+    consumedModules.add(m)
+    const rs = byModule.get(m) || []
+    return {
+      title: <span className="text-xs">🔌 {MODULE_NAMES[m] || m} · {rs.length} 条</span>,
+      key: `grp:mod:${m}`, selectable: false,
+      children: rs.map(apiNode),
+    }
+  }
+  /** 页面节点可挂的模块（跳过已被别的页面/分组挂掉的） */
+  const modsFor = (path: string) =>
+    (PAGE_MODULES[path] || []).filter((m) => !consumedModules.has(m) && byModule.has(m))
+
   // 勾选父节点即全选子节点；onCheck 时过滤掉非路由 key（路由 code 均以 page:/api: 开头）
   function menuNodes(items: MenuItem[]): any[] {
     const nodes: any[] = []
     for (const it of items) {
       if (it.children?.length) {
         const kids = menuNodes(it.children)
+        // 多页面共用的接口模块挂在本分组上（如爬塔 8 页共用 spire-content）
+        const shared = (SHARED_MODULES[it.key] || []).filter((m) => !consumedModules.has(m) && byModule.has(m))
+        if (shared.length) {
+          kids.unshift({
+            title: "🔌 本组共用接口", key: `grp:shared:${it.key}`, selectable: false,
+            children: shared.map(moduleNode),
+          })
+        }
         if (kids.length) nodes.push({ title: `${it.icon || ""} ${it.name}`, key: `grp:menu:${it.key}`, selectable: false, children: kids })
       } else if (it.path) {
         const r = pageByPath.get(it.path)
         if (r) {
           consumedPage.add(r.code)
-          nodes.push({ title: <span><span className="text-sm text-zinc-700 dark:text-zinc-200">{r.name}</span><span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono ml-1.5">{r.path}</span></span>, key: r.code, selectable: false })
+          const mods = modsFor(it.path)
+          nodes.push({
+            title: <span><span className="text-sm text-zinc-700 dark:text-zinc-200">{r.name}</span><span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono ml-1.5">{r.path}</span></span>,
+            key: r.code, selectable: false,
+            children: mods.length ? mods.map(moduleNode) : undefined,
+          })
         }
       }
     }
     return nodes
   }
   const consumedPage = new Set<string>()
-  const menuGroupNodes = menuNodes(menu)
+  const topKeys: string[] = []
+  const routeTree: any[] = []
+  for (const g of menuNodes(menu)) { routeTree.push(g); topKeys.push(g.key) }
+
   const orphanPages = pageRoutes.filter((r) => !consumedPage.has(r.code)).map((r) => ({
     title: <span><span className="text-sm text-zinc-700 dark:text-zinc-200">{r.name}</span><span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono ml-1.5">{r.path}</span></span>,
     key: r.code, selectable: false,
+    children: modsFor(r.path).length ? modsFor(r.path).map(moduleNode) : undefined,
   }))
-  if (orphanPages.length) menuGroupNodes.push({ title: "📦 未挂菜单的页面", key: "grp:page:orphan", selectable: false, children: orphanPages })
-
-  // API 路由按第一段路径归模块分组，单段接口归入「系统基础」
-  const apiModuleName: Record<string, string> = { perm: "权限管理", english: "英语学习", trpg: "TRPG 剧本", rag: "文档问答", conversations: "智能对话", tools: "AI 工具库" }
-  const apiGroups = new Map<string, Route[]>()
-  for (const r of apiRoutes) {
-    const segs = r.path.split("/").filter(Boolean) // ["api", "perm", "roles", ...]
-    const g = segs.length > 2 ? segs[1] : "_base"
-    if (!apiGroups.has(g)) apiGroups.set(g, [])
-    apiGroups.get(g)!.push(r)
+  if (orphanPages.length) {
+    routeTree.push({ title: "📦 未挂菜单的页面", key: "grp:page:orphan", selectable: false, children: orphanPages })
+    topKeys.push("grp:page:orphan")
   }
-  const apiGroupNodes = [...apiGroups.entries()].map(([g, rs]) => ({
-    title: `${g === "_base" ? "⚙️ 系统基础" : "📦 " + (apiModuleName[g] || g)} · ${rs.length} 条`, key: `grp:api:${g}`, selectable: false,
-    children: rs.map((r) => ({
-      title: <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">{r.method} {r.path}</span>, key: r.code, selectable: false,
-    })),
-  }))
 
-  const routeTree = [
-    { title: `🧭 页面路由（决定可见菜单）· ${pageRoutes.length} 条`, key: "grp:root:page", selectable: false, children: menuGroupNodes },
-    { title: `🔌 API 路由（决定能否调用后端接口）· ${apiRoutes.length} 条`, key: "grp:root:api", selectable: false, children: apiGroupNodes },
-  ]
+  // 没归属到任何页面的接口：/api/c/** 豁免鉴权单独一组，其余进「系统通用」
+  const cRoutes = consumedModules.has("c") ? [] : byModule.get("c") || []
+  if (cRoutes.length) consumedModules.add("c")
+  const sysMods = [...byModule.keys()].filter((m) => !consumedModules.has(m))
+  if (cRoutes.length) {
+    routeTree.push({
+      title: `🌐 C 端开放接口（PermGuard 豁免，无需分配）· ${cRoutes.length} 条`,
+      key: "grp:root:capi", selectable: false, children: cRoutes.map(apiNode),
+    })
+    topKeys.push("grp:root:capi")
+  }
+  if (sysMods.length) {
+    routeTree.push({
+      title: "⚙️ 系统通用接口（登录/会话等，全角色建议全选）",
+      key: "grp:root:sys", selectable: false, children: sysMods.map(moduleNode),
+    })
+    topKeys.push("grp:root:sys")
+  }
 
   // 成员管理用的派生数据：账户全量来自 overview 的 users（本来就为算成员数而拉），按 role 切成两半
   const roleLabel = (c: string) => ov.roles.find((r) => r.code === c)?.name || c
@@ -273,18 +328,21 @@ export default function UserRolesPage() {
         </Modal>
       )}
 
-      {/* 分配路由（Tree 勾选） */}
+      {/* 分配路由（按页面分组：页面与其接口同级，勾页面连带勾接口） */}
       {assigning && (
-        <Modal open onCancel={() => { if (!busy) setAssigning(null) }} title={`🛡️ 分配路由 · ${assigning.name}`} width={560}
+        <Modal open onCancel={() => { if (!busy) setAssigning(null) }} title={`🛡️ 分配路由 · ${assigning.name}`} width={880}
           okText={`保存路由组（已选 ${draft.length}）`} cancelText="取消" confirmLoading={busy} onOk={saveRoutes} maskClosable={false}>
           <div className="mt-2">
-            <Tree checkable defaultExpandAll height={420} treeData={routeTree}
+            <Tree checkable defaultExpandAll={false} defaultExpandedKeys={topKeys} height={460} treeData={routeTree}
               checkedKeys={draft}
               onCheck={(keys) => {
                 const arr = Array.isArray(keys) ? keys : keys.checked
                 setDraft(arr.filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:")) as string[])
               }} />
-            <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">共 {ov.routes.length} 条路由 · 已勾选 {draft.length} 条；勾选分组节点可整组选/取消</div>
+            <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+              按页面分组：展开页面即见它用到的接口，<b>勾选页面会连同接口一起勾上</b>（可单独取消）；
+              爬塔/摸金等共用的接口挂在其分组节点上。共 {ov.routes.length} 条路由 · 已勾选 {draft.length} 条
+            </div>
             {/* 2026-09-27 起接口层是「默认拒绝」，api:* 真正生效。说明两件容易被误解的事。 */}
             <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
               后端按「默认拒绝」校验 api 权限：没勾选的接口会被 403 拦下。注意<b>普通用户组（user）的 api 权限由后端每次启动时按模块自动重算</b>
