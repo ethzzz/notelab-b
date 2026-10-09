@@ -8,11 +8,11 @@ import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result
 import { Plus, ShieldCheck, Pencil, Users } from "lucide-react"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 import { ROLE_EXTERNAL, ROLE_SUPER_ADMIN, ROLE_USER, isBuiltinRole, roleAssignNotice, roleHint, roleIcon } from "@/lib/roles"
-import { PAGE_MODULES, SHARED_MODULES } from "@/lib/route-groups"
 
-// 模块键/展示名由后端下发（PermService.listRoutes 附加 module / module_name）——
-// 本页不持有任何「路径 → 模块」映射，避免「后端加了模块、前端忘了加」的静默失配。
-// PAGE_MODULES / SHARED_MODULES 仍是前端约定（页面 ↔ 模块的**归属**，属展示层分组骨架）。
+// 「页面用哪些接口」的归属、模块键与展示名**全部由后端下发**（PermService.listRoutes 附加
+// modules / module / module_name / menu_group，权威在 notelab-java 的 model/RouteGroups 与 model/ApiModules）。
+// 本页不持有任何「路径 → 模块」映射，也不持有归属表 —— 两端各写一半会出现「模块落进系统通用」
+// 却以为配过了的静默失配。后端启动时还会校验悬空键并 warn。
 type Route = {
   code: string; path: string; method: string; kind: string; name: string
   /** 1 = 仅超管（受限前缀）。树里锁死不可勾，后端也会拒绝授予 */
@@ -21,6 +21,10 @@ type Route = {
   module?: string
   /** 模块展示名 */
   module_name?: string
+  /** 本页用到的接口模块键（仅 kind=page，来自 RouteGroups.PAGE_MODULES） */
+  modules?: string[]
+  /** 多页面共用的模块挂到哪个菜单分组（仅 kind=api，来自 RouteGroups.SHARED_MODULES） */
+  menu_group?: string
 }
 type Role = { code: string; name: string; route_codes: string[] }
 type User = { id: number; username: string; email: string | null; role: string; created_at: string }
@@ -101,7 +105,7 @@ export default function UserRolesPage() {
     // 勾了页面但没勾其接口的历史数据：加载时自动补上，与树的「勾页面连带接口」语义一致
     for (const code of [...cur]) {
       if (!code.startsWith("page:")) continue
-      for (const m of PAGE_MODULES[code.slice("page:".length)] || []) {
+      for (const m of pageByPath.get(code.slice("page:".length))?.modules || []) {
         for (const rt of byModule.get(m) || []) if (!isSuperOnly(rt)) cur.add(rt.code)
       }
     }
@@ -156,9 +160,10 @@ export default function UserRolesPage() {
   const pageByPath = new Map(pageRoutes.map((r) => [r.path, r]))
 
   // ---------- 分配路由树（按页面分组：页面与其用到的接口同级展示） ----------
-  // 归属规则见 src/lib/route-groups.ts：页面节点下挂自己的接口模块；多页面共用的模块
-  // （爬塔/摸金）挂其菜单分组；没归属的落「系统通用」，/api/c/** 单独一组（PermGuard 豁免）。
-  // ⚠️ 模块键（r.module）与展示名（r.module_name）来自后端 —— 本页不再自己推导路径段。
+  // 归属规则由后端下发（notelab-java model/RouteGroups）：页面节点下挂自己的接口模块（r.modules）；
+  // 多页面共用的模块（爬塔/摸金）按 r.menu_group 挂到菜单分组；没归属的落「系统通用」。
+  // ⚠️ 模块键（r.module）、展示名（r.module_name）、归属（r.modules / r.menu_group）全部来自后端 ——
+  //    本页不持有任何映射表，避免「两端各写一半」的静默失配。
   const byModule = new Map<string, Route[]>()
   for (const r of apiRoutes) {
     const m = r.module || "base"
@@ -167,6 +172,14 @@ export default function UserRolesPage() {
   }
   const consumedModules = new Set<string>()
   const superOnlySet = new Set(apiRoutes.filter(isSuperOnly).map((r) => r.code))
+  /** 多页面共用的接口模块 → 所属菜单分组（后端 RouteGroups.SHARED_MODULES 下发） */
+  const sharedByGroup = new Map<string, string[]>()
+  for (const r of apiRoutes) {
+    if (!r.menu_group || !r.module) continue
+    const arr = sharedByGroup.get(r.menu_group) || []
+    if (!arr.includes(r.module)) arr.push(r.module)
+    sharedByGroup.set(r.menu_group, arr)
+  }
 
   const apiNode = (r: Route) => {
     const locked = isSuperOnly(r)
@@ -200,9 +213,9 @@ export default function UserRolesPage() {
       children: rs.map(apiNode),
     }
   }
-  /** 页面节点可挂的模块（跳过已被别的页面/分组挂掉的） */
+  /** 页面节点可挂的模块（后端下发的归属，跳过已被别的页面/分组挂掉的） */
   const modsFor = (path: string) =>
-    (PAGE_MODULES[path] || []).filter((m) => !consumedModules.has(m) && byModule.has(m))
+    (pageByPath.get(path)?.modules || []).filter((m) => !consumedModules.has(m) && byModule.has(m))
 
   // 勾选父节点即全选子节点；onCheck 时过滤掉非路由 key（路由 code 均以 page:/api: 开头）
   function menuNodes(items: MenuItem[]): any[] {
@@ -211,7 +224,7 @@ export default function UserRolesPage() {
       if (it.children?.length) {
         const kids = menuNodes(it.children)
         // 多页面共用的接口模块挂在本分组上（如爬塔 8 页共用 spire-content）
-        const shared = (SHARED_MODULES[it.key] || []).filter((m) => !consumedModules.has(m) && byModule.has(m))
+        const shared = (sharedByGroup.get(it.key) || []).filter((m) => !consumedModules.has(m) && byModule.has(m))
         if (shared.length) {
           kids.unshift({
             title: "🔌 本组共用接口", key: `grp:shared:${it.key}`, selectable: false,
