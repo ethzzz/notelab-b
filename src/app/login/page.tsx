@@ -7,14 +7,24 @@ import { User, Lock } from "lucide-react"
 import { apiJson, postJson, takeRedirectPath } from "@/lib/api"
 import { toast } from "@/lib/toast"
 
-// 外部账号池（external1-10，与用户名同密码），由管理员统一生成；点击「外部登录」随机填入其一
-const EXTERNAL_ACCOUNTS = Array.from({ length: 10 }, (_, i) => `external${i + 1}`)
-
 export default function LoginPage() {
   const router = useRouter()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [extLoading, setExtLoading] = useState(false)
   const [checking, setChecking] = useState(true)
+
+  /** 外部一键登录：后端从 external 角色组随机挑账号直接建会话，前端不经手任何账密 */
+  async function externalLogin() {
+    setExtLoading(true)
+    try {
+      await postJson("/api/auth/external-login")
+      await goNext()
+    } catch (e: any) {
+      toast.error(e.message || "外部登录失败")
+      setExtLoading(false)
+    }
+  }
 
   /** 登录成功后回跳：优先返回被拦截前记录的路由（需在菜单权限内），无效则回 dashboard */
   async function goNext() {
@@ -90,11 +100,7 @@ export default function LoginPage() {
             {loading ? "登录中…" : "登 录"}
           </Button>
           <Button htmlType="button" size="large" block className="mt-3"
-            onClick={() => {
-              const pick = EXTERNAL_ACCOUNTS[Math.floor(Math.random() * EXTERNAL_ACCOUNTS.length)]
-              form.setFieldsValue({ username: pick, password: pick })
-              toast.success(`已填入外部账号：${pick}`)
-            }}>
+            loading={extLoading} onClick={externalLogin}>
             外部登录
           </Button>
         </Form>
