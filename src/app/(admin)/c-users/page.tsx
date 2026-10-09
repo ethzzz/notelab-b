@@ -316,8 +316,8 @@ export default function CUsersPage() {
     ), 300),
   ]
 
-  // ---------------- 分配路由弹窗的树（C 端页面 + 接口按模块分组） ----------------
-  const cPageRoutes = cRoutes.filter((r) => r.kind === "page")
+  // ---------------- 分配路由弹窗的树（只有 C 端接口，按模块分组） ----------------
+  // C 端页面不做显隐（入口永远可见），权限的作用点只有 /api/c/** 一层。
   const cApiRoutes = cRoutes.filter((r) => r.kind === "api")
   const cByModule = new Map<string, CRoute[]>()
   for (const r of cApiRoutes) {
@@ -336,21 +336,6 @@ export default function CUsersPage() {
     selectable: false,
   })
   const cRouteTree: any[] = []
-  if (cPageRoutes.length) {
-    cRouteTree.push({
-      title: `📱 C 端页面 · ${cPageRoutes.length} 条`,
-      key: "grp:cpages", selectable: false,
-      children: cPageRoutes.map((r) => ({
-        title: (
-          <span>
-            <span className="text-sm text-zinc-700 dark:text-zinc-200">{r.name}</span>
-            <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono ml-1.5">{r.path}</span>
-          </span>
-        ),
-        key: r.code, selectable: false,
-      })),
-    })
-  }
   if (cApiRoutes.length) {
     cRouteTree.push({
       title: `🔌 C 端接口 · ${cApiRoutes.length} 条`,
@@ -518,9 +503,9 @@ export default function CUsersPage() {
         )
       }      )()}
 
-      {/* 分配 C 端路由（只含 side='c' 的页面与接口） */}
+      {/* 分配 C 端接口权限（只含 side='c' 的 /api/c/**） */}
       {assigning && (
-        <Modal open onCancel={() => { if (!busy) setAssigning(null) }} title={`🛡️ 分配 C 端路由 · ${assigning.name}`} width={820}
+        <Modal open onCancel={() => { if (!busy) setAssigning(null) }} title={`🛡️ 分配 C 端接口权限 · ${assigning.name}`} width={820}
           okText={`保存（已选 ${draft.length}）`} cancelText="取消" confirmLoading={busy} onOk={saveRoutes} maskClosable={false}>
           <div className="mt-2">
             <Tree checkable defaultExpandedKeys={cTopKeys} height={420} treeData={cRouteTree}
@@ -528,15 +513,16 @@ export default function CUsersPage() {
               onCheck={(keys) => {
                 const arr = Array.isArray(keys) ? keys : keys.checked
                 // 只留真正的权限码（分组节点 key 以 grp: 开头，勾父节点时会带进来）
-                setDraft(arr.filter((k) => String(k).startsWith("page:") || String(k).startsWith("api:")) as string[])
+                setDraft(arr.filter((k) => String(k).startsWith("api:")) as string[])
               }} />
             <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
-              这里只配置 <b>C 端</b>路由（C 端页面 + <span className="font-mono">/api/c/**</span> 接口）。
+              这里只配置 <b>C 端接口</b>（<span className="font-mono">/api/c/**</span>），按模块分组。
+              C 端页面不做显隐 —— 入口永远全部可见，被收回的只是它背后拉数据的接口。
               B 端后台的页面与接口请到「角色组管理」分配 —— 两端身份体系不同，交叉配置不生效。
               共 {cRoutes.length} 条 · 已勾选 {draft.length} 条
             </div>
             <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-              新建用户组默认持有全部 C 端路由（不打断线上用户），所以在这里<b>取消勾选 = 收回权限</b>；
+              新建用户组默认持有全部 C 端接口（不打断线上用户），所以在这里<b>取消勾选 = 收回权限</b>；
               未登录用户不受影响（C 端内容下发 / 埋点本来就匿名可用）。
             </div>
           </div>
