@@ -40,7 +40,7 @@ export default function PermPage() {
   return (
     <AdminPage
       title="权限路由表"
-      description="后端每次启动会采集所有 Controller 路由与页面路由写入权限路由表，新增功能路由重启即自动出现。账户与角色管理请前往「用户管理」菜单。"
+      description="后端每次启动会采集所有 Controller 路由与页面路由写入权限路由表，新增功能路由重启即自动出现；代码里已下线的路由也会在重启时自动清理。账户与角色管理请前往「用户管理」菜单。"
       extra={<Tag color="indigo">当前账户：{ov.me.username}（{ov.me.role === "super_admin" ? "超级管理员" : "普通用户"}）</Tag>}
     >
       {/* C 端用户管理直达入口：后端菜单树（MenuTree 常量）暂无该项，前端在此提供入口 */}
@@ -61,7 +61,13 @@ export default function PermPage() {
         title={<span className="text-sm">🧭 权限路由表（共 {ov.routes.length} 条，启动时自动注册）</span>}>
         <DataTable size="small" rowKey="code" columns={columns as any}
           dataSource={[...pageRoutes, ...apiRoutes]} pagination={false} scroll={{ x: 720 }} />
-        <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2 mb-0">API 路由权限码已登记备用（当前仅页面路由参与菜单过滤；后续可基于权限码做接口级拦截）。</p>
+        <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2 mb-0">
+          两类权限码<b>各管一层、互不推导</b>：
+          <span className="text-indigo-600 dark:text-indigo-300">页面路由 page:*</span> 只被前端读（决定菜单可见性 + 拦直接敲 URL）；
+          <span className="text-teal-700 dark:text-teal-400">API 路由 api:*</span> 由后端 ApiPermInterceptor 按「默认拒绝」校验（缺码即 403）。
+          <span className="font-medium text-amber-700 dark:text-amber-400">配权限时两层都要勾</span>
+          —— 只勾页面会出现「页面能进、功能全 403」，只勾接口则「页面进不去、接口却能直接调」。
+        </p>
       </Card>
     </AdminPage>
   )
