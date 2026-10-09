@@ -314,7 +314,7 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
                 ② 有元数据、没内容（{recon.orphanMeta.length}）— ⚠️ 多数是正常的
               </div>
               <div className="mb-1.5 text-[11px] text-zinc-400 dark:text-zinc-500">
-                房间表是懒建的：只建了元数据、从没打开过编辑器就没有表。这里**只作提示，不提供批量删除**。
+                房间表是懒建的：只建了元数据、从没打开过编辑器就没有表。这里<strong>只作提示，不提供批量删除</strong>。
               </div>
               <DataTable size="small" rowKey="roomId" pagination={false}
                 dataSource={recon.orphanMeta}
