@@ -5,7 +5,7 @@
 //   · 唯一的外部依赖是全局 WebSocket
 //
 // 协议（与服务端 rooms/excalidraw-room.mjs 一一对应）：
-//   收  {type:"init",   elements, files}                 连上时的全量快照
+//   收  {type:"init",   elements, files, readonly}      连上时的全量快照（readonly 是服务端认定的只读）
 //   收  {type:"update", elements, files, removed}       别人的增量
 //   发  {type:"update", elements, files, removed}       自己的增量
 //
@@ -73,6 +73,12 @@ export type CollabHandlers = {
   onStatus: (s: ConnStatus) => void
   /** 可选：不看别人光标时可以不实现 */
   onPresence?: (ev: PresenceEvent) => void
+  /**
+   * 可选：服务端在 init 里声明的只读状态。
+   * ⚠️ 这是**服务端认定的权威值** —— 收到 true 时必须切只读，哪怕页面传进来的是可编辑。
+   * 只允许「变得更只读」，不允许用它解除只读（那样等于让服务端把权限放大）。
+   */
+  onReadonly?: (readonly: boolean) => void
 }
 
 /** 版本戳：与服务端 isNewer() 同口径 */
@@ -103,6 +109,8 @@ export class ExcalidrawCollab {
   constructor(
     private readonly uri: string,
     private readonly h: CollabHandlers,
+    /** view 权限：本地不再发写请求（服务端也会丢弃，这里只是省掉无意义的流量） */
+    private readonly readOnly: boolean = false,
   ) {}
 
   connect() {
@@ -136,6 +144,8 @@ export class ExcalidrawCollab {
         peers?: Peer[]
         peer?: Peer
         gone?: string
+        /** 仅 init 带：服务端认定的只读（权威值，收到 true 必须切只读） */
+        readonly?: boolean
       } | null = null
       try {
         msg = JSON.parse(typeof ev.data === "string" ? ev.data : String(ev.data))
@@ -144,6 +154,7 @@ export class ExcalidrawCollab {
       }
       if (!msg) return
       if (msg.type === "init") {
+        if (typeof msg.readonly === "boolean") this.h.onReadonly?.(msg.readonly)
         this.h.onInit({ elements: msg.elements || [], files: msg.files || {} })
       } else if (msg.type === "update") {
         this.h.onDiff({ elements: msg.elements || [], files: msg.files || {}, removed: msg.removed || [] })
@@ -179,6 +190,7 @@ export class ExcalidrawCollab {
   }
 
   private flushBacklog() {
+    if (this.readOnly) return
     const b = this.backlog
     if (!b.elements.size && !Object.keys(b.files).length && !b.removed.size) return
     this.backlog = emptyBacklog()
@@ -202,6 +214,8 @@ export class ExcalidrawCollab {
 
   /** 发送增量；离线时攒进 backlog，重连后补发 */
   send(diff: Diff) {
+    // 只读：连 backlog 都不进 —— 攒下来也没地方可发，只会白占内存、重连时又白跑一遍
+    if (this.readOnly) return
     if (this.raw(diff)) return
     const b = this.backlog
     for (const el of diff.elements || []) {

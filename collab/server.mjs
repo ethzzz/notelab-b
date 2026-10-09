@@ -23,7 +23,7 @@ import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
 import { db } from './lib/db.mjs'
 import { json, rejectUpgrade, isLocal } from './lib/http.mjs'
-import { authOf, canvasAccess } from './lib/auth.mjs'
+import { authOf, canvasPermission } from './lib/auth.mjs'
 
 import * as tldraw from './rooms/tldraw-room.mjs'
 import * as excalidraw from './rooms/excalidraw-room.mjs'
@@ -134,11 +134,12 @@ server.on('upgrade', async (req, socket, head) => {
   }
 
   const { roomId } = parsed
-  // ⚠️ 画布级鉴权：**登录了不等于能进这块画布**。
-  //    画布是个人创作物（超管例外），归属判定在 Java 侧 CanvasController.canAccess，
-  //    这里复用「取元数据」当门禁 —— 能读到元数据就等于有权限。
+  // ⚠️ 画布级鉴权：**登录了不等于能进这块画布，也不等于能写**。
+  //    归属与权限判定在 Java 侧 CanvasController.permOf（创建者 / 协作者 view·edit），
+  //    这里复用「取元数据」当门禁，并**顺回权限级别**决定这条连接是否只读。
   //    少了这一步，任何登录用户只要拿到 roomId（它就明文写在 URL 里）就能读写别人的画布。
-  if (!(await canvasAccess(roomId, req.headers.cookie))) {
+  const access = await canvasPermission(roomId, req.headers.cookie)
+  if (!access) {
     console.log(`[auth] reject ${pathname} (no canvas access room=${roomId} user=${who.id})`)
     return rejectUpgrade(socket, 403, 'Forbidden')
   }
@@ -147,7 +148,11 @@ server.on('upgrade', async (req, socket, head) => {
     try {
       // who：Java 验过的会话（scope/id）。第三参只有 excalidraw 用（给光标标注归属），
       // tldraw 那套的 useSync 自带 presence，多收一个参数不影响。
-      mod.attach(roomId, ws, who)
+      // 第四参 access：{ permission, readonly } —— 两套引擎都用来做**服务端只读**。
+      if (access.readonly) {
+        console.log(`[auth] readonly ${pathname} room=${roomId} user=${who.id} perm=${access.permission}`)
+      }
+      mod.attach(roomId, ws, who, access)
     } catch (e) {
       console.error(`[${parsed.engine}] attach failed ${roomId}:`, e)
       try {

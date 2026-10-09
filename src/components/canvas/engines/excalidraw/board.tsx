@@ -50,9 +50,17 @@ type Pending = {
 
 const emptyPending = (): Pending => ({ elements: new Map(), files: {}, removed: new Set(), timer: null })
 
-export default function Board({ roomId }: { roomId: string }) {
+/**
+ * @param readonly 画布里的 view 权限 → 编辑器只读（界面层）。
+ *   ⚠️ **服务端才是权威**：那条 WS 连接已被标记 readonly，写请求会被协作服务直接丢弃
+ *   （rooms/excalidraw-room.mjs）。这里只是为了不让只读者对着一个能画但存不下的界面发呆。
+ */
+export default function Board({ roomId, readonly = false }: { roomId: string; readonly?: boolean }) {
   const [scene, setScene] = useState<Scene | null>(null)
   const [status, setStatus] = useState<ConnStatus>("connecting")
+  /** 服务端在 init 里声明的只读（只允许把状态**收紧**，不允许放宽 —— 见 CollabHandlers.onReadonly） */
+  const [serverReadonly, setServerReadonly] = useState(false)
+  const readOnly = readonly || serverReadonly
 
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
   const collabRef = useRef<ExcalidrawCollab | null>(null)
@@ -175,6 +183,8 @@ export default function Board({ roomId }: { roomId: string }) {
   const onChange = useCallback(
     (elements: readonly unknown[], _appState: unknown, files: unknown) => {
       if (!apiRef.current) return
+      // 只读：本地根本不产生「要发出去的差异」。服务端也会丢弃，这里只是不做无用功。
+      if (readOnly) return
       const stamped = stampedRef.current
       const changed: RawElement[] = []
       const seen = new Set<string>()
@@ -206,10 +216,12 @@ export default function Board({ roomId }: { roomId: string }) {
       if (!changed.length && !removed.length && !Object.keys(fresh).length) return
       queue({ elements: changed, files: fresh, removed })
     },
-    [queue],
+    [queue, readOnly],
   )
 
   useEffect(() => {
+    // readonly 由 EditorView 在拿到 meta（/api/canvas/{roomId}）之后才渲染本组件传入，
+    // 所以它在挂载时已经确定、不会中途变化 —— 刻意不进依赖数组（否则会白白重连一次 WS）。
     const collab = new ExcalidrawCollab(collabUri("excalidraw", roomId), {
       onInit: (s) => {
         if (!mountedRef.current) {
@@ -227,6 +239,7 @@ export default function Board({ roomId }: { roomId: string }) {
       },
       onDiff: (d) => applyRemote(d.elements, d.files, d.removed),
       onStatus: setStatus,
+      onReadonly: (v) => { if (v) setServerReadonly(true) },
       onPresence: (ev) => {
         if (ev.kind === "snapshot") {
           peersRef.current = new Map(ev.peers.map((p) => [p.peerId, p]))
@@ -237,7 +250,7 @@ export default function Board({ roomId }: { roomId: string }) {
         }
         renderPeers()
       },
-    })
+    }, readOnly)
     collabRef.current = collab
     collab.connect()
     // ⚠️ **必须在 return 之前**：useEffect 的回调在 return 之后就结束了，
@@ -249,6 +262,17 @@ export default function Board({ roomId }: { roomId: string }) {
       collabRef.current = null
     }
   }, [roomId, applyRemote, renderPeers])
+
+  /** 把编辑器切到 / 切出 view mode（隐藏绘图工具、禁拖拽）。api 可能还没就绪，所以做成可重入 */
+  const applyViewMode = useCallback((api: ExcalidrawImperativeAPI | null) => {
+    if (!api) return
+    // ⚠️ 用命令式 appState 而不是 Excalidraw 的 viewModeEnabled prop：本仓本地没装
+    //    @excalidraw/excalidraw（类型在服务器上），prop 名一旦对不上就是构建期报错；
+    //    updateScene 的 appState 是久经使用的入口。
+    api.updateScene({ appState: { viewModeEnabled: readOnly } as never })
+  }, [readOnly])
+
+  useEffect(() => { applyViewMode(apiRef.current) }, [applyViewMode])
 
   const initialData = useMemo(() => {
     if (!scene) return null
@@ -275,11 +299,19 @@ export default function Board({ roomId }: { roomId: string }) {
       className="absolute inset-0 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm"
       onPointerMove={onPointerMove}
     >
+      {readOnly && (
+        <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-full bg-amber-500/95 px-3 py-1 text-xs font-medium text-white shadow">
+          👁 只读：你是本画布的查看者，改动不会被保存
+        </div>
+      )}
       <Excalidraw
         initialData={initialData}
         onChange={onChange as never}
         excalidrawAPI={(api) => {
           apiRef.current = api
+          // ⚠️ 只读必须**在这里**设一次：组件在 scene 到达前走的是早退分支（apiRef 还是 null），
+          //    所以那个 [readOnly] 的 effect 首次执行时无 api 可用、之后依赖又没变、不会补跑。
+          applyViewMode(api)
           // 编辑器就绪时把已经收到的 peers 补渲一次（presence 可能比 api 先到）
           renderPeers()
         }}

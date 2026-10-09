@@ -26,29 +26,36 @@ export async function authOf(cookie) {
 const CANVAS_API = process.env.COLLAB_CANVAS_API || 'http://127.0.0.1:8001/api/canvas'
 
 /**
- * 画布级鉴权：**登录了不等于能进这块画布**。
+ * 画布级鉴权：**登录了不等于能进这块画布**，也不等于能写。
  *
- * <p>转发同一枚 cookie 调 Java `GET /api/canvas/{roomId}` —— 能读到元数据（200）才放行。
- * Java 侧 `CanvasController.canAccess` 的语义是「超管看全部，其他人只能碰自己建的」，
- * 无权限与不存在**都回 403**（不泄漏 roomId 是否存在）。
+ * <p>转发同一枚 cookie 调 Java `GET /api/canvas/{roomId}`：
+ * - 非 2xx → 无权限（画布不存在 / 既不是创建者也不是协作者）；
+ * - 2xx → 放行，并按响应里的 `my_permission` 决定**这条连接能不能写**。
  *
- * <p>之所以复用「取元数据」这个接口而不是新开一个：**能取到元数据本来就是「有权限」的定义**，
- * 少一个接口就少一处要同步的白名单。
+ * <p>之所以复用「取元数据」这个接口而不是新开一个：能取到元数据本来就是「有权限」的定义，
+ * 少一个接口就少一处要同步的白名单。权限级别顺带回传，也不用第二个请求。
  *
- * <p>fail-closed：Java 不可达 / 超时 / 非 2xx 一律拒绝。
+ * <p>⚠️ **认不出权限时按只读放行**（fail-closed：宁可让人看不能写，也别给写）。
+ * 代价是：若 Java 侧被回滚成不带 `my_permission` 的版本，所有人都会变只读 ——
+ * 这是刻意选的失败方向。
  *
- * @param {string} roomId 16 位 hex（server.mjs 已在解析阶段校验过格式）
- * @param {string|undefined} cookie 浏览器带上来的原始 Cookie 头
+ * @returns {Promise<{permission:string, readonly:boolean}|null>} null = 不允许连接
  */
-export async function canvasAccess(roomId, cookie) {
-  if (!cookie) return false
+export async function canvasPermission(roomId, cookie) {
+  if (!cookie) return null
   try {
     const r = await fetch(`${CANVAS_API}/${encodeURIComponent(roomId)}`, {
       headers: { cookie },
       signal: AbortSignal.timeout(4000),
     })
-    return r.ok
+    if (!r.ok) return null
+    const j = await r.json().catch(() => null)
+    const p = j && typeof j.my_permission === 'string' ? j.my_permission : ''
+    if (p === 'owner') return { permission: 'owner', readonly: false }
+    if (p === 'edit') return { permission: 'edit', readonly: false }
+    // view 与「没给权限」都按只读；两者都不能写
+    return { permission: p || 'view', readonly: true }
   } catch {
-    return false
+    return null
   }
 }

@@ -217,10 +217,19 @@ function safeSend(ws, obj) {
   }
 }
 
-export function attach(roomId, ws, who) {
+/**
+ * @param access 来自 {@code canvasPermission()}：{@code { permission, readonly }}。
+ *        {@code readonly:true}（画布的 view 权限）= **服务端直接丢弃这条连接的 update**，
+ *        不是只靠前端 {@code viewModeEnabled}（那种改一下 URL / 直连 WS 就绕过了）。
+ *        presence（光标）仍放行 —— 只读者指一指别人某个位置是有用的，且它不写文档。
+ */
+export function attach(roomId, ws, who, access) {
   const st = getState(roomId)
   const cid = ++seq
   ws.__cid = cid
+  ws.__readonly = !!(access && access.readonly)
+  /** 只读连接累计被丢弃的写请求数（只在第一次记日志，避免刷屏） */
+  ws.__rejected = 0
   // presence 身份：peerId 进程内唯一，颜色轮转分配，userId 来自服务端验过的会话
   ws.__peerId = `p${cid}`
   ws.__color = PEER_COLORS[cid % PEER_COLORS.length]
@@ -233,12 +242,13 @@ export function attach(roomId, ws, who) {
   st.clients.add(ws)
 
   // 连上先给全量：客户端拿到后作为 initialData 挂载编辑器
-  safeSend(ws, { type: 'init', elements: [...st.elements.values()], files: st.files })
+  // readonly 一并下发 —— 客户端据此把编辑器切到只读（界面层的第二道，服务端才是权威）
+  safeSend(ws, { type: 'init', elements: [...st.elements.values()], files: st.files, readonly: ws.__readonly })
   // 再把"房间里当前有谁"推给新人（不含自己）—— 否则要等别人先动一下才看得到光标
   const others = []
   for (const peer of st.clients) if (peer !== ws) others.push(peerOf(peer))
   safeSend(ws, { type: 'presence', peers: others })
-  console.log(`[excalidraw] join ${roomId} #${cid} (clients=${st.clients.size})`)
+  console.log(`[excalidraw] join ${roomId} #${cid} (clients=${st.clients.size}${ws.__readonly ? ', readonly' : ''})`)
 
   ws.on('message', (raw) => {
     let msg
@@ -267,6 +277,15 @@ export function attach(roomId, ws, who) {
     }
 
     if (msg.type !== 'update') return
+    // view 权限：服务端**丢弃写请求**。这是只读的权威实现 —— 客户端 viewModeEnabled 只是界面层，
+    // 直连 WS 或改前端都能绕过它。
+    if (ws.__readonly) {
+      ws.__rejected++
+      if (ws.__rejected === 1) {
+        console.log(`[excalidraw] readonly 拒绝写请求 room=${roomId} #${cid} user=${ws.__userId}`)
+      }
+      return
+    }
     const changed = applyUpdate(st, msg)
     if (!changed.elements.length && !Object.keys(changed.files).length && !changed.removed.length) {
       return // 无实质变化 → 不广播，回声放大在此终止

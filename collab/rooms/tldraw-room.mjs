@@ -31,11 +31,22 @@ function getRoom(roomId) {
   return room
 }
 
-/** 挂一个已鉴权的连接上去。sessionId 由本模块生成（每个连接一个） */
-export function attach(roomId, ws) {
+/**
+ * 挂一个已鉴权的连接上去。sessionId 由本模块生成（每个连接一个）。
+ *
+ * @param access 来自 {@code canvasPermission()}：{@code { permission, readonly }}。
+ *        {@code readonly:true}（画布里的 view 权限）会走 tldraw 官方的
+ *        {@code handleSocketConnect({ isReadonly })} —— **在同步协议层拒绝该会话的写请求**，
+ *        而不是只靠前端把工具栏藏起来（那种改一下 URL / 直连 WS 就绕过了）。
+ */
+export function attach(roomId, ws, who, access) {
   const sessionId = randomUUID()
   const room = getRoom(roomId)
-  room.handleSocketConnect({ sessionId, socket: ws })
+  room.handleSocketConnect({
+    sessionId,
+    socket: ws,
+    isReadonly: !!(access && access.readonly),
+  })
   ws.on('close', () => {
     try {
       room.handleSocketClose(sessionId)

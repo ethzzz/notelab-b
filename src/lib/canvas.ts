@@ -47,16 +47,72 @@ export type CanvasMeta = {
   created_by: number | null
   created_at: string
   updated_at: string
+  /** 我对这块画布的有效权限（后端算好下发）：owner / edit / view / none */
+  my_permission?: CanvasPermission
+  /** 是不是我建的（超管看别人的画布时是 false） */
+  is_mine?: boolean
+  /** 该画布的协作者（含 username），列表接口已批量填好，前端不用再查 */
+  collaborators?: CanvasCollaborator[]
+  collaborator_count?: number
+}
+
+// ---------------- 画布级权限（方案 C：列表公开 + 逐块授权） ----------------
+// 规则：所有 B 端账户都能**看到**全部画布；能打开=创建者/协作者，能改=创建者/编辑权协作者，
+// 能删=只有创建者（超管视为创建者）。判定以后端下发为准，这里的 helper 只驱动界面显隐。
+
+export type CanvasPermission = "owner" | "edit" | "view" | "none"
+
+export const PERM_LABEL: Record<CanvasPermission, string> = {
+  owner: "创建者",
+  edit: "可编辑",
+  view: "只读",
+  none: "无权限",
+}
+
+/** 能否打开（创建者 / 编辑权 / 只读 都可以） */
+export function canOpenCanvas(p?: string): boolean {
+  return p === "owner" || p === "edit" || p === "view"
+}
+/** 能否改（改名 / 写内容） */
+export function canEditCanvas(p?: string): boolean {
+  return p === "owner" || p === "edit"
+}
+/** 能否删除 —— 只有创建者（后端同样只认 owner，协作者一律拒） */
+export function canDeleteCanvas(p?: string): boolean {
+  return p === "owner"
+}
+/** 该权限下画布是否只读（服务端会据此在 WS 层拒绝写） */
+export function isReadonlyCanvas(p?: string): boolean {
+  return !canEditCanvas(p)
+}
+
+export type CanvasCollaborator = {
+  room_id: string
+  user_id: number
+  permission: "view" | "edit"
+  username?: string
+  invited_by: number | null
+  created_at?: string
+}
+
+/** 邀请协作者时的候选账户（后端刻意只给 id/username/role，不含 email） */
+export type CanvasUserBrief = { id: number; username: string; role: string }
+
+/** 列表响应：画布 + 选人用账户简表 + 我是谁 */
+export type CanvasListResult = {
+  items: CanvasMeta[]
+  users: CanvasUserBrief[]
+  me: { id: number; role: string }
 }
 
 /** 列表：q 模糊匹配标题；engine 精确筛选（后端白名单校验，非法值会 400） */
-export async function listCanvases(q?: string, engine?: string): Promise<CanvasMeta[]> {
+export async function listCanvasPage(q?: string, engine?: string): Promise<CanvasListResult> {
   const p = new URLSearchParams()
   if (q && q.trim()) p.set("q", q.trim())
   if (engine) p.set("engine", engine)
   const qs = p.toString() ? `?${p.toString()}` : ""
-  const j = await apiJson<{ items: CanvasMeta[] }>(`/api/canvas${qs}`)
-  return j.items || []
+  const j = await apiJson<CanvasListResult>(`/api/canvas${qs}`)
+  return { items: j.items || [], users: j.users || [], me: j.me || { id: 0, role: "" } }
 }
 
 export async function getCanvas(roomId: string): Promise<CanvasMeta> {
@@ -87,6 +143,38 @@ export async function deleteCanvas(roomId: string): Promise<{ purged?: boolean; 
   return apiJson(`/api/canvas/${roomId}`, { method: "DELETE" })
 }
 
+// ---------------- 协作者（画布级 ACL） ----------------
+// 只有创建者（与超管）能改授权；其他人能看协作者名单（知道自己和谁一起协作）。
+
+export type CollaboratorList = {
+  items: CanvasCollaborator[]
+  owner: number
+  my_permission: CanvasPermission
+}
+
+export async function listCollaborators(roomId: string): Promise<CollaboratorList> {
+  return apiJson<CollaboratorList>(`/api/canvas/${roomId}/collaborators`)
+}
+
+/** 邀请 / 改权限（同一个接口 upsert） */
+export async function upsertCollaborator(
+  roomId: string,
+  userId: number,
+  permission: "view" | "edit",
+): Promise<CollaboratorList> {
+  return postJson(`/api/canvas/${roomId}/collaborators`, { user_id: userId, permission })
+}
+
+export async function removeCollaborator(roomId: string, userId: number): Promise<CollaboratorList> {
+  return apiJson<CollaboratorList>(`/api/canvas/${roomId}/collaborators/${userId}`, { method: "DELETE" })
+}
+
+/** B 端账户简表（选人下拉；后端刻意不含 email） */
+export async function listCanvasUsers(): Promise<CanvasUserBrief[]> {
+  const j = await apiJson<{ items: CanvasUserBrief[] }>("/api/canvas/users")
+  return j.items || []
+}
+
 // ---------------- 对账（元数据 ↔ 内容） ----------------
 // 背景：元数据在 MySQL，内容在协作服务的 SQLite，只靠 room_id 关联、删除又是跨进程两步，
 // 所以会攒下两类不一致。这里把后端的对账结果透出来。
@@ -101,14 +189,22 @@ export type ReconcileResult = {
   contentCount: number
   orphanContent: OrphanContent[]
   orphanMeta: OrphanMeta[]
+  /** 授权行孤儿：画布已删、canvas_collaborator 还留着的 room_id（清理由后端顺带做） */
+  orphanCollab?: string[]
 }
 
 export async function reconcileCanvas(): Promise<ReconcileResult> {
   return apiJson<ReconcileResult>("/api/canvas/reconcile")
 }
 
-/** 清理「有内容没元数据」的孤儿房间表；只清这一个方向，元数据一律不动 */
-export async function purgeCanvasOrphans(): Promise<{ removed: OrphanContent[]; removedCount: number }> {
+/** 清理孤儿：内容表（SQLite）+ 授权行（MySQL）两个方向，都只清「画布已不存在」的那些 */
+export async function purgeCanvasOrphans(): Promise<{
+  removed: OrphanContent[]
+  removedCount: number
+  collabRemoved?: string[]
+  collabRemovedCount?: number
+  warning?: string
+}> {
   return apiJson("/api/canvas/orphans", { method: "DELETE" })
 }
 

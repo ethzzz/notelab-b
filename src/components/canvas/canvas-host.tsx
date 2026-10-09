@@ -20,7 +20,7 @@ const loadingFor = (name: string) => () => (
   </div>
 )
 
-const ENGINES: Record<CanvasEngine, ComponentType<{ roomId: string }>> = {
+const ENGINES: Record<CanvasEngine, ComponentType<{ roomId: string; readonly?: boolean }>> = {
   tldraw: dynamic(() => import("./engines/tldraw/board"), {
     ssr: false,
     loading: loadingFor(ENGINE_META.tldraw.label),
@@ -31,9 +31,19 @@ const ENGINES: Record<CanvasEngine, ComponentType<{ roomId: string }>> = {
   }),
 }
 
-export default function CanvasHost({ engine, roomId }: { engine: unknown; roomId: string }) {
+/**
+ * @param readonly 画布里的 view 权限 → 编辑器切只读。
+ *   ⚠️ 这只是**界面层**（把工具栏藏掉、不让拖），**权威在协作服务**：那条 WS 连接被
+ *   标记为 readonly，写请求会被服务端直接丢弃。前端这层只是为了让只读者一眼看懂状态，
+ *   不是安全边界 —— 改前端、直连 WS 都绕不过服务端。
+ */
+export default function CanvasHost({ engine, roomId, readonly = false }: {
+  engine: unknown
+  roomId: string
+  readonly?: boolean
+}) {
   const key = asEngine(engine)
-  const Board = ENGINES[key] as ComponentType<{ roomId: string }> | undefined
+  const Board = ENGINES[key] as ComponentType<{ roomId: string; readonly?: boolean }> | undefined
   if (!Board) {
     // 理论上到不了这里（asEngine 一定收敛到枚举内的值），留着是为了将来加引擎时
     // 万一注册表漏登记，能看出一条明确的信息而不是白屏。
@@ -46,5 +56,5 @@ export default function CanvasHost({ engine, roomId }: { engine: unknown; roomId
       </div>
     )
   }
-  return <Board roomId={roomId} />
+  return <Board roomId={roomId} readonly={readonly} />
 }
