@@ -32,7 +32,8 @@ type Row = {
 }
 
 type Resp = {
-  day: string
+  day: string | null
+  fromDay: string | null
   page: number
   size: number
   total: number
@@ -55,6 +56,21 @@ const RESULT_OPTIONS = [
   ...Object.entries(META).map(([value, m]) => ({ value, label: m.label })),
 ]
 
+/**
+ * 时间范围档位（对应后端 days 参数：N=过去 N 天且含今天，0=全部）。
+ * 「指定日期」走旧的 day 单日参数，选中后才出现日期输入框。
+ */
+const RANGE_OPTIONS = [
+  { value: "1", label: "今天" },
+  { value: "3", label: "过去三天" },
+  { value: "7", label: "过去七天" },
+  { value: "30", label: "过去一个月" },
+  { value: "90", label: "过去三个月" },
+  { value: "365", label: "过去一年" },
+  { value: "all", label: "全部（保留期内）" },
+  { value: "custom", label: "指定日期" },
+]
+
 const today = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
@@ -65,7 +81,8 @@ const HIGHLIGHT = ["success", "bad_password", "no_such_user", "rate_limited"]
 
 export default function LoginAuditPage() {
   // 草稿 vs 生效：输入框改动**不**直接打接口（否则每敲一个字符发一次请求），点「查询」才生效
-  const [draft, setDraft] = useState({ day: today(), result: "", ip: "", username: "" })
+  const [draft, setDraft] = useState({ range: "1", day: today(), result: "", ip: "", username: "" })
+  const [range, setRange] = useState(draft.range)
   const [day, setDay] = useState(draft.day)
   const [result, setResult] = useState("")
   const [ip, setIp] = useState("")
@@ -81,7 +98,10 @@ export default function LoginAuditPage() {
     setLoading(true)
     setErr("")
     try {
-      const qs = new URLSearchParams({ day, page: String(page), size: String(size) })
+      const qs = new URLSearchParams({ page: String(page), size: String(size) })
+      if (range === "custom") qs.set("day", day)
+      else if (range === "all") qs.set("days", "0")
+      else qs.set("days", range)
       if (result) qs.set("result", result)
       if (ip.trim()) qs.set("ip", ip.trim())
       if (username.trim()) qs.set("username", username.trim())
@@ -91,12 +111,13 @@ export default function LoginAuditPage() {
     } finally {
       setLoading(false)
     }
-  }, [day, result, ip, username, page, size])
+  }, [range, day, result, ip, username, page, size])
 
   useEffect(() => { void load() }, [load])
 
   const apply = () => {
     setPage(1)
+    setRange(draft.range)
     setDay(draft.day)
     setResult(draft.result)
     setIp(draft.ip)
@@ -127,14 +148,21 @@ export default function LoginAuditPage() {
 
       <Card size="small" className="mb-3">
         <Space wrap>
-          <Input
-            type="date"
-            value={draft.day}
-            max={today()}
-            onChange={(e) => setDraft({ ...draft, day: e.target.value })}
-            style={{ width: 156 }}
+          <Select
+            value={draft.range}
+            onChange={(v) => setDraft({ ...draft, range: v ?? "1" })}
+            options={RANGE_OPTIONS}
+            style={{ width: 168 }}
           />
-          <Button size="small" onClick={() => setDraft({ ...draft, day: today() })}>今天</Button>
+          {draft.range === "custom" && (
+            <Input
+              type="date"
+              value={draft.day}
+              max={today()}
+              onChange={(e) => setDraft({ ...draft, day: e.target.value })}
+              style={{ width: 156 }}
+            />
+          )}
           <Select
             value={draft.result}
             onChange={(v) => setDraft({ ...draft, result: v ?? "" })}
