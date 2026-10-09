@@ -7,8 +7,12 @@ import { User, Lock } from "lucide-react"
 import { apiJson, postJson, takeRedirectPath } from "@/lib/api"
 import { toast } from "@/lib/toast"
 
+// 外部账号池（external1-10，与用户名同密码），由管理员统一生成；点击「外部登录」随机填入其一
+const EXTERNAL_ACCOUNTS = Array.from({ length: 10 }, (_, i) => `external${i + 1}`)
+
 export default function LoginPage() {
   const router = useRouter()
+  const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [checking, setChecking] = useState(true)
 
@@ -74,7 +78,7 @@ export default function LoginPage() {
           <div className="text-xl font-bold text-zinc-800 dark:text-zinc-100">NoteLab 管理后台</div>
           <div className="text-xs text-zinc-400 dark:text-zinc-500">AI 试验后台 · B 端</div>
         </div>
-        <Form layout="vertical" onFinish={submit} requiredMark={false}>
+        <Form form={form} layout="vertical" onFinish={submit} requiredMark={false}>
           <Form.Item label="用户名" name="username" rules={[{ required: true, message: "请输入用户名" }]}>
             <Input size="large" prefix={<User size={14} className="text-zinc-400 dark:text-zinc-500" />} placeholder="请输入用户名" autoFocus />
           </Form.Item>
@@ -84,6 +88,14 @@ export default function LoginPage() {
           </Form.Item>
           <Button type="primary" htmlType="submit" size="large" block loading={loading}>
             {loading ? "登录中…" : "登 录"}
+          </Button>
+          <Button htmlType="button" size="large" block className="mt-3"
+            onClick={() => {
+              const pick = EXTERNAL_ACCOUNTS[Math.floor(Math.random() * EXTERNAL_ACCOUNTS.length)]
+              form.setFieldsValue({ username: pick, password: pick })
+              toast.success(`已填入外部账号：${pick}`)
+            }}>
+            外部登录
           </Button>
         </Form>
         <p className="text-xs text-zinc-400 dark:text-zinc-500 text-center mt-3 mb-0">账号由管理员统一创建，如需开通请联系管理员</p>
