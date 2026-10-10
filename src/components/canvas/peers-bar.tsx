@@ -46,8 +46,15 @@ export default function PeersBar({ peers, max = MAX_VISIBLE }: { peers: CanvasPe
   return (
     // hover 触发区是**整条**列表，不是只有那个「+N」—— 前者好用得多
     //（「+N」本身只有三十来像素宽，指着它悬停很别扭）
+    //
+    // 🔴 `pointer-events-auto` 是**必须的**，不是修饰：tldraw 的 UI 层
+    //   （.tlui-layout）整体是 `pointer-events: none`（把指针让给画布），
+    //   它自家的控件逐个开 auto，我们这块自定义 DOM 不开就收不到任何鼠标事件——
+    //   表现为**视觉看得到、鼠标悬停却毫无反应**（hover 展开永远不触发）。
+    //   实测：不开时该坐标 elementFromPoint 命中的是 .tl-background。
+    //
     // ⚠️ data-* 是给自动化验收用的锚点（DOM 里查文本会随名字变，锚点不会）
-    <div className="group relative flex items-center gap-1" data-peers-bar="">
+    <div className="group pointer-events-auto relative flex items-center gap-1" data-peers-bar="">
       {head.map((p) => (
         <span
           key={p.id}
