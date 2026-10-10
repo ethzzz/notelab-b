@@ -264,9 +264,9 @@ export default function FormDesigner({ plan, onPatch }: {
               <div className="rounded-md border border-zinc-200 dark:border-zinc-700 p-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-zinc-500 dark:text-zinc-400">子字段（{(selected.children || []).length}）</span>
-                  <Select size="small" className="!w-28" placeholder="＋ 添加" value={undefined}
+                  <Select<FieldType> size="small" className="!w-28" placeholder="＋ 添加" value={undefined}
                     onChange={(t) => {
-                      const nf = makeField(t as FieldType)
+                      const nf = makeField(t)
                       patchField(selected.id, { children: [...(selected.children || []), nf] })
                     }}
                     options={FIELD_DEFS.filter((d) => d.type !== "subform").map((d) => ({ value: d.type, label: d.name }))} />
