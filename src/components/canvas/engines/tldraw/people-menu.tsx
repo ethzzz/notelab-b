@@ -6,11 +6,14 @@
 // 位置沿用 tldraw 的 SharePanel（就在右上角），不用自己摆浮层。
 //
 // 数据来源：`editor.getCollaborators()` —— 所有人（含不在当前页的）的最新 presence 记录；
-// 自己那份要单独取（getCollaborators 只给**别人**），颜色/名字来自我们喂给 useSync 的 userStore。
+// **自己那份必须读 currentUserAtom**（不能用 editor.user.getName()/getColor()：那是 editor
+// 构造那一刻的快照，atom 后来 set 了它不会跟着变，会导致「广播出去的名字是对的、
+// 自己界面上却显示默认空名 + 随机色」这种分裂）。
 import { useMemo } from "react"
 import { useEditor } from "@tldraw/editor"
 import { useValue } from "@tldraw/state-react"
 import PeersBar, { type CanvasPeer } from "@/components/canvas/peers-bar"
+import { currentUserAtom } from "./current-user"
 
 /** 序列化用的原始形状（字段顺序固定，好做字符串比较） */
 type RawPeer = { id: string; name: string; color: string; me?: boolean }
@@ -27,9 +30,10 @@ export default function CanvasPeopleMenu() {
   const signature = useValue(
     "canvas-peers",
     () => {
-      const meId = norm(editor.user.getId())
+      const me = currentUserAtom.get()
+      const meId = me ? norm(me.id) : ""
       return JSON.stringify([
-        { id: meId, name: editor.user.getName(), color: editor.user.getColor(), me: true },
+        { id: meId, name: me?.name || "", color: me?.color || "", me: true },
         ...editor
           .getCollaborators()
           // 去重：万一 presence 里也带上了自己（id 写法可能不同，两边都归一后比）
