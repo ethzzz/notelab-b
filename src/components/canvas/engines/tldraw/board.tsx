@@ -26,6 +26,7 @@ import type { TLUser, TLUserStore } from "@tldraw/tlschema"
 import "tldraw/tldraw.css"
 import { collabUri, loadCanvasMe } from "@/lib/canvas"
 import { assets } from "./assets"
+import CanvasPeopleMenu from "./people-menu"
 
 const LICENSE_KEY = process.env.NEXT_PUBLIC_TLDRAW_LICENSE_KEY || ""
 
@@ -96,6 +97,9 @@ export default function Board({ roomId, readonly = false }: { roomId: string; re
       <Tldraw
         store={store}
         licenseKey={LICENSE_KEY || undefined}
+        // 右上角「谁在线」换成我们自己的（圆形色底 + 用户名、最多 3 个、超出 hover 展开），
+        // 位置沿用 tldraw 的 SharePanel —— 不用自己摆浮层，也不会跟它原有的按钮错位。
+        components={{ PeopleMenu: CanvasPeopleMenu }}
         onMount={(editor) => {
           editorRef.current = editor
           editor.updateInstanceState({ isReadonly: readonly })
