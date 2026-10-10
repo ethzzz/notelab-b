@@ -47,7 +47,7 @@ export function genPageCode(plan: PagePlan, model: ModelPlan | null): string {
   const queries = (plan.list?.query || [])
   const actions = plan.list?.actions || []
   const formFields = (plan.form?.fields || []).filter((n) => fields.some((f) => f.name === n))
-  const pageSize = plan.form?.pageSize || plan.list?.pageSize || 10
+  const pageSize = plan.list?.pageSize || 10
   const width = plan.form?.width || 520
 
   const usedImports = new Set<string>(["useState"])
