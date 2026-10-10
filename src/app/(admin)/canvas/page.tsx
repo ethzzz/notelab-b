@@ -89,8 +89,8 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
   const [collabLoading, setCollabLoading] = useState(false)
   const [inviteForm] = Form.useForm()
   const [inviting, setInviting] = useState(false)
-  /** 当前选中的受邀账户（用来「没选就禁用邀请按钮」—— 见表单处关于不用 rules 的说明） */
-  const [pickId, setPickId] = useState<number | null>(null)
+  /** 当前选中的受邀账户（**多选**）。用来「一个都没选就禁用邀请按钮」—— 见表单处关于不用 rules 的说明 */
+  const [pickIds, setPickIds] = useState<number[]>([])
 
   // 对账（元数据 ↔ 内容）
   const [reconOpen, setReconOpen] = useState(false)
@@ -159,7 +159,7 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
     setCollabList(null)
     setCollabLoading(true)
     inviteForm.resetFields()
-    setPickId(null)
+    setPickIds([])
     try {
       setCollabList(await listCollaborators(c.room_id))
       // 账户简表：列表接口通常会带，没带过就补一次（选人下拉要用）
@@ -175,25 +175,45 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
   }
 
   /**
-   * 邀请 / 改权限。**刻意手动校验而不是用 antd 的 rules**：
+   * 邀请（可一次选多个账户，统一分配同一权限）。**刻意手动校验而不是用 antd 的 rules**：
    * inline 表单里 rules 的校验提示会插到 Select 下方，把这一行从 32px 撑到 54px（实测），
    * 「邀请」按钮随之错位到第二行的观感。这里改成「没选就禁用按钮 + 提交时 toast 兜底」，
    * 一点布局空间都不占。
+   *
+   * ⚠️ 逐个**串行**发请求，不用 Promise.all：后端每次返回的都是**全量名单**，
+   * 并发时响应回来的顺序不定，最后 setState 的那份未必是最新的 —— 串行天然有序，
+   * 代价只是 N 次串行往返（一次邀请的人数是个位数，可忽略）。
    */
   const doInvite = async () => {
     if (!collabOf) return
-    const v = inviteForm.getFieldsValue() as { user_id?: number; permission?: "view" | "edit" }
-    if (!v.user_id) { toast.warning("请先选择要邀请的账户"); return }
+    const v = inviteForm.getFieldsValue() as { user_id?: number[]; permission?: "view" | "edit" }
+    const ids = (Array.isArray(v.user_id) ? v.user_id : []).filter((x): x is number => typeof x === "number")
+    if (!ids.length) { toast.warning("请先选择要邀请的账户"); return }
+    const permission = v.permission === "view" ? "view" : "edit"
     setInviting(true)
+    const failed: number[] = []
+    let last: CollaboratorList | null = null
     try {
-      setCollabList(await upsertCollaborator(
-        collabOf.room_id, v.user_id, v.permission === "view" ? "view" : "edit"))
+      for (const id of ids) {
+        try {
+          last = await upsertCollaborator(collabOf.room_id, id, permission)
+        } catch {
+          failed.push(id)
+        }
+      }
+      if (last) setCollabList(last)
+      const ok = ids.length - failed.length
+      if (failed.length) {
+        // 部分失败必须如实说：不能提示「已邀请 3 人」实际只进去 1 个 ——
+        // 剩下的会留在下拉里（提交后表单已重置），用户还得再点一次，说清楚才知道要重试
+        const names = failed.map((id) => users.find((u) => u.id === id)?.username || `账户#${id}`)
+        toast.warning(`已邀请 ${ok} 个，${failed.length} 个失败：${names.join("、")}`)
+      } else {
+        toast.success(ids.length === 1 ? "已保存协作者权限" : `已邀请 ${ids.length} 个账户`)
+      }
       inviteForm.resetFields()
-      setPickId(null)
-      toast.success("已保存协作者权限")
+      setPickIds([])
       search(searchForm.getFieldsValue())
-    } catch (e: unknown) {
-      toast.error((e as Error)?.message || "邀请失败")
     } finally {
       setInviting(false)
     }
@@ -355,7 +375,11 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
   ]
 
   const ownerCanManage = collabList?.my_permission === "owner"
-  const collaboratorIds = new Set((collabOf?.collaborators || []).map((c) => c.user_id))
+  // ⚠️ 用 collabList（弹窗打开时拉的全量名单）优先，collabOf.collaborators 只是列表页带过来的快照：
+  //    邀请成功后会 search() 刷新列表，但 collabOf 是旧对象引用不会更新 →
+  //    只看快照的话，刚邀请的人仍留在下拉里，看起来像没成功。
+  const collaboratorIds = new Set(
+    (collabList?.items || collabOf?.collaborators || []).map((c) => c.user_id))
 
   return (
     <AdminPage
@@ -440,9 +464,12 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
               initialValues={{ permission: "edit" }}
               onFinish={() => void doInvite()}>
               <Form.Item name="user_id" className="!mb-0">
-                <Select showSearch placeholder="选择要邀请的后台账户" style={{ width: 250 }}
+                {/* ⚠️ maxTagCount="responsive"：多选下 tag 会往第二行堆，把这一行撑高（同上一轮
+                    校验提示撑高的那类问题）。响应式折叠成「+N」保证始终单行，行高不变。 */}
+                <Select mode="multiple" showSearch maxTagCount="responsive"
+                  placeholder="选择要邀请的后台账户（可多选）" style={{ width: 300 }}
                   optionFilterProp="label"
-                  onChange={(v) => setPickId((v as number) ?? null)}
+                  onChange={(v) => setPickIds((v as number[]) || [])}
                   options={users
                     .filter((u) => u.id !== collabOf.created_by && u.role !== "super_admin" && !collaboratorIds.has(u.id))
                     .map((u) => ({ value: u.id, label: `${u.username}（#${u.id}）` }))} />
@@ -452,10 +479,10 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
                   options={[{ value: "edit", label: "可编辑" }, { value: "view", label: "只读" }]} />
               </Form.Item>
               {/* 禁用按钮不触发 hover，Tooltip 要套一层 span 才生效 */}
-              <Tooltip title={pickId ? "" : "先从左侧选择要邀请的后台账户"}>
+              <Tooltip title={pickIds.length ? "" : "先从左侧选择要邀请的后台账户（可多选）"}>
                 <span className="inline-flex">
-                  <Button type="primary" htmlType="submit" loading={inviting} disabled={!pickId}
-                    icon={<UserPlus size={14} />}>邀请</Button>
+                  <Button type="primary" htmlType="submit" loading={inviting} disabled={!pickIds.length}
+                    icon={<UserPlus size={14} />}>邀请{pickIds.length > 1 ? ` ${pickIds.length} 个` : ""}</Button>
                 </span>
               </Tooltip>
             </Form>
