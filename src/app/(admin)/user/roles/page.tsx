@@ -7,6 +7,7 @@ import { toast } from "@/lib/toast"
 import { Table, Modal, Form, Input, Button, Tag, Tree, Popconfirm, Space, Result, Tabs } from "antd"
 import { Plus, ShieldCheck, Pencil, Users } from "lucide-react"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
+import { methodColor } from "@/lib/http-method"
 import { ROLE_EXTERNAL, ROLE_SUPER_ADMIN, ROLE_USER, isBuiltinRole, roleAssignNotice, roleHint, roleIcon } from "@/lib/roles"
 
 // 「页面用哪些接口」的归属、模块键与展示名**全部由后端下发**（PermService.listRoutes 附加
@@ -186,7 +187,11 @@ export default function UserRolesPage() {
     return {
       title: (
         <span className={`text-xs font-mono ${locked ? "text-amber-600 dark:text-amber-400" : "text-zinc-500 dark:text-zinc-400"}`}>
-          {locked ? "🔒 " : ""}{r.method} {r.path}
+          {locked ? "🔒 " : ""}
+          {/* ⚠️ 方法单独上色：同一 URL 的 GET/POST 现在是**两条独立权限码**（可分别授权），
+              纯文字前缀在长列表里容易看漏，配色让「这条是读还是写」一眼分清。 */}
+          <Tag color={methodColor(r.method)} className="!mx-0 !px-1 !text-[10px] !leading-4">{r.method}</Tag>
+          {" "}{r.path}
           {locked && <span className="ml-1.5 font-sans not-italic">仅超管</span>}
         </span>
       ),

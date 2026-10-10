@@ -9,6 +9,7 @@ import { Plus, Pencil, KeyRound, Users, UserPlus, ShieldCheck } from "lucide-rea
 import { api, apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
+import { methodColor } from "@/lib/http-method"
 
 type CUser = { id: number; username: string; nickname: string; group_code: string; status: string; created_at: string }
 type CGroup = { code: string; name: string; created_at: string; member_count: number }
@@ -329,7 +330,9 @@ export default function CUsersPage() {
     title: (
       <span className={`text-xs font-mono ${C_SESSION_PATHS.includes(r.path)
         ? "text-zinc-400 dark:text-zinc-500" : "text-zinc-500 dark:text-zinc-400"}`}>
-        {r.method} {r.path}
+        {/* 同 B 端：一方法一码，方法上色便于区分同一 URL 的读 / 写 */}
+        <Tag color={methodColor(r.method)} className="!mx-0 !px-1 !text-[10px] !leading-4">{r.method}</Tag>
+        {" "}{r.path}
       </span>
     ),
     key: r.code,
