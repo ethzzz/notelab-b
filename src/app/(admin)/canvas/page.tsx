@@ -154,6 +154,23 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
   }
 
   // ---------------- 协作者管理 ----------------
+  /**
+   * 应用后端返回的协作者名单。
+   *
+   * ⚠️ 不直接 `setCollabList(响应)` 整对象覆盖：POST / DELETE 的响应**曾经**不含
+   * `my_permission`，覆盖后 `ownerCanManage` 凭 undefined 判成 false —— 邀请表单和
+   * 「改权限 / 移除」按钮会当场**整块消失**（邀请一次后就没法再点第二次，
+   * 而这一切静态读代码看不出来）。后端已补齐字段，这里再兜一层：本轮没给的沿用旧值。
+   */
+  const applyCollab = (r: CollaboratorList) =>
+    setCollabList((prev) => ({
+      ...prev,
+      ...r,
+      items: r.items,
+      my_permission: r.my_permission ?? prev?.my_permission ?? "none",
+      owner: r.owner ?? prev?.owner ?? -1,
+    }))
+
   const openCollab = async (c: CanvasMeta) => {
     setCollabOf(c)
     setCollabList(null)
@@ -201,7 +218,7 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
           failed.push(id)
         }
       }
-      if (last) setCollabList(last)
+      if (last) applyCollab(last)
       const ok = ids.length - failed.length
       if (failed.length) {
         // 部分失败必须如实说：不能提示「已邀请 3 人」实际只进去 1 个 ——
@@ -222,7 +239,7 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
   const doRemoveCollab = async (c: CanvasCollaborator) => {
     if (!collabOf) return
     try {
-      setCollabList(await removeCollaborator(collabOf.room_id, c.user_id))
+      applyCollab(await removeCollaborator(collabOf.room_id, c.user_id))
       toast.success(`已移除「${c.username || c.user_id}」`)
       search(searchForm.getFieldsValue())
     } catch (e: unknown) {
@@ -233,7 +250,7 @@ function ListView({ onOpen }: { onOpen: (roomId: string) => void }) {
   const doTogglePerm = async (c: CanvasCollaborator) => {
     if (!collabOf) return
     try {
-      setCollabList(await upsertCollaborator(
+      applyCollab(await upsertCollaborator(
         collabOf.room_id, c.user_id, c.permission === "edit" ? "view" : "edit"))
       toast.success(c.permission === "edit" ? "已改为只读" : "已改为可编辑")
       search(searchForm.getFieldsValue())
