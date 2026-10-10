@@ -226,3 +226,24 @@ export function shortTitle(t: string, max = 24): string {
   const s = (t || "").trim() || "未命名画布"
   return s.length > max ? `${s.slice(0, max)}…` : s
 }
+
+// ---------------- 当前账户（两套引擎共用的协作身份） ----------------
+// 协作时得把「我是谁」告诉引擎，对方才看得到名字（tldraw 的 userStore / excalidraw 的 presence
+// 各自需要它）。这里只负责**取一次**，怎么用由各引擎自己决定。
+export type CanvasMe = { id: number; username?: string }
+
+/**
+ * 当前登录账户。模块级缓存 —— 一个页面里两套引擎、多个组件只请求一次。
+ *
+ * ⚠️ 取不到就返回 null（而不是抛错）：协作身份只影响「别人看到的显示名」，
+ * 拿不到不该让整个画布打不开。
+ */
+let mePromise: Promise<CanvasMe | null> | null = null
+export function loadCanvasMe(): Promise<CanvasMe | null> {
+  if (!mePromise) {
+    mePromise = apiJson<CanvasMe>("/api/me")
+      .then((m) => (m && typeof m.id === "number" ? m : null))
+      .catch(() => null)
+  }
+  return mePromise
+}

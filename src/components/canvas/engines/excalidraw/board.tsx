@@ -17,8 +17,7 @@ import { CaptureUpdateAction, Excalidraw, reconcileElements, viewportCoordsToSce
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types"
 import "@excalidraw/excalidraw/index.css"
 import { Spin } from "antd"
-import { apiJson } from "@/lib/api"
-import { collabUri } from "@/lib/canvas"
+import { collabUri, loadCanvasMe } from "@/lib/canvas"
 import {
   ExcalidrawCollab, stampOf,
   type ConnStatus, type Diff, type Peer, type RawElement, type RawFile, type Scene,
@@ -29,17 +28,6 @@ const SEND_INTERVAL_MS = 120
 
 /** 光标广播节流。与内容发送同频但**互不影响**：presence 丢了下一帧就补上，不需要可靠性 */
 const PRESENCE_INTERVAL_MS = 120
-
-/** 自己的显示名：整页只取一次，多个画布组件共享同一个 Promise（取不到就匿名显示，不影响协作） */
-let myNamePromise: Promise<string> | null = null
-function loadMyName(): Promise<string> {
-  if (!myNamePromise) {
-    myNamePromise = apiJson<{ username?: string }>("/api/me")
-      .then((me) => me?.username || "")
-      .catch(() => "")
-  }
-  return myNamePromise
-}
 
 type Pending = {
   elements: Map<string, RawElement>
@@ -256,7 +244,8 @@ export default function Board({ roomId, readonly = false }: { roomId: string; re
     // ⚠️ **必须在 return 之前**：useEffect 的回调在 return 之后就结束了，
     //    写在 return 之后等于死代码 —— 曾经就这么错过一次，表现为「光标标签一直是空的」。
     //    刻意不 await：显示名只是光标旁的标签，晚到一会儿无妨，不该阻塞连接。
-    void loadMyName().then((n) => { meNameRef.current = n })
+    //    取身份统一走 lib/canvas 的模块级缓存（tldraw 引擎那边也用它，一次会话只请求一次）。
+    void loadCanvasMe().then((me) => { meNameRef.current = me?.username || "" })
     return () => {
       collab.close()
       collabRef.current = null
