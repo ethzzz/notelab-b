@@ -136,7 +136,8 @@ export default function LowCodePage() {
     },
     {
       key: "run", label: "▶️ 运行时",
-      children: <RuntimeRunner forms={(cfg.forms || []) as FormPlan[]} />,
+      children: <RuntimeRunner forms={(cfg.forms || []) as FormPlan[]}
+        onPatch={(id, p) => patchPlan("forms", id, p)} />,
     },
   ]
 
@@ -154,7 +155,7 @@ export default function LowCodePage() {
                 onPatch={(next) => patchKind(kind, next)} />
             ) : (
               <div className="text-xs text-zinc-500 dark:text-zinc-400 py-1.5">
-                运行时直接用「表单设计器」里已保存的表单方案，提交结果存 lowcode_records 表。
+                运行时直接用「表单设计器」里已保存的表单方案：可内部试填，也能<b>对外发布</b>生成免登录填写链接（/f/链接名），提交统一存 lowcode_records 表。
               </div>
             )}
           </div>
@@ -174,7 +175,7 @@ export default function LowCodePage() {
       )}
 
       <div className="text-xs text-zinc-400 dark:text-zinc-500 -mt-1">
-        可视化搭建 · 设计稿存服务端（ui_config.lowcode）· 表单提交记录存 lowcode_records 表 · 支持导出 JSON Schema / DDL / React 代码
+        可视化搭建 · 设计稿存服务端（ui_config.lowcode）· 表单提交记录存 lowcode_records 表 · 表单可对外发布（/f/链接名，免登录）· 支持导出 JSON Schema / DDL / React 代码
       </div>
     </div>
   )

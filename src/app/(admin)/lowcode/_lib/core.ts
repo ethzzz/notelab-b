@@ -46,7 +46,26 @@ export type Field = {
   children?: Field[]
 }
 
-export type FormPlan = Plan & { fields: Field[] }
+/**
+ * 表单方案的对外发布态（2026-10-11）
+ *
+ * <ul>
+ *   <li>{@code published}：是否对外开放。关掉后 /f/<slug> 立即 404（已收回的链接当场失效）。</li>
+ *   <li>{@code slug}：公开链接片段，全库唯一（后端保存时校验，重复直接 400）。</li>
+ *   <li>{@code intro} / {@code submitText}：公开页的说明文案与按钮文案，不填有默认值。</li>
+ * </ul>
+ *
+ * <p>⚠️ 这三个字段存在设计稿里（ui_config.lowcode.forms[i]），后端走的是**结构净化**不是字段白名单，
+ * 所以加字段不用改后端；但公开端点会精确读 {@code slug} / {@code published}，
+ * 改名必须同步 {@code LowCodeController.findPublishedForm}。
+ */
+export type FormPlan = Plan & {
+  fields: Field[]
+  published?: boolean
+  slug?: string
+  intro?: string
+  submitText?: string
+}
 
 export const FIELD_DEFS: { type: FieldType; name: string; icon: string }[] = [
   { type: "text", name: "单行文本", icon: "📝" },
@@ -140,6 +159,30 @@ export function nowStamp(): string {
 
 export function emptyPlan(name = "未命名方案"): Plan {
   return { id: uid("p"), name, updated_at: nowStamp() }
+}
+
+/** 公开链接片段的合法形态，与后端 LowCodeController.SLUG_RE 必须一致（小写字母数字连字符，3~32 位） */
+export const SLUG_RE = /^[a-z0-9][a-z0-9-]{2,31}$/
+
+/** 把任意输入洗成合法 slug；洗不出东西返回空串（调用方负责兜底） */
+export function slugify(input: string): string {
+  return String(input || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+}
+
+/**
+ * 给表单生成一个默认 slug。
+ * 中文名洗完是空的（很常见），所以兜底用方案 id 派生 —— 用 id 而不是随机数，
+ * 是为了「关掉再打开发布」时链接保持不变，运营发出去的旧链接不会莫名其妙换地址。
+ */
+export function defaultSlug(plan: { id: string; name?: string }): string {
+  const fromName = slugify(plan.name || "")
+  if (fromName.length >= 3 && SLUG_RE.test(fromName)) return fromName
+  const fromId = "f" + String(plan.id || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+  return fromId.length >= 3 ? fromId.slice(0, 32) : "form" + Date.now().toString(36).slice(-5)
 }
 
 /** 条件显隐求值：参照字段的当前值是否满足（运行时与预览共用，口径必须一致） */

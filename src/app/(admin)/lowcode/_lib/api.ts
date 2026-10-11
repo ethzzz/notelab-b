@@ -48,12 +48,19 @@ export type RecordItem = {
   data: string          // JSON 字符串
   created_by: number
   created_by_name: string
+  /** 提交来源：admin = 后台内部试填；public = 公开链接（匿名）。老数据缺字段时按 admin 处理 */
+  source?: string
   created_at: string
 }
 
-export async function loadRecords(formId = "", limit = 50): Promise<{ items: RecordItem[]; total: number }> {
+export async function loadRecords(
+  formId = "",
+  limit = 50,
+  source = "",
+): Promise<{ items: RecordItem[]; total: number; public_total: number }> {
   const q = new URLSearchParams()
   if (formId) q.set("form_id", formId)
+  if (source) q.set("source", source)
   q.set("limit", String(limit))
   return apiJson(`/api/lowcode/records?${q.toString()}`)
 }
@@ -74,4 +81,15 @@ export async function deleteRecord(id: number): Promise<void> {
 /** 取某类方案里的页面生成器配置（顺手做一次类型收窄） */
 export function pagesOf(cfg: LowCodeConfig): PagePlan[] {
   return (cfg.pages || []) as PagePlan[]
+}
+
+/**
+ * 公开填写页地址。
+ *
+ * <p>⚠️ B 端挂在 /admin、C 端挂在 /，但**同域**（都是 haolo.cloud），所以填表页直接取 origin 拼 /f/。
+ * 这也正是当初坚持「同域分前缀」的红利：公开表单不需要处理 cookie domain / CORS / CSRF。
+ */
+export function publicFormUrl(slug: string): string {
+  const origin = typeof window === "undefined" ? "" : window.location.origin
+  return `${origin}/f/${slug}`
 }
