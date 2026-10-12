@@ -96,27 +96,33 @@ export default function RuntimeRunner({ forms, onPatch }: {
     }
   }
 
+  // 宽度是算过的：卡片内宽约 550~630，固定列合计别超过 470，否则「内容摘要」会被挤到几个像素，
+  // 中文就逐字竖排（时间列也会被压成「2026-10-12」换行）。宁可让内容摘要省略号，也不让它变形。
   const recColumns = [
-    { title: "ID", dataIndex: "id", width: 70 },
+    { title: "ID", dataIndex: "id", width: 56 },
     {
-      title: "来源", dataIndex: "source", width: 80, align: "center" as const,
+      title: "来源", dataIndex: "source", width: 68, align: "center" as const,
       render: (v: string) => (v === "public"
         ? <Tag color="blue">公开</Tag>
         : <Tag>内部</Tag>),
     },
-    { title: "提交人", dataIndex: "created_by_name", width: 110, render: (v: string) => v || <span className="text-zinc-400">匿名</span> },
+    { title: "提交人", dataIndex: "created_by_name", width: 84, ellipsis: true, render: (v: string) => v || <span className="text-zinc-400">匿名</span> },
     {
-      title: "内容摘要", render: (_: any, r: RecordItem) => {
+      title: "内容摘要", ellipsis: { showTitle: false }, render: (_: any, r: RecordItem) => {
         let d: any = {}
         try { d = JSON.parse(r.data || "{}") } catch { d = {} }
         const keys = Object.keys(d).slice(0, 3)
         const txt = keys.map((k) => `${k}=${String(d[k] ?? "")}`).join(" · ")
-        return <span className="text-xs text-zinc-500 dark:text-zinc-400">{txt || "（空）"}</span>
+        return (
+          <Tooltip title={txt || "（空）"} placement="topLeft">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">{txt || "（空）"}</span>
+          </Tooltip>
+        )
       },
     },
-    { title: "时间", dataIndex: "created_at", width: 160 },
+    { title: "时间", dataIndex: "created_at", width: 148 },
     {
-      title: "操作", width: 120, align: "center" as const, render: (_: any, r: RecordItem) => (
+      title: "操作", width: 104, align: "center" as const, render: (_: any, r: RecordItem) => (
         <Space size={4}>
           <Button size="small" type="link" onClick={() => setDetail(r)}>详情</Button>
           <Button size="small" type="link" danger onClick={() => remove(r)}>删除</Button>
@@ -177,7 +183,7 @@ export default function RuntimeRunner({ forms, onPatch }: {
         </Card>
 
         {/* 提交记录 */}
-        <Card size="small" className="w-[46%] shrink-0" styles={{ body: { padding: 12 } }}>
+        <Card size="small" className="w-[50%] shrink-0" styles={{ body: { padding: 12 } }}>
           <div className="flex items-center justify-between mb-2">
             <SectionTitle>提交记录（共 {total} 条）</SectionTitle>
             <Space size={4}>
@@ -196,8 +202,9 @@ export default function RuntimeRunner({ forms, onPatch }: {
               <Button size="small" onClick={reload} loading={loadingRec}>刷新</Button>
             </Space>
           </div>
+          {/* scroll.x 给个下限：窗口变窄时让表格横向滚动，而不是把列压成竖排文字 */}
           <Table rowKey="id" size="small" pagination={false} loading={loadingRec}
-            dataSource={records} columns={recColumns as any} scroll={{ y: 420 }} />
+            dataSource={records} columns={recColumns as any} scroll={{ x: 560, y: 420 }} />
 
           <Modal open={!!detail} onCancel={() => setDetail(null)} title="提交详情" width={640}
             footer={[<Button key="c" onClick={() => setDetail(null)}>关闭</Button>]}>
