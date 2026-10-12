@@ -320,18 +320,18 @@ function CodeBox({ code, lang, runner }: { code: string; lang: string; runner?: 
                 {running ? "执行中…" : result ? (result.timedOut ? "已强制中断" : `耗时 ${result.ms} ms`) : ""}
               </span>
               <Button onClick={() => { setSrc(code); setResult(null) }} disabled={running}>重置</Button>
-              <Button type="primary" icon={<Play size={13} />} loading={running} onClick={() => void doRun()}>
-                运行
-              </Button>
+              <Button type="primary" data-run-exec="" icon={<Play size={13} />} loading={running}
+                onClick={() => void doRun()}>运行</Button>
             </div>
           }>
           <div className="flex flex-col gap-2">
             {/* 刻意用原生 textarea 而不是代码编辑器组件：这一步要的是「能改一行试试」，
                 引一个编辑器（Monaco/CodeMirror）在上面这个体积上不划算 */}
-            <textarea value={src} spellCheck={false} onChange={(e) => setSrc(e.target.value)}
+            <textarea value={src} spellCheck={false} data-run-input="" onChange={(e) => setSrc(e.target.value)}
               className="h-52 w-full resize-y rounded-lg bg-zinc-900 p-3 font-mono text-xs leading-relaxed text-zinc-100 outline-none dark:bg-black/60"
               style={{ tabSize: 2 }} />
-            <div className="max-h-56 min-h-[72px] overflow-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs leading-relaxed dark:bg-black/60">
+            <div data-run-output=""
+              className="max-h-56 min-h-[72px] overflow-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs leading-relaxed dark:bg-black/60">
               {!result ? (
                 <span className="text-zinc-500">改代码试试，点「运行」看输出</span>
               ) : (
