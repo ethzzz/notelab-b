@@ -12,8 +12,10 @@
 // ⚠️ 详情态走 `?track=<code>` 查询参数而**不是子路由**：页面守卫的 pages.includes(pathname)
 //    是精确匹配，/learning/xxx 不在路由表里会被判无权限（协作画布踩过同一个坑）。
 //
-// ⚠️ 「能不能真跑代码」这件事由后端的 runners 能力表描述（只读），页面只负责展示 ——
-//    本页不含任何执行器，运行按钮弹出的是该语言的方案说明。
+// ⚠️ 分清两件事：
+//    · 「这门语言能不能跑、走什么方案」→ 后端的 runners 能力表（只读，页面只展示）
+//    · 「能不能在这个页面上跑」→ lib/code-runner 的 isRunnable（白名单，现在只有 worker 一档：
+//      JS/TS，用 Blob Worker 执行）。接了运行器的语言点「运行」是**真跑**；其余仍弹方案说明。
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -22,6 +24,7 @@ import { ArrowLeft, CircleCheck, CircleDot, Clock, Copy, Play, Users } from "luc
 import { AdminPage } from "@/components/admin"
 import { MdPreview } from "@/components/md-editor"
 import { toast } from "@/lib/toast"
+import { DEFAULT_TIMEOUT_MS, isRunnable, runCode, type RunLog, type RunResult } from "@/lib/code-runner"
 import {
   LEVEL_META, loadLearning, loadProgress, runnerOf, saveProgress, trackStats,
   type LearningDoc, type Lesson, type QuizItem, type Runner, type Track,
@@ -243,8 +246,26 @@ function TrackView({ doc, track, onBack }: { doc: LearningDoc; track: Track; onB
 }
 
 /** 代码块：等宽 + 复制 + 「运行」按钮（点击说明该语言走什么方案，本页不执行代码） */
+/** 运行输出的配色（深色代码区里的浅色文字） */
+const LOG_CLS: Record<RunLog["level"], string> = {
+  log: "text-zinc-100",
+  info: "text-sky-300",
+  warn: "text-amber-300",
+  error: "text-rose-400",
+}
+
 function CodeBox({ code, lang, runner }: { code: string; lang: string; runner?: Runner }) {
-  const [open, setOpen] = useState(false)
+  const [explainOpen, setExplainOpen] = useState(false)
+  // 运行面板的 state 放在**这里**而不是面板组件内：Modal 关闭后内容不会销毁，
+  // 只有放在外层才能在「每次打开」时重置成课程里的原始代码。
+  const [runOpen, setRunOpen] = useState(false)
+  const [src, setSrc] = useState(code)
+  const [result, setResult] = useState<RunResult | null>(null)
+  const [running, setRunning] = useState(false)
+
+  const canRun = isRunnable(runner?.id)
+  const meta = runner ? (LEVEL_META[runner.level] || LEVEL_META.none) : LEVEL_META.none
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code)
@@ -253,21 +274,91 @@ function CodeBox({ code, lang, runner }: { code: string; lang: string; runner?: 
       toast.error("复制失败，请手动选中")
     }
   }
-  const meta = runner ? (LEVEL_META[runner.level] || LEVEL_META.none) : LEVEL_META.none
+
+  const openRunner = () => {
+    setSrc(code)
+    setResult(null)
+    setRunOpen(true)
+  }
+
+  const doRun = async () => {
+    setRunning(true)
+    setResult(null)
+    try {
+      setResult(await runCode(src, lang))
+    } catch (e) {
+      setResult({ ok: false, logs: [], error: e instanceof Error ? e.message : String(e), ms: 0, timedOut: false })
+    } finally {
+      setRunning(false)
+    }
+  }
+
   return (
     <div className="relative">
       <div className="mb-1 flex items-center gap-2">
         <span className="text-xs text-zinc-400 dark:text-zinc-500">{lang}</span>
         <div className="ml-auto flex items-center gap-1">
           <Button size="small" type="text" icon={<Copy size={13} />} onClick={copy}>复制</Button>
-          <Button size="small" type="text" icon={<Play size={13} />} onClick={() => setOpen(true)}>运行</Button>
+          {/* 接了运行器 → 真跑；没接 → 弹方案说明（按钮文案也跟着变，别让人以为点了能跑） */}
+          <Button size="small" type="text" icon={<Play size={13} />}
+            onClick={() => (canRun ? openRunner() : setExplainOpen(true))}>
+            {canRun ? "运行" : "运行方案"}
+          </Button>
         </div>
       </div>
       <pre className="m-0 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs leading-relaxed text-zinc-100 dark:bg-black/60">
         <code className="whitespace-pre-wrap break-words">{code}</code>
       </pre>
 
-      <Modal open={open} onCancel={() => setOpen(false)} footer={<Button onClick={() => setOpen(false)}>知道了</Button>}
+      {/* ---- 真运行面板（已接运行器的语言） ---- */}
+      {canRun && (
+        <Modal open={runOpen} onCancel={() => setRunOpen(false)} width={720}
+          title={`运行 ${lang} 代码`}
+          footer={
+            <div className="flex items-center gap-2">
+              <span className="mr-auto text-xs text-zinc-400 dark:text-zinc-500">
+                {running ? "执行中…" : result ? (result.timedOut ? "已强制中断" : `耗时 ${result.ms} ms`) : ""}
+              </span>
+              <Button onClick={() => { setSrc(code); setResult(null) }} disabled={running}>重置</Button>
+              <Button type="primary" icon={<Play size={13} />} loading={running} onClick={() => void doRun()}>
+                运行
+              </Button>
+            </div>
+          }>
+          <div className="flex flex-col gap-2">
+            {/* 刻意用原生 textarea 而不是代码编辑器组件：这一步要的是「能改一行试试」，
+                引一个编辑器（Monaco/CodeMirror）在上面这个体积上不划算 */}
+            <textarea value={src} spellCheck={false} onChange={(e) => setSrc(e.target.value)}
+              className="h-52 w-full resize-y rounded-lg bg-zinc-900 p-3 font-mono text-xs leading-relaxed text-zinc-100 outline-none dark:bg-black/60"
+              style={{ tabSize: 2 }} />
+            <div className="max-h-56 min-h-[72px] overflow-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs leading-relaxed dark:bg-black/60">
+              {!result ? (
+                <span className="text-zinc-500">改代码试试，点「运行」看输出</span>
+              ) : (
+                <>
+                  {result.logs.map((l, i) => (
+                    <div key={i} className={`whitespace-pre-wrap break-words ${LOG_CLS[l.level]}`}>{l.text}</div>
+                  ))}
+                  {result.error && (
+                    <div className="whitespace-pre-wrap break-words text-rose-400">{result.error}</div>
+                  )}
+                  {!result.logs.length && !result.error && (
+                    <span className="text-zinc-500">（没有输出 —— 代码里没有 console.log？）</span>
+                  )}
+                </>
+              )}
+            </div>
+            <p className="m-0 text-[11px] leading-relaxed text-zinc-400 dark:text-zinc-500">
+              代码在独立的 Worker 线程里执行，{Math.round(DEFAULT_TIMEOUT_MS / 1000)} 秒超时强制中断。
+              ⚠️ 它<b>不是安全沙箱</b>（同源网络仍可达），本页仅后台登录用户可用。
+            </p>
+          </div>
+        </Modal>
+      )}
+
+      {/* ---- 方案说明（还没接运行器的语言） ---- */}
+      <Modal open={explainOpen} onCancel={() => setExplainOpen(false)}
+        footer={<Button onClick={() => setExplainOpen(false)}>知道了</Button>}
         title={`在这台服务器上运行 ${lang} 代码`} width={560}>
         {runner ? (
           <div className="flex flex-col gap-3 text-sm">
