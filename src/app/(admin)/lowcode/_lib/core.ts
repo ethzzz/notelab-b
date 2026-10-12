@@ -53,10 +53,11 @@ export type Field = {
  *   <li>{@code published}：是否对外开放。关掉后 /f/<slug> 立即 404（已收回的链接当场失效）。</li>
  *   <li>{@code slug}：公开链接片段，全库唯一（后端保存时校验，重复直接 400）。</li>
  *   <li>{@code intro} / {@code submitText}：公开页的说明文案与按钮文案，不填有默认值。</li>
+ *   <li>{@code once}：每人限填一次（2026-10-12）。按 IP 哈希判重，命中返回 409。</li>
  * </ul>
  *
- * <p>⚠️ 这三个字段存在设计稿里（ui_config.lowcode.forms[i]），后端走的是**结构净化**不是字段白名单，
- * 所以加字段不用改后端；但公开端点会精确读 {@code slug} / {@code published}，
+ * <p>⚠️ 这些字段存在设计稿里（ui_config.lowcode.forms[i]），后端走的是**结构净化**不是字段白名单，
+ * 所以加字段不用改后端；但公开端点会精确读 {@code slug} / {@code published} / {@code once}，
  * 改名必须同步 {@code LowCodeController.findPublishedForm}。
  */
 export type FormPlan = Plan & {
@@ -65,6 +66,8 @@ export type FormPlan = Plan & {
   slug?: string
   intro?: string
   submitText?: string
+  /** 每人限填一次：同一 IP 哈希再次提交 → 409。适合报名/抽奖这类一人一份的场景 */
+  once?: boolean
 }
 
 export const FIELD_DEFS: { type: FieldType; name: string; icon: string }[] = [

@@ -4,10 +4,11 @@
 // ⚠️ 渲染与校验必须与 FormDesigner 的「实时预览」共用同一套代码（FieldControl + validateField），
 // 否则会出现「预览能过、运行时报错」的口径分裂。
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Button, Card, Col, Empty, Modal, Row, Select, Space, Table, Tag } from "antd"
+import { Button, Card, Col, Empty, Modal, Row, Select, Space, Table, Tag, Tooltip } from "antd"
+import { DownloadOutlined } from "@ant-design/icons"
 import { toast } from "@/lib/toast"
 import { isVisible, validateField, type Field, type FormPlan } from "../_lib/core"
-import { deleteRecord, loadRecords, submitRecord, type RecordItem } from "../_lib/api"
+import { deleteRecord, exportRecordsUrl, loadRecords, submitRecord, type RecordItem } from "../_lib/api"
 import { CodeBlock, SectionTitle } from "./ui"
 import { FieldControl } from "./FieldControl"
 import PublishPanel from "./PublishPanel"
@@ -15,6 +16,9 @@ import PublishPanel from "./PublishPanel"
 function spanToCol(span: number | undefined): number {
   return span === 1 ? 8 : span === 2 ? 16 : 24
 }
+
+/** 单次导出条数上限，须与后端 LowCodeController.EXPORT_MAX_ROWS 一致（超出只会导出最近这些） */
+const EXPORT_MAX = 5000
 
 export default function RuntimeRunner({ forms, onPatch }: {
   forms: FormPlan[]
@@ -180,6 +184,15 @@ export default function RuntimeRunner({ forms, onPatch }: {
               <Select size="small" className="!w-24" value={srcFilter}
                 onChange={(v) => setSrcFilter(v ?? "")}
                 options={[{ value: "", label: "全部来源" }, { value: "admin", label: "仅内部" }, { value: "public", label: "仅公开" }]} />
+              {/* 导出跟随当前筛选：运营要的通常就是「这个表单收上来的公开提交」，不是全库混在一起 */}
+              <Tooltip title={total > EXPORT_MAX
+                ? `当前 ${total} 条，超出单次上限，只会导出最近 ${EXPORT_MAX} 条`
+                : "导出为 CSV（列名取表单字段，可直接用 Excel 打开）"}>
+                <Button size="small" icon={<DownloadOutlined />} disabled={!formId}
+                  onClick={() => window.location.assign(exportRecordsUrl(formId || "", srcFilter))}>
+                  导出 CSV
+                </Button>
+              </Tooltip>
               <Button size="small" onClick={reload} loading={loadingRec}>刷新</Button>
             </Space>
           </div>

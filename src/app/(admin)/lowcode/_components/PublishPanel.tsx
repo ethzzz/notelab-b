@@ -73,6 +73,15 @@ export default function PublishPanel({ plan, onPatch, publicTotal }: {
               onChange={(e) => onPatch({ submitText: e.target.value })} placeholder="提交" />
           </div>
 
+          <div className="flex items-center gap-2 flex-wrap">
+            <Switch size="small" checked={!!plan.once} onChange={(v) => onPatch({ once: v })} />
+            <span className="text-xs text-zinc-600 dark:text-zinc-300">每人限填一次</span>
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">
+              按 IP 判定，同一网络下的多个人会被当成同一个人 —— 只适合报名/抽奖这类宁可错杀的场景，
+              要严格按人区分就得先让填表人登录
+            </span>
+          </div>
+
           <div className="text-xs text-zinc-500 dark:text-zinc-400">
             已收到 <b className="text-zinc-700 dark:text-zinc-200">{publicTotal}</b> 份公开提交 ·
             关闭开关后该链接立即失效（已收回的数据不受影响）·

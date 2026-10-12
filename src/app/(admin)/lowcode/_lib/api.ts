@@ -78,6 +78,21 @@ export async function deleteRecord(id: number): Promise<void> {
   }
 }
 
+/**
+ * 提交记录的 CSV 导出地址。
+ *
+ * <p>⚠️ 刻意返回 URL 而不是走 {@code apiJson}：这是文件下载，浏览器要自己处理
+ * {@code Content-Disposition: attachment}。走 fetch 拿字节再拼 Blob 也能做，
+ * 但会先把整份 CSV 堆在内存里，还要自己造文件名 —— 直接让浏览器导航最简单可靠。
+ * 同域下 cookie 自动带上，鉴权不需要额外处理。
+ */
+export function exportRecordsUrl(formId = "", source = ""): string {
+  const q = new URLSearchParams()
+  if (formId) q.set("form_id", formId)
+  if (source) q.set("source", source)
+  return `/api/lowcode/records/export?${q.toString()}`
+}
+
 /** 取某类方案里的页面生成器配置（顺手做一次类型收窄） */
 export function pagesOf(cfg: LowCodeConfig): PagePlan[] {
   return (cfg.pages || []) as PagePlan[]
