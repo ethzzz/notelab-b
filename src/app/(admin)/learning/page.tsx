@@ -327,6 +327,38 @@ function LessonView({ lesson, runner, onRecord }: {
 }
 
 /** 随堂测试：选完立刻判定并显示解析；统计按「答对题数 / 总题数」记进本地进度 */
+/**
+ * 题干 / 选项 / 解析里的两种 inline 标记：`code` 与 **粗体**。
+ *
+ * <p>⚠️ 不能直接上 {@link MdPreview}：它是**块级**元素（自带段落间距），塞进选项按钮里
+ * 会把行高撑坏。所以这里手写最小解析 —— 只认这两种标记，其余原样输出。
+ *
+ * <p>之所以要做这一步：这三处走的是 JSX 纯文本插值，不写这个的话，
+ * 内容里写的反引号和星号会**原样显示**出来（`local` 会连着反引号一起出现）。
+ * 而内容是 Markdown 风格写的（讲解部分走 MdPreview 渲染正常），
+ * 两处口径不一致会让人以为「哪里写坏了」。
+ */
+function Inline({ text }: { text: string }) {
+  const parts = String(text ?? "").split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (p.startsWith("**") && p.endsWith("**") && p.length > 4) {
+          return <strong key={i} className="font-semibold">{p.slice(2, -2)}</strong>
+        }
+        if (p.startsWith("`") && p.endsWith("`") && p.length > 2) {
+          return (
+            <code key={i} className="rounded bg-black/[0.06] px-1 py-[1px] font-mono text-[0.92em] dark:bg-white/10">
+              {p.slice(1, -1)}
+            </code>
+          )
+        }
+        return <span key={i}>{p}</span>
+      })}
+    </>
+  )
+}
+
 function Quiz({ lesson, onRecord }: { lesson: Lesson; onRecord: (id: string, answered: number, correct: number) => void }) {
   const [picked, setPicked] = useState<Record<number, number>>({})
 
@@ -368,7 +400,7 @@ function Quiz({ lesson, onRecord }: { lesson: Lesson; onRecord: (id: string, ans
           <div key={qi}>
             <div className="mb-1.5 flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-200">
               <span className="shrink-0 text-zinc-400">{qi + 1}.</span>
-              <span>{q.q}</span>
+              <span><Inline text={q.q} /></span>
             </div>
             <div className="flex flex-col gap-1.5">
               {q.options.map((opt, oi) => {
@@ -386,7 +418,7 @@ function Quiz({ lesson, onRecord }: { lesson: Lesson; onRecord: (id: string, ans
                   <button key={oi} type="button" disabled={locked} onClick={() => pick(qi, oi)}
                     className={`rounded-lg border px-3 py-1.5 text-left text-sm transition-colors ${cls} ${locked ? "cursor-default" : ""}`}>
                     <span className="mr-2 font-mono text-xs opacity-60">{"ABCD"[oi] || oi + 1}</span>
-                    {opt}
+                    <Inline text={opt} />
                   </button>
                 )
               })}
@@ -398,7 +430,7 @@ function Quiz({ lesson, onRecord }: { lesson: Lesson; onRecord: (id: string, ans
                   : "bg-zinc-50 text-zinc-600 dark:bg-zinc-800/60 dark:text-zinc-300"
               }`}>
                 <span className="font-medium">{chosen === q.answer ? "答对了。" : `答错了，正确答案是 ${"ABCD"[q.answer] || q.answer + 1}。`}</span>
-                {q.explain}
+                <Inline text={q.explain} />
               </div>
             )}
           </div>
