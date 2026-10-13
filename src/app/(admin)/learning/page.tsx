@@ -26,8 +26,9 @@ import { MdPreview } from "@/components/md-editor"
 import { toast } from "@/lib/toast"
 import { DEFAULT_TIMEOUT_MS, isRunnable, runCode, type RunLog, type RunResult } from "@/lib/code-runner"
 import {
-  LEVEL_META, loadLearning, loadProgress, runnerOf, saveProgress, trackStats,
-  type LearningDoc, type Lesson, type QuizItem, type Runner, type Track,
+  LEVEL_META, lessonStat, loadLearning, loadProgress, markStudied, recordSelection, runnerOf,
+  selectionOf, trackCompletion, trackStats,
+  type LearningDoc, type Lesson, type ProgressDoc, type QuizItem, type Runner, type Selection, type Track,
 } from "@/lib/learning-content"
 
 export default function LearningPage() {
@@ -135,23 +136,25 @@ function TrackView({ doc, track, onBack }: { doc: LearningDoc; track: Track; onB
   const runner = runnerOf(doc, track.runner)
   const flat = useMemo(() => track.stages.flatMap((s) => s.lessons.map((l) => ({ stage: s, lesson: l }))), [track])
   const [lessonId, setLessonId] = useState(flat[0]?.lesson.id || "")
-  const [progress, setProgress] = useState<Record<string, { answered: number; correct: number }>>({})
+  // 首屏给空进度、挂载后再读 localStorage：SSR 时没有 window，
+  // 写进 useState 初值会造成 hydration 前后不一致。
+  const [progress, setProgress] = useState<ProgressDoc>(() => ({ v: 2, d: {}, last: {} }))
 
   useEffect(() => { setProgress(loadProgress()) }, [])
 
   const current = flat.find((f) => f.lesson.id === lessonId)?.lesson
   const st = trackStats(track)
+  const completion = trackCompletion(progress, track.stages)
 
-  const record = useCallback((lid: string, answered: number, correct: number) => {
-    setProgress((prev) => {
-      const old = prev[lid]
-      // 只保留最好成绩：重做一遍分数更低不该把已有记录冲掉
-      if (old && old.correct >= correct) return prev
-      const next = { ...prev, [lid]: { answered, correct } }
-      saveProgress(next)
-      return next
-    })
+  // 作答：以**最后一次输入**为准（进度展示由输入 + 当前内容派生，见 learning-content.ts）
+  const record = useCallback((lid: string, sel: Selection) => {
+    setProgress((prev) => recordSelection(prev, lid, sel))
   }, [])
+
+  // 记「学到哪一步」：切课时就写一次，下次进来能接着学
+  useEffect(() => {
+    if (lessonId) setProgress((prev) => markStudied(prev, track.code, lessonId))
+  }, [track.code, lessonId])
 
   return (
     <div className="flex flex-col gap-4">
@@ -164,8 +167,11 @@ function TrackView({ doc, track, onBack }: { doc: LearningDoc; track: Track; onB
           </div>
           <p className="mt-0.5 mb-0 text-sm text-zinc-500 dark:text-zinc-400">{track.desc}</p>
         </div>
-        <div className="ml-auto text-xs text-zinc-400 dark:text-zinc-500">
-          {st.stages} 阶段 · {st.lessons} 课时 · {st.quiz} 题
+        <div className="ml-auto text-right text-xs text-zinc-400 dark:text-zinc-500">
+          <div>{st.stages} 阶段 · {st.lessons} 课时 · {st.quiz} 题</div>
+          <div className="mt-0.5 text-zinc-500 dark:text-zinc-400">
+            完成度 <b className="text-zinc-700 dark:text-zinc-200">{Math.round(completion * 100)}%</b>
+          </div>
         </div>
       </div>
 
@@ -192,9 +198,8 @@ function TrackView({ doc, track, onBack }: { doc: LearningDoc; track: Track; onB
               ) : (
                 <ul className="m-0 list-none p-0">
                   {s.lessons.map((l, i) => {
-                    const pr = progress[l.id]
+                    const pr = lessonStat(l, selectionOf(progress, l.id))
                     const active = l.id === lessonId
-                    const done = pr && pr.answered > 0 && pr.correct === l.quiz.length && l.quiz.length > 0
                     return (
                       <li key={l.id}>
                         <button type="button" onClick={() => setLessonId(l.id)}
@@ -203,11 +208,11 @@ function TrackView({ doc, track, onBack }: { doc: LearningDoc; track: Track; onB
                               ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300"
                               : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
                           }`}>
-                          {done
+                          {pr.allDone
                             ? <CircleCheck size={13} className="shrink-0 text-emerald-500" />
                             : <CircleDot size={13} className="shrink-0 opacity-40" />}
                           <span className="min-w-0 flex-1 truncate">{i + 1}. {l.title}</span>
-                          {pr && pr.answered > 0 && (
+                          {pr.answered > 0 && (
                             <span className="shrink-0 text-[10px] text-zinc-400">{pr.correct}/{l.quiz.length}</span>
                           )}
                         </button>
@@ -222,7 +227,7 @@ function TrackView({ doc, track, onBack }: { doc: LearningDoc; track: Track; onB
 
         {/* 右：课时内容 */}
         {current ? (
-          <LessonView lesson={current} runner={runner} onRecord={record} />
+          <LessonView lesson={current} runner={runner} selection={selectionOf(progress, current.id)} onRecord={record} />
         ) : (
           <Card size="small"><Empty description="这门语言的内容还在准备中 — 架子已就位，知识点待补" /></Card>
         )}
@@ -367,10 +372,12 @@ function CodeBox({ code, lang, runner }: { code: string; lang: string; runner?: 
   )
 }
 
-function LessonView({ lesson, runner, onRecord }: {
+function LessonView({ lesson, runner, selection, onRecord }: {
   lesson: Lesson
   runner?: Runner
-  onRecord: (lessonId: string, answered: number, correct: number) => void
+  /** 该课已保存的作答（每题选中项，null=未答） */
+  selection: Selection
+  onRecord: (lessonId: string, selection: Selection) => void
 }) {
   return (
     <Card size="small">
@@ -396,7 +403,7 @@ function LessonView({ lesson, runner, onRecord }: {
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">随堂测试</span>
             <span className="text-xs text-zinc-400 dark:text-zinc-500">{lesson.quiz.length} 题 · 选完立即判定</span>
           </div>
-          <Quiz lesson={lesson} onRecord={onRecord} />
+          <Quiz lesson={lesson} selection={selection} onRecord={onRecord} />
         </div>
       )}
     </Card>
@@ -436,22 +443,48 @@ function Inline({ text }: { text: string }) {
   )
 }
 
-function Quiz({ lesson, onRecord }: { lesson: Lesson; onRecord: (id: string, answered: number, correct: number) => void }) {
-  const [picked, setPicked] = useState<Record<number, number>>({})
+function Quiz({ lesson, selection, onRecord }: {
+  lesson: Lesson
+  selection: Selection
+  onRecord: (id: string, selection: Selection) => void
+}) {
+  // 初始值来自已保存的作答 —— 每次选择都写回 localStorage，
+  // 所以刷新 / 切走再回来仍能看到自己选过哪一项（「练习题的输入数据」也是进度的一部分）。
+  const [picked, setPicked] = useState<Record<number, number>>(() => {
+    const init: Record<number, number> = {}
+    selection.forEach((v, i) => { if (v !== null && v !== undefined) init[i] = v })
+    return init
+  })
 
-  // 换课时要清空选择（lesson.id 变了就是新的一课）
-  useEffect(() => { setPicked({}) }, [lesson.id])
+  // 换课时要重新用新一课的作答初始化（lesson.id 变了就是新的一课）
+  useEffect(() => {
+    const init: Record<number, number> = {}
+    selection.forEach((v, i) => { if (v !== null && v !== undefined) init[i] = v })
+    setPicked(init)
+  }, [lesson.id, selection])
 
   const total = lesson.quiz.length
   const answeredCount = Object.keys(picked).length
   const correctCount = lesson.quiz.reduce((n, q, i) => (picked[i] === q.answer ? n + 1 : n), 0)
 
-  useEffect(() => {
-    if (answeredCount > 0) onRecord(lesson.id, answeredCount, correctCount)
-  }, [answeredCount, correctCount, lesson.id, onRecord])
+  const toSelection = (p: Record<number, number>): Selection => {
+    const out: Selection = []
+    for (let i = 0; i < total; i++) out.push(p[i] ?? null)
+    return out
+  }
 
   const pick = (qi: number, oi: number) => {
-    setPicked((prev) => (prev[qi] !== undefined ? prev : { ...prev, [qi]: oi }))
+    setPicked((prev) => {
+      if (prev[qi] !== undefined) return prev // 一题只判一次
+      const next = { ...prev, [qi]: oi }
+      onRecord(lesson.id, toSelection(next)) // 立刻落盘
+      return next
+    })
+  }
+
+  const redo = () => {
+    setPicked({})
+    onRecord(lesson.id, []) // 清空也要落盘，否则刷新一遍又回来了
   }
 
   return (
@@ -465,8 +498,8 @@ function Quiz({ lesson, onRecord }: { lesson: Lesson; onRecord: (id: string, ans
             答对 {correctCount}
           </span>
         )}
-        {answeredCount > 0 && answeredCount < total && (
-          <Button size="small" type="link" className="!px-0" onClick={() => setPicked({})}>重做</Button>
+        {answeredCount > 0 && (
+          <Button size="small" type="link" className="!px-0" onClick={redo}>重做</Button>
         )}
       </div>
 
