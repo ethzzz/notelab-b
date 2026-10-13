@@ -19,7 +19,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Alert, Button, Card, Empty, Modal, Spin, Tag, Tooltip } from "antd"
+import { Alert, Button, Card, Empty, Modal, Spin, Tag } from "antd"
 import { ArrowLeft, CircleCheck, CircleDot, Clock, Copy, Play, Users } from "lucide-react"
 import { AdminPage } from "@/components/admin"
 import { MdPreview } from "@/components/md-editor"
@@ -64,17 +64,6 @@ function LearningInner() {
 
 // ------------------------------------------------------------------ 列表态
 
-/** 运行方案的档位徽标（列表与详情共用） */
-function LevelTag({ runner }: { runner?: Runner }) {
-  if (!runner) return null
-  const meta = LEVEL_META[runner.level] || LEVEL_META.none
-  return (
-    <Tooltip title={`${runner.name} · ${runner.engine} · ${runner.size}`}>
-      <Tag className={`!m-0 !border ${meta.cls}`} bordered>{meta.label}</Tag>
-    </Tooltip>
-  )
-}
-
 function TrackList({ doc, onOpen }: { doc: LearningDoc; onOpen: (code: string) => void }) {
   return (
     <AdminPage
@@ -84,7 +73,6 @@ function TrackList({ doc, onOpen }: { doc: LearningDoc; onOpen: (code: string) =
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {doc.tracks.map((t) => {
           const st = trackStats(t)
-          const runner = runnerOf(doc, t.runner)
           return (
             <Card key={t.code} size="small" hoverable onClick={() => onOpen(t.code)}
               className="!cursor-pointer transition-colors">
@@ -93,7 +81,6 @@ function TrackList({ doc, onOpen }: { doc: LearningDoc; onOpen: (code: string) =
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-base font-medium text-zinc-800 dark:text-zinc-100">{t.name}</span>
-                    <LevelTag runner={runner} />
                   </div>
                   <p className="mt-1 mb-0 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">{t.desc}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400 dark:text-zinc-500">
@@ -174,7 +161,6 @@ function TrackView({ doc, track, onBack }: { doc: LearningDoc; track: Track; onB
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xl">{track.icon || "📘"}</span>
             <span className="text-xl font-semibold text-zinc-800 dark:text-zinc-100">{track.name}</span>
-            <LevelTag runner={runner} />
           </div>
           <p className="mt-0.5 mb-0 text-sm text-zinc-500 dark:text-zinc-400">{track.desc}</p>
         </div>
