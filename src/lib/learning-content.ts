@@ -149,6 +149,9 @@ function trimSel(sel: Selection): Selection {
 }
 
 function toOption(x: unknown): number | null {
+  // ⚠️ 必须先挡掉 null/undefined/空串 —— `Number(null)` 是 **0**，
+  //    不挡的话「未作答」会被读成「选了 A」，一道题没答也会被算成答了。
+  if (x === null || x === undefined || x === "") return null
   const n = typeof x === "number" ? x : Number(x)
   if (!Number.isFinite(n)) return null
   const i = Math.floor(n)
