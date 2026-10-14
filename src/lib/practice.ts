@@ -1,22 +1,41 @@
-// 练习实践：记录做完每道练习题后的解答（Markdown 正文 + 可传插图）。
+// 练习实践：记录做完每道练习题后的解答（Markdown 正文 + 可传插图），并一键发布到博客。
 //
 // 三层数据（别混）：
-//   · 记录本身（标题/类型/正文/时间人）→ 表 practice_record，走 /api/practice/records
+//   · 记录本身 → 表 practice_record，走 /api/practice/records
 //   · 插图 → 表 practice_image，正文里只留短 URL（/api/practice/images/{id}）
 //   · 类型字典 → ui_config.practice.types，随 /api/practice/meta 下发（懒 seed 回内置）
 //
 // ⚠️ 列表接口**不返回正文**（LONGTEXT，一页 20 条整包吐出来纯属浪费）。要正文必须单条读。
+//
+// 发布链路：记录 → 博客仓 src/content/solutions/<slug>.md（**不是 posts**）。
+// 文件名 = 博客 URL，由 module + 篇章号 + 题号 + 英文短名 拼出（见 slugPreview）。
 
 import { apiJson } from "./api"
 
 /** 类型选项（下拉 / 筛选 / Tag 展示共用一份） */
 export type PracticeType = { value: string; label: string }
+/** 博客路线模块选项（algo / typescript / js / …） */
+export type PracticeModule = { value: string; label: string }
 
 /** 列表项：**不含正文** */
 export type PracticeRecord = {
   id: number
   title: string
   type: string
+  /** 博客路线模块（与 type 不是一个维度：type 是语言，module 是学习路线模块） */
+  module: string
+  /** 篇章号（对应 <module>-roadmap-<NN>-*） */
+  chapter: string
+  order_no: number
+  slug_name: string
+  difficulty: string
+  /** 逗号分隔 */
+  tags: string
+  description: string
+  /** 发布态：空串 = 从未发布 */
+  published_at: string
+  published_slug: string
+  published_commit: string
   created_by: number
   created_by_name: string
   updated_by: number
@@ -30,6 +49,8 @@ export type PracticeRecordFull = PracticeRecord & { content: string }
 
 export type PracticeMeta = {
   types: PracticeType[]
+  modules: PracticeModule[]
+  difficulties: string[]
   images: { count: number; bytes: number }
 }
 
@@ -39,6 +60,95 @@ export type PracticeListResp = {
   page: number
   size: number
 }
+
+/**
+ * 发布信息（不含标题/类型）。
+ *
+ * 创建弹窗与二级页的「发布信息」弹窗**共用**这一份 —— 两处各写一个表单必然漂移，
+ * 最后变成「创建时填了 module，编辑时改不到」。
+ */
+export type PublishFields = {
+  module: string
+  chapter: string
+  order_no: number
+  slug_name: string
+  difficulty: string
+  tags: string
+  description: string
+}
+
+/** 创建/保存时提交的完整「非内容数据」 */
+export type PracticeFields = PublishFields & { title: string; type: string }
+
+export function blankPublishFields(): PublishFields {
+  return { module: "", chapter: "", order_no: 0, slug_name: "", difficulty: "中等", tags: "", description: "" }
+}
+
+/** 从一条记录取出它的发布信息 */
+export function publishFieldsOf(r: PracticeRecord): PublishFields {
+  return {
+    module: r.module || "",
+    chapter: r.chapter || "",
+    order_no: r.order_no || 0,
+    slug_name: r.slug_name || "",
+    difficulty: r.difficulty || "中等",
+    tags: r.tags || "",
+    description: r.description || "",
+  }
+}
+
+/**
+ * 实时预览将生成的文件名（= 博客 URL 的一段）。
+ *
+ * 规则与博客 docs/solutions-convention.md 一致：`<模块>-<篇章号>-ex<题号>-<英文短名>`，
+ * 篇章号与题号补零到两位。任何一段为空就返回空串（表单里显示「还没填全」）。
+ */
+export function slugPreview(f: PublishFields): string {
+  const m = f.module.trim()
+  const ch = f.chapter.trim()
+  const name = f.slug_name.trim()
+  if (!m || !ch || !f.order_no || !name) return ""
+  const pad = (v: string | number) => String(v).padStart(2, "0")
+  return `${m}-${pad(ch)}-ex${pad(f.order_no)}-${name}`
+}
+
+/** 发布预检结果（二次确认弹窗的全部素材） */
+export type PublishPreview = {
+  ok: boolean
+  ready: boolean
+  slug: string
+  target: string
+  url: string
+  module: string
+  chapter: string
+  order: number
+  difficulty: string
+  relatedPost: string
+  relatedPostFound: boolean
+  frontmatter: string
+  images: { id: number; target: string; url: string }[]
+  blockers: string[]
+  warnings: string[]
+  published: { slug: string; commit: string; at: string } | null
+  willUpdate: boolean
+  willRename: boolean
+  oldSlug: string
+}
+
+export type PublishResult = {
+  ok: boolean
+  slug: string
+  url: string
+  path: string
+  commit: string
+  images: number
+  relatedPost: string
+  warnings: string[]
+  updated: boolean
+  note: string
+}
+
+// ------------------------------------------------------------------ 读
 
 export async function loadMeta(): Promise<PracticeMeta> {
   return apiJson<PracticeMeta>("/api/practice/meta")
@@ -63,22 +173,24 @@ export async function loadRecord(id: number): Promise<PracticeRecordFull> {
   return apiJson<PracticeRecordFull>(`/api/practice/records/${id}`)
 }
 
-/** 新建（一级页面的「创建记录」弹窗）：只带标题 + 类型，正文留空。返回新记录 id */
-export async function createRecord(title: string, type: string): Promise<number> {
+// ------------------------------------------------------------------ 写
+
+/** 新建（一级页面的「创建记录」弹窗）：标题 + 类型 + 发布信息一次填全 */
+export async function createRecord(fields: PracticeFields): Promise<number> {
   const r = await apiJson<{ ok: boolean; id: number }>("/api/practice/records", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, type }),
+    body: JSON.stringify(fields),
   })
   return r.id
 }
 
-/** 只改「非内容数据」（标题 + 类型）。kind=meta 由服务端强制 —— 正文一个字都不碰 */
-export async function updateRecordMeta(id: number, title: string, type: string): Promise<void> {
+/** 改「非内容数据」（标题 / 类型 / 发布信息）。kind=meta 由服务端强制 —— 正文一个字都不碰 */
+export async function updateRecordMeta(id: number, fields: PracticeFields): Promise<void> {
   await apiJson(`/api/practice/records/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "meta", title, type }),
+    body: JSON.stringify({ kind: "meta", ...fields }),
   })
 }
 
@@ -93,6 +205,18 @@ export async function updateRecordContent(id: number, content: string): Promise<
 
 export async function deleteRecord(id: number): Promise<void> {
   await apiJson(`/api/practice/records/${id}`, { method: "DELETE" })
+}
+
+// ------------------------------------------------------------------ 发布到博客
+
+/** 发布预检（干跑，不写任何文件）：二次确认弹窗的内容全在这里 */
+export async function publishPreview(id: number): Promise<PublishPreview> {
+  return apiJson<PublishPreview>(`/api/practice/records/${id}/publish-preview`)
+}
+
+/** 真发布：导出插图 → 写 src/content/solutions/<slug>.md → commit + push */
+export async function publishRecord(id: number): Promise<PublishResult> {
+  return apiJson<PublishResult>(`/api/practice/records/${id}/publish`, { method: "POST" })
 }
 
 // ------------------------------------------------------------------ 插图

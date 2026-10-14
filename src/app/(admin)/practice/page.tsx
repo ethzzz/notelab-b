@@ -1,9 +1,9 @@
 "use client"
 
-// 练习实践 —— 记录做完每道练习题后的解答。
+// 练习实践 —— 记录做完每道练习题后的解答，并一键发布到博客。
 //
 // 干什么：把「学习路线里每一篇的练习题」以及「非博客内容的自选练习」的解答沉淀下来，
-// 一条记录 = 一道题，正文用 Markdown 写、可以贴截图。
+// 一条记录 = 一道题，正文用 Markdown 写、可以贴截图；配好发布信息后可直接推到博客。
 //
 // 两个界面态（同一个路由，用查询参数区分）：
 //   · 列表态  /practice                      筛选 + 表格 + 右上角「创建记录」
@@ -13,20 +13,26 @@
 //    是精确匹配，子路由不在 PageRoutes 里会被判无权限（协作画布 / 编程学习踩过同一个坑）。
 //
 // ⚠️ 编辑态刻意分成两个保存动作（对应服务端的 kind=meta / kind=content）：
-//    顶部「保存信息」管标题+类型，内容区「保存内容」管正文。分成两个是为了**防覆盖** ——
+//    顶部「保存信息」管标题/类型/发布信息，内容区「保存内容」管正文。分成两个是为了**防覆盖** ——
 //    改个标题不该把下面正在写的正文一起提交，反之亦然。
+//
+// 发布信息（module / 篇章号 / 题号 / 英文短名 / 难度 / 标签 / 描述）由 `PublishFieldsForm` 承载，
+// 创建弹窗与二级页的「发布信息」弹窗**共用同一个组件** —— 它决定博客上的文件名（= URL），
+// 两处各写一份必然漂移。
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Button, Card, Empty, Form, Input, Popconfirm, Select, Space, Spin, Tag } from "antd"
-import { ArrowLeft, Eye, Pencil, Plus, Save, Trash2 } from "lucide-react"
+import { Button, Card, Empty, Form, Input, Popconfirm, Select, Space, Spin, Tag, Tooltip } from "antd"
+import { ArrowLeft, Eye, Pencil, Plus, Save, Send, Trash2 } from "lucide-react"
 import { AdminPage, DataTable, FilterBar, ModalForm, actionColumn } from "@/components/admin"
 import MdEditor, { MdPreview } from "@/components/md-editor"
+import PublishFieldsForm from "@/components/practice/publish-fields"
+import PublishConfirm from "@/components/practice/publish-confirm"
 import { toast } from "@/lib/toast"
 import {
   compressImage, createRecord, deleteRecord, imageRejectReason, loadMeta, loadRecord, loadRecords,
-  updateRecordContent, updateRecordMeta, uploadImage,
-  type PracticeRecord, type PracticeRecordFull, type PracticeType,
+  publishFieldsOf, slugPreview, updateRecordContent, updateRecordMeta, uploadImage,
+  type PracticeFields, type PracticeMeta, type PracticeRecord, type PracticeRecordFull, type PublishFields,
 } from "@/lib/practice"
 
 export default function PracticePage() {
@@ -60,8 +66,8 @@ function typeColor(value: string): string {
 }
 
 /** 类型的展示名；字典里查不到就原样显示值（老记录的 type 可能已不在字典里，不该显示成空白） */
-function labelOf(value: string, types: PracticeType[]): string {
-  return types.find((t) => t.value === value)?.label || value || "-"
+function labelOf(value: string, meta: PracticeMeta | null): string {
+  return meta?.types.find((t) => t.value === value)?.label || value || "-"
 }
 
 /** 后端时间来自 String.valueOf(Timestamp)，形如 "2026-10-14 20:49:09.0" —— 去掉末尾小数秒 */
@@ -70,13 +76,23 @@ function fmtTime(s: string): string {
   return s.replace(/\.\d+$/, "")
 }
 
+/** 发布状态标签（列表与详情共用） */
+function PubTag({ r }: { r: PracticeRecord }) {
+  if (!r.published_slug) return <Tag className="!m-0">未发布</Tag>
+  return (
+    <Tooltip title={`${r.published_slug} · ${fmtTime(r.published_at)} · ${r.published_commit}`}>
+      <Tag color="green" className="!m-0">已发布</Tag>
+    </Tooltip>
+  )
+}
+
 // ================================================================== 列表态
 
 function List() {
   const router = useRouter()
   const [form] = Form.useForm()
 
-  const [types, setTypes] = useState<PracticeType[]>([])
+  const [meta, setMeta] = useState<PracticeMeta | null>(null)
   const [items, setItems] = useState<PracticeRecord[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -86,11 +102,13 @@ function List() {
 
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  /** 正在做发布二次确认的记录 id（null = 弹窗关闭） */
+  const [pubId, setPubId] = useState<number | null>(null)
 
   useEffect(() => {
     void loadMeta()
-      .then((m) => setTypes(m.types || []))
-      .catch(() => toast.error("类型字典加载失败"))
+      .then(setMeta)
+      .catch(() => toast.error("字典加载失败"))
   }, [])
 
   const fetchList = useCallback(async () => {
@@ -121,27 +139,37 @@ function List() {
   }
 
   const columns = useMemo(() => [
-    { title: "ID", dataIndex: "id", key: "id", width: 80 },
+    { title: "ID", dataIndex: "id", key: "id", width: 70 },
     {
       title: "标题", dataIndex: "title", key: "title", ellipsis: true,
       render: (v: string) => <span className="font-medium">{v}</span>,
     },
     {
-      title: "类型", dataIndex: "type", key: "type", width: 140,
+      title: "类型", dataIndex: "type", key: "type", width: 130,
       render: (v: string) => v
-        ? <Tag color={typeColor(v)} className="!m-0">{labelOf(v, types)}</Tag>
+        ? <Tag color={typeColor(v)} className="!m-0">{labelOf(v, meta)}</Tag>
         : <span className="text-zinc-400">-</span>,
     },
     {
-      title: "创建时间", dataIndex: "created_at", key: "created_at", width: 170,
+      title: "模块 / 题号", key: "module", width: 150,
+      render: (_: unknown, r: PracticeRecord) => {
+        const s = slugPreview(publishFieldsOf(r))
+        return r.module
+          ? <Tooltip title={s ? `${s}.md` : ""}>
+              <span className="text-zinc-600 dark:text-zinc-300">
+                {r.module}{r.chapter ? ` · ${r.chapter}` : ""}{r.order_no ? ` · 第${r.order_no}题` : ""}
+              </span>
+            </Tooltip>
+          : <span className="text-zinc-400">未填</span>
+      },
+    },
+    { title: "发布", key: "pub", width: 100, render: (_: unknown, r: PracticeRecord) => <PubTag r={r} /> },
+    {
+      title: "更新时间", dataIndex: "updated_at", key: "updated_at", width: 165,
       render: (v: string) => <span className="text-zinc-500">{fmtTime(v)}</span>,
     },
     {
-      title: "更新时间", dataIndex: "updated_at", key: "updated_at", width: 170,
-      render: (v: string) => <span className="text-zinc-500">{fmtTime(v)}</span>,
-    },
-    {
-      title: "最新操作人", dataIndex: "updated_by_name", key: "updated_by_name", width: 130,
+      title: "最新操作人", dataIndex: "updated_by_name", key: "updated_by_name", width: 120,
       render: (v: string) => v || "-",
     },
     actionColumn((_: unknown, r: PracticeRecord) => (
@@ -150,21 +178,23 @@ function List() {
           onClick={() => router.push(`/practice?id=${r.id}&mode=view`)}>查看</Button>
         <Button size="small" type="text" icon={<Pencil size={13} />}
           onClick={() => router.push(`/practice?id=${r.id}&mode=edit`)}>修改</Button>
+        <Button size="small" type="text" icon={<Send size={13} />}
+          onClick={() => setPubId(r.id)}>发布</Button>
         <Popconfirm title="删除这条记录？" description="删除后不可恢复（正文里引用的图片不会被回收）。"
           okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
           onConfirm={() => onDelete(r.id)}>
           <Button size="small" type="text" danger icon={<Trash2 size={13} />}>删除</Button>
         </Popconfirm>
       </Space>
-    ), 230),
-  ], [types, items, page, router])
+    ), 280),
+  ], [meta, items, page, router])
 
   return (
     <div className="flex flex-col gap-4">
       <AdminPage
         level={1}
         title="🏋️ 练习实践"
-        description="记录完成每道练习题后的解答：一条记录一道题，正文支持 Markdown 与插图。"
+        description="记录完成每道练习题后的解答：一条记录一道题，正文支持 Markdown 与插图；配好发布信息可一键推到博客。"
         extra={
           <Button type="primary" icon={<Plus size={14} />} onClick={() => setModalOpen(true)}>
             创建记录
@@ -193,7 +223,7 @@ function List() {
             placeholder="全部类型"
             className="!min-w-64"
             maxTagCount="responsive"
-            options={types.map((t) => ({ value: t.value, label: t.label }))}
+            options={(meta?.types || []).map((t) => ({ value: t.value, label: t.label }))}
           />
         </Form.Item>
       </FilterBar>
@@ -217,17 +247,27 @@ function List() {
         open={modalOpen}
         title="创建记录"
         entity="practice"
-        width={520}
+        width={760}
         confirmLoading={creating}
+        initialValues={{ difficulty: "中等" }}
         onCancel={() => setModalOpen(false)}
         onSubmit={async (v) => {
-          const title = String(v.title || "").trim()
-          const type = String(v.type || "")
-          if (!title) { toast.warning("标题不能为空"); return }
-          if (!type) { toast.warning("请选择类型"); return }
+          const fields: PracticeFields = {
+            title: String(v.title || "").trim(),
+            type: String(v.type || ""),
+            module: String(v.module || ""),
+            chapter: String(v.chapter || ""),
+            order_no: Number(v.order_no || 0),
+            slug_name: String(v.slug_name || ""),
+            difficulty: String(v.difficulty || "中等"),
+            tags: String(v.tags || ""),
+            description: String(v.description || ""),
+          }
+          if (!fields.title) { toast.warning("标题不能为空"); return }
+          if (!fields.type) { toast.warning("请选择类型"); return }
           setCreating(true)
           try {
-            const id = await createRecord(title, type)
+            const id = await createRecord(fields)
             setModalOpen(false)
             // 建完直接进二级页面：正文在这里写（与「先建档、再填内容」的文档编辑习惯一致）
             router.push(`/practice?id=${id}&mode=edit`)
@@ -238,13 +278,28 @@ function List() {
           }
         }}
       >
-        <Form.Item name="title" label="标题" rules={[{ required: true, message: "请输入标题" }]}>
-          <Input placeholder="如：两数之和 · 哈希表解法" maxLength={200} showCount />
-        </Form.Item>
-        <Form.Item name="type" label="类型" rules={[{ required: true, message: "请选择类型" }]}>
-          <Select placeholder="选择语言类型" options={types.map((t) => ({ value: t.value, label: t.label }))} />
-        </Form.Item>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+          <Form.Item name="title" label="标题" rules={[{ required: true, message: "请输入标题" }]}>
+            <Input placeholder="如：两数之和 · 哈希表解法" maxLength={200} />
+          </Form.Item>
+          <Form.Item name="type" label="类型" rules={[{ required: true, message: "请选择类型" }]}
+            tooltip="语言维度，用于筛选；与下面的「路线模块」不是一回事">
+            <Select placeholder="选择语言类型"
+              options={(meta?.types || []).map((t) => ({ value: t.value, label: t.label }))} />
+          </Form.Item>
+        </div>
+        <div className="mt-1 mb-2 border-t border-dashed border-[rgba(128,128,128,.3)] pt-3 text-xs text-zinc-500">
+          发布信息（决定博客上的文件名与归属，可稍后补）
+        </div>
+        <PublishFieldsForm modules={meta?.modules || []} difficulties={meta?.difficulties || ["简单", "中等", "困难"]} />
       </ModalForm>
+
+      <PublishConfirm
+        recordId={pubId}
+        open={pubId != null}
+        onClose={() => setPubId(null)}
+        onPublished={() => void fetchList()}
+      />
     </div>
   )
 }
@@ -253,19 +308,24 @@ function List() {
 
 function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
   const router = useRouter()
-  const [types, setTypes] = useState<PracticeType[]>([])
+  const [meta, setMeta] = useState<PracticeMeta | null>(null)
   const [rec, setRec] = useState<PracticeRecordFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
 
   const [draftTitle, setDraftTitle] = useState("")
   const [draftType, setDraftType] = useState("")
+  const [pf, setPf] = useState<PublishFields>({
+    module: "", chapter: "", order_no: 0, slug_name: "", difficulty: "中等", tags: "", description: "",
+  })
   const [draftContent, setDraftContent] = useState("")
   const [savingMeta, setSavingMeta] = useState(false)
   const [savingContent, setSavingContent] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   useEffect(() => {
-    void loadMeta().then((m) => setTypes(m.types || [])).catch(() => { /* 字典失败不影响阅读 */ })
+    void loadMeta().then(setMeta).catch(() => { /* 字典失败不影响阅读 */ })
     let alive = true
     void loadRecord(id)
       .then((r) => {
@@ -273,6 +333,7 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
         setRec(r)
         setDraftTitle(r.title)
         setDraftType(r.type)
+        setPf(publishFieldsOf(r))
         setDraftContent(r.content || "")
       })
       .catch((e) => {
@@ -285,16 +346,19 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
   }, [id])
 
   // 脏判定：与「已落库的那份」比，而不是与输入框的上一次值比
-  const metaDirty = !!rec && (draftTitle !== rec.title || draftType !== rec.type)
+  const pfDirty = !!rec && JSON.stringify(pf) !== JSON.stringify(publishFieldsOf(rec))
+  const metaDirty = !!rec && (draftTitle !== rec.title || draftType !== rec.type || pfDirty)
   const contentDirty = !!rec && draftContent !== (rec.content || "")
 
+  /** 顶部「保存信息」与服务端 kind=meta 对应；标题/类型/发布信息一次提交 */
   async function saveMeta() {
     if (!draftTitle.trim()) { toast.warning("标题不能为空"); return }
     if (!draftType) { toast.warning("类型不能为空"); return }
     setSavingMeta(true)
     try {
-      await updateRecordMeta(id, draftTitle.trim(), draftType)
-      setRec((r) => (r ? { ...r, title: draftTitle.trim(), type: draftType } : r))
+      const fields: PracticeFields = { title: draftTitle.trim(), type: draftType, ...pf }
+      await updateRecordMeta(id, fields)
+      setRec((r) => (r ? { ...r, ...fields } : r))
       toast.success("信息已保存")
     } catch (e) {
       toast.error(`保存失败：${(e as Error)?.message || e}`)
@@ -339,15 +403,18 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
   }
 
   const dirty = metaDirty || contentDirty
+  const slug = slugPreview(pf)
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 顶部工具行：返回 / 记录号 / 未保存提示 / 右侧切换查看-编辑 */}
+      {/* 顶部工具行：返回 / 记录号 / 未保存提示 / 右侧发布与查看-编辑切换 */}
       <div className="flex items-center gap-2 flex-wrap">
         <Button icon={<ArrowLeft size={14} />} onClick={() => router.push("/practice")}>返回列表</Button>
         <span className="text-xs text-zinc-400">#{rec.id}</span>
+        <PubTag r={rec} />
         {mode === "edit" && dirty && <Tag color="orange">有未保存改动</Tag>}
         <Space className="ml-auto" size={8}>
+          <Button icon={<Send size={14} />} onClick={() => setConfirmOpen(true)}>发布到博客</Button>
           {mode === "edit" ? (
             <Button onClick={() => router.replace(`/practice?id=${rec.id}&mode=view`)}>切换到查看</Button>
           ) : (
@@ -362,7 +429,10 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
       {mode === "view" ? (
         <div className="flex items-end gap-3 flex-wrap">
           <h2 className="m-0 text-xl font-semibold text-zinc-800 dark:text-zinc-100">{rec.title}</h2>
-          <Tag color={typeColor(rec.type)} className="!m-0 !mb-0.5">{labelOf(rec.type, types)}</Tag>
+          <Tag color={typeColor(rec.type)} className="!m-0 !mb-0.5">{labelOf(rec.type, meta)}</Tag>
+          {rec.module && (
+            <Tag className="!m-0 !mb-0.5">{rec.module}{rec.chapter ? ` · ${rec.chapter}` : ""}{rec.order_no ? ` · 第${rec.order_no}题` : ""}</Tag>
+          )}
           <span className="ml-auto text-xs text-zinc-400">
             创建 {fmtTime(rec.created_at)}
             {rec.created_by_name ? ` · ${rec.created_by_name}` : ""}
@@ -386,9 +456,10 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
             value={draftType || undefined}
             placeholder="类型"
             className="!w-44"
-            options={types.map((t) => ({ value: t.value, label: t.label }))}
+            options={(meta?.types || []).map((t) => ({ value: t.value, label: t.label }))}
             onChange={(v) => { if (typeof v === "string") setDraftType(v) }}
           />
+          <Button icon={<Pencil size={14} />} onClick={() => setInfoOpen(true)}>发布信息</Button>
           <Button type="primary" icon={<Save size={14} />} loading={savingMeta}
             disabled={!metaDirty} onClick={saveMeta}>保存信息</Button>
           <span className="text-xs text-zinc-400 pb-2">
@@ -397,6 +468,27 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
           </span>
         </div>
       )}
+
+      {/* 发布信息摘要（两种模式都显示：至少能一眼看到将生成的文件名） */}
+      <div className="text-xs text-zinc-500">
+        {slug ? (
+          <>
+            将发布为 <code className="font-mono text-[12px]">{slug}.md</code>
+            <span className="mx-1">·</span>
+            <span className="font-mono">/blog/solutions/{slug}/</span>
+            {rec.published_slug === slug && <Tag color="green" className="!m-0 !ml-2">与已发布一致</Tag>}
+            {rec.published_slug && rec.published_slug !== slug && (
+              <Tag color="orange" className="!m-0 !ml-2">改名后发布将删除旧的 {rec.published_slug}.md</Tag>
+            )}
+          </>
+        ) : (
+          <>
+            发布信息未填全（还差{[
+              !pf.module && "路线模块", !pf.chapter && "篇章号", !pf.order_no && "题号", !pf.slug_name && "英文短名",
+            ].filter(Boolean).join(" / ")}）
+          </>
+        )}
+      </div>
 
       {/* 内容区。
           编辑态直接用 MdEditor —— 它在宽屏下本身就是「左源码 / 右实时预览」两栏（与 /docs 同款）。
@@ -420,9 +512,59 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
           <MdEditor value={draftContent} onChange={setDraftContent} minHeight={560} onUploadImage={handleUpload} />
           <div className="mt-2 text-xs text-zinc-400">
             工具栏「🖼」插入图片：长边超过 1600px 会先本地压缩再上传，正文里只存一个短链接。
+            发布到博客时会自动把插图导出到博客仓并改写链接。
           </div>
         </Card>
       )}
+
+      {/* 发布信息弹窗（与创建弹窗共用同一份字段组件） */}
+      <ModalForm
+        open={infoOpen}
+        title="发布信息"
+        entity="practice-publish"
+        width={680}
+        confirmLoading={savingMeta}
+        initialValues={{ ...pf }}
+        onCancel={() => setInfoOpen(false)}
+        onSubmit={async (v) => {
+          const next: PublishFields = {
+            module: String(v.module || ""),
+            chapter: String(v.chapter || ""),
+            order_no: Number(v.order_no || 0),
+            slug_name: String(v.slug_name || ""),
+            difficulty: String(v.difficulty || "中等"),
+            tags: String(v.tags || ""),
+            description: String(v.description || ""),
+          }
+          if (!draftTitle.trim()) { toast.warning("标题不能为空"); return }
+          if (!draftType) { toast.warning("类型不能为空"); return }
+          setSavingMeta(true)
+          try {
+            const fields: PracticeFields = { title: draftTitle.trim(), type: draftType, ...next }
+            await updateRecordMeta(id, fields)
+            setPf(next)
+            setRec((r) => (r ? { ...r, ...fields } : r))
+            setInfoOpen(false)
+            toast.success("发布信息已保存")
+          } catch (e) {
+            toast.error(`保存失败：${(e as Error)?.message || e}`)
+          } finally {
+            setSavingMeta(false)
+          }
+        }}
+      >
+        <PublishFieldsForm modules={meta?.modules || []} difficulties={meta?.difficulties || ["简单", "中等", "困难"]} />
+      </ModalForm>
+
+      <PublishConfirm
+        recordId={confirmOpen ? id : null}
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onPublished={() => {
+          // 发布后刷新这条记录（发布态要立刻反映出来）
+          void loadRecord(id).then((r) => setRec(r)).catch(() => { })
+        }}
+      />
     </div>
   )
 }
