@@ -2,10 +2,15 @@
 // Notion 式 Markdown 编辑器：左侧源码（等宽字体+工具栏），右侧实时预览（marked 渲染 + DOMPurify 消毒）。
 // 窄屏（≤900px）自动折叠为"编辑/预览"单面板切换。受控组件：value/onChange。
 // 另导出 MdPreview 纯预览组件（查看态复用同一套渲染与样式）。
+//
+// 插图：可选注入 onUploadImage —— 传了才在工具栏出现「插入图片」按钮。
+// 编辑器**不关心图片存哪**（本仓是 /api/practice/images/{id}），只负责
+// 「选文件 → 拿到 URL → 在光标处插入 Markdown」这一段；上传实现由调用方注入。
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Button, Segmented, Tooltip } from "antd"
 import { marked } from "marked"
 import DOMPurify from "dompurify"
+import { toast } from "@/lib/toast"
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -98,14 +103,18 @@ const ACTIONS: Action[] = [
   { key: "hr", label: "―", title: "分割线", run: (ta) => insertBlock(ta, "\n---\n") },
 ]
 
-export default function MdEditor({ value, onChange, minHeight = 480 }: {
+export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage }: {
   value: string
   onChange: (v: string) => void
   minHeight?: number
+  /** 注入后才显示「插入图片」。约定：传入原始 File，返回可直接写进 Markdown 的 URL */
+  onUploadImage?: (file: File) => Promise<string>
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const [narrow, setNarrow] = useState(false)
   const [pane, setPane] = useState<"edit" | "preview">("edit")
+  const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 900px)")
@@ -135,6 +144,37 @@ export default function MdEditor({ value, onChange, minHeight = 480 }: {
     }
   }
 
+  /**
+   * 选图 → 上传 → 在光标处插入 `![alt](url)`。
+   *
+   * ⚠️ 必须先把 input.value 清空再上传：不清的话，用户连续选**同一个文件**第二次时
+   * change 事件不触发（浏览器认为值没变），表现为「点了没反应」。
+   */
+  async function onPickImage(e: React.ChangeEvent<HTMLInputElement>) {
+    const input = e.currentTarget
+    const f = input.files?.[0]
+    input.value = ""
+    if (!f || !onUploadImage) return
+    if (!f.type.startsWith("image/")) { toast.warning("只能插入图片文件"); return }
+    setUploading(true)
+    try {
+      const url = await onUploadImage(f)
+      const alt = f.name.replace(/\.[^.]+$/, "") || "图片"
+      const ta = taRef.current
+      if (ta) {
+        insertBlock(ta, `![${alt}](${url})`)
+        ta.focus()
+        onChange(ta.value)
+      } else {
+        onChange(`${value}\n![${alt}](${url})\n`)
+      }
+      toast.success("图片已插入")
+    } catch (err) {
+      toast.error(`图片上传失败：${(err as Error)?.message || err}`)
+    }
+    setUploading(false)
+  }
+
   const toolbar = (
     <div className="flex flex-wrap items-center gap-1 border-b border-solid border-[rgba(128,128,128,.25)] pb-2">
       {ACTIONS.map((a, i) => (
@@ -147,6 +187,19 @@ export default function MdEditor({ value, onChange, minHeight = 480 }: {
           </Tooltip>
         </span>
       ))}
+      {onUploadImage && (
+        <span className="contents">
+          <span className="mx-1 h-5 w-px bg-[rgba(128,128,128,.3)]" />
+          <Tooltip title="插入图片（上传后在光标处插入 Markdown）">
+            <Button size="small" type="text" loading={uploading} disabled={uploading}
+              className="min-w-8 px-1.5 text-xs" onClick={() => fileRef.current?.click()}>
+              {"🖼"}
+            </Button>
+          </Tooltip>
+          {/* ⚠️ 用 display:none 而不是条件渲染：input 必须在 DOM 里，click() 才有东西可点 */}
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
+        </span>
+      )}
       {narrow && (
         <Segmented
           size="small"

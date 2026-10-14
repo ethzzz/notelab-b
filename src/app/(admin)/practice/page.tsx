@@ -1,0 +1,428 @@
+"use client"
+
+// 练习实践 —— 记录做完每道练习题后的解答。
+//
+// 干什么：把「学习路线里每一篇的练习题」以及「非博客内容的自选练习」的解答沉淀下来，
+// 一条记录 = 一道题，正文用 Markdown 写、可以贴截图。
+//
+// 两个界面态（同一个路由，用查询参数区分）：
+//   · 列表态  /practice                      筛选 + 表格 + 右上角「创建记录」
+//   · 二级页  /practice?id=<N>&mode=view|edit 顶部标题+类型，下面编辑器 / 预览
+//
+// ⚠️ 二级页走 `?id=` 而**不是子路由** /practice/123：页面守卫的 pages.includes(pathname)
+//    是精确匹配，子路由不在 PageRoutes 里会被判无权限（协作画布 / 编程学习踩过同一个坑）。
+//
+// ⚠️ 编辑态刻意分成两个保存动作（对应服务端的 kind=meta / kind=content）：
+//    顶部「保存信息」管标题+类型，内容区「保存内容」管正文。分成两个是为了**防覆盖** ——
+//    改个标题不该把下面正在写的正文一起提交，反之亦然。
+
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Button, Card, Empty, Form, Input, Popconfirm, Select, Space, Spin, Tag } from "antd"
+import { ArrowLeft, Eye, Pencil, Plus, Save, Trash2 } from "lucide-react"
+import { AdminPage, DataTable, FilterBar, ModalForm, actionColumn } from "@/components/admin"
+import MdEditor, { MdPreview } from "@/components/md-editor"
+import { toast } from "@/lib/toast"
+import {
+  compressImage, createRecord, deleteRecord, imageRejectReason, loadMeta, loadRecord, loadRecords,
+  updateRecordContent, updateRecordMeta, uploadImage,
+  type PracticeRecord, type PracticeRecordFull, type PracticeType,
+} from "@/lib/practice"
+
+export default function PracticePage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-zinc-500">加载中…</div>}>
+      <PracticeInner />
+    </Suspense>
+  )
+}
+
+function PracticeInner() {
+  const sp = useSearchParams()
+  const idRaw = sp.get("id") || ""
+  // 只认纯数字，挡住 ?id=abc 这类脏参数（脏值当作没传，回到列表，不要抛错）
+  const id = /^\d+$/.test(idRaw) ? Number(idRaw) : 0
+  const mode = sp.get("mode") === "view" ? "view" : "edit"
+  // key 带上 id/mode：切换记录或切换查看/编辑时**重建组件**，否则上一条的草稿会残留在 state 里
+  if (id > 0) return <Detail key={`${id}-${mode}`} id={id} mode={mode} />
+  return <List />
+}
+
+// ------------------------------------------------------------------ 展示辅助
+
+/** 类型 Tag 的稳定配色：按值哈希取色，**不用数组下标** —— 下标法会在「加一个类型」时让所有已有类型集体换色 */
+const TAG_COLORS = ["blue", "green", "orange", "purple", "cyan", "magenta", "gold", "geekblue", "volcano", "lime"]
+
+function typeColor(value: string): string {
+  let h = 0
+  for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) >>> 0
+  return TAG_COLORS[h % TAG_COLORS.length]
+}
+
+/** 类型的展示名；字典里查不到就原样显示值（老记录的 type 可能已不在字典里，不该显示成空白） */
+function labelOf(value: string, types: PracticeType[]): string {
+  return types.find((t) => t.value === value)?.label || value || "-"
+}
+
+/** 后端时间来自 String.valueOf(Timestamp)，形如 "2026-10-14 20:49:09.0" —— 去掉末尾小数秒 */
+function fmtTime(s: string): string {
+  if (!s) return "-"
+  return s.replace(/\.\d+$/, "")
+}
+
+// ================================================================== 列表态
+
+function List() {
+  const router = useRouter()
+  const [form] = Form.useForm()
+
+  const [types, setTypes] = useState<PracticeType[]>([])
+  const [items, setItems] = useState<PracticeRecord[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(10)
+  const [query, setQuery] = useState<{ title: string; types: string[] }>({ title: "", types: [] })
+  const [loading, setLoading] = useState(false)
+
+  const [modalOpen, setModalOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    void loadMeta()
+      .then((m) => setTypes(m.types || []))
+      .catch(() => toast.error("类型字典加载失败"))
+  }, [])
+
+  const fetchList = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await loadRecords({ title: query.title, types: query.types, page, size })
+      setItems(r.items || [])
+      setTotal(r.total || 0)
+    } catch (e) {
+      toast.error(`加载失败：${(e as Error)?.message || e}`)
+    } finally {
+      setLoading(false)
+    }
+  }, [query, page, size])
+
+  useEffect(() => { void fetchList() }, [fetchList])
+
+  async function onDelete(id: number) {
+    try {
+      await deleteRecord(id)
+      toast.success("已删除")
+      // 删掉当前页最后一条时回退一页，否则会停在空页上（看着像"数据没了"）
+      if (items.length <= 1 && page > 1) setPage(page - 1)
+      else void fetchList()
+    } catch (e) {
+      toast.error(`删除失败：${(e as Error)?.message || e}`)
+    }
+  }
+
+  const columns = useMemo(() => [
+    { title: "ID", dataIndex: "id", key: "id", width: 80 },
+    {
+      title: "标题", dataIndex: "title", key: "title", ellipsis: true,
+      render: (v: string) => <span className="font-medium">{v}</span>,
+    },
+    {
+      title: "类型", dataIndex: "type", key: "type", width: 140,
+      render: (v: string) => v
+        ? <Tag color={typeColor(v)} className="!m-0">{labelOf(v, types)}</Tag>
+        : <span className="text-zinc-400">-</span>,
+    },
+    {
+      title: "创建时间", dataIndex: "created_at", key: "created_at", width: 170,
+      render: (v: string) => <span className="text-zinc-500">{fmtTime(v)}</span>,
+    },
+    {
+      title: "更新时间", dataIndex: "updated_at", key: "updated_at", width: 170,
+      render: (v: string) => <span className="text-zinc-500">{fmtTime(v)}</span>,
+    },
+    {
+      title: "最新操作人", dataIndex: "updated_by_name", key: "updated_by_name", width: 130,
+      render: (v: string) => v || "-",
+    },
+    actionColumn((_: unknown, r: PracticeRecord) => (
+      <Space size={2}>
+        <Button size="small" type="text" icon={<Eye size={13} />}
+          onClick={() => router.push(`/practice?id=${r.id}&mode=view`)}>查看</Button>
+        <Button size="small" type="text" icon={<Pencil size={13} />}
+          onClick={() => router.push(`/practice?id=${r.id}&mode=edit`)}>修改</Button>
+        <Popconfirm title="删除这条记录？" description="删除后不可恢复（正文里引用的图片不会被回收）。"
+          okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
+          onConfirm={() => onDelete(r.id)}>
+          <Button size="small" type="text" danger icon={<Trash2 size={13} />}>删除</Button>
+        </Popconfirm>
+      </Space>
+    ), 230),
+  ], [types, items, page, router])
+
+  return (
+    <div className="flex flex-col gap-4">
+      <AdminPage
+        level={1}
+        title="🏋️ 练习实践"
+        description="记录完成每道练习题后的解答：一条记录一道题，正文支持 Markdown 与插图。"
+        extra={
+          <Button type="primary" icon={<Plus size={14} />} onClick={() => setModalOpen(true)}>
+            创建记录
+          </Button>
+        }
+      />
+
+      <FilterBar
+        form={form}
+        loading={loading}
+        onSearch={(v) => {
+          setPage(1)
+          setQuery({
+            title: String(v.title || ""),
+            types: Array.isArray(v.types) ? (v.types as string[]) : [],
+          })
+        }}
+      >
+        <Form.Item name="title" label="标题">
+          <Input allowClear placeholder="输入标题关键词" className="!w-56" />
+        </Form.Item>
+        <Form.Item name="types" label="类型">
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="全部类型"
+            className="!min-w-64"
+            maxTagCount="responsive"
+            options={types.map((t) => ({ value: t.value, label: t.label }))}
+          />
+        </Form.Item>
+      </FilterBar>
+
+      <DataTable
+        size="middle"
+        columns={columns as any}
+        dataSource={items}
+        loading={loading}
+        pagination={{
+          current: page,
+          pageSize: size,
+          total,
+          showSizeChanger: true,
+          showTotal: (t: number) => `共 ${t} 条`,
+          onChange: (p: number, s: number) => { setPage(p); setSize(s) },
+        }}
+      />
+
+      <ModalForm
+        open={modalOpen}
+        title="创建记录"
+        entity="practice"
+        width={520}
+        confirmLoading={creating}
+        onCancel={() => setModalOpen(false)}
+        onSubmit={async (v) => {
+          const title = String(v.title || "").trim()
+          const type = String(v.type || "")
+          if (!title) { toast.warning("标题不能为空"); return }
+          if (!type) { toast.warning("请选择类型"); return }
+          setCreating(true)
+          try {
+            const id = await createRecord(title, type)
+            setModalOpen(false)
+            // 建完直接进二级页面：正文在这里写（与「先建档、再填内容」的文档编辑习惯一致）
+            router.push(`/practice?id=${id}&mode=edit`)
+          } catch (e) {
+            toast.error(`创建失败：${(e as Error)?.message || e}`)
+          } finally {
+            setCreating(false)
+          }
+        }}
+      >
+        <Form.Item name="title" label="标题" rules={[{ required: true, message: "请输入标题" }]}>
+          <Input placeholder="如：两数之和 · 哈希表解法" maxLength={200} showCount />
+        </Form.Item>
+        <Form.Item name="type" label="类型" rules={[{ required: true, message: "请选择类型" }]}>
+          <Select placeholder="选择语言类型" options={types.map((t) => ({ value: t.value, label: t.label }))} />
+        </Form.Item>
+      </ModalForm>
+    </div>
+  )
+}
+
+// ================================================================== 二级页（查看 / 编辑）
+
+function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
+  const router = useRouter()
+  const [types, setTypes] = useState<PracticeType[]>([])
+  const [rec, setRec] = useState<PracticeRecordFull | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [notFound, setNotFound] = useState(false)
+
+  const [draftTitle, setDraftTitle] = useState("")
+  const [draftType, setDraftType] = useState("")
+  const [draftContent, setDraftContent] = useState("")
+  const [savingMeta, setSavingMeta] = useState(false)
+  const [savingContent, setSavingContent] = useState(false)
+
+  useEffect(() => {
+    void loadMeta().then((m) => setTypes(m.types || [])).catch(() => { /* 字典失败不影响阅读 */ })
+    let alive = true
+    void loadRecord(id)
+      .then((r) => {
+        if (!alive) return
+        setRec(r)
+        setDraftTitle(r.title)
+        setDraftType(r.type)
+        setDraftContent(r.content || "")
+      })
+      .catch((e) => {
+        if (!alive) return
+        setNotFound(true)
+        toast.error(`加载失败：${(e as Error)?.message || e}`)
+      })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [id])
+
+  // 脏判定：与「已落库的那份」比，而不是与输入框的上一次值比
+  const metaDirty = !!rec && (draftTitle !== rec.title || draftType !== rec.type)
+  const contentDirty = !!rec && draftContent !== (rec.content || "")
+
+  async function saveMeta() {
+    if (!draftTitle.trim()) { toast.warning("标题不能为空"); return }
+    if (!draftType) { toast.warning("类型不能为空"); return }
+    setSavingMeta(true)
+    try {
+      await updateRecordMeta(id, draftTitle.trim(), draftType)
+      setRec((r) => (r ? { ...r, title: draftTitle.trim(), type: draftType } : r))
+      toast.success("信息已保存")
+    } catch (e) {
+      toast.error(`保存失败：${(e as Error)?.message || e}`)
+    } finally {
+      setSavingMeta(false)
+    }
+  }
+
+  async function saveContent() {
+    setSavingContent(true)
+    try {
+      await updateRecordContent(id, draftContent)
+      setRec((r) => (r ? { ...r, content: draftContent } : r))
+      toast.success("内容已保存")
+    } catch (e) {
+      toast.error(`保存失败：${(e as Error)?.message || e}`)
+    } finally {
+      setSavingContent(false)
+    }
+  }
+
+  /** 交给编辑器的上传钩子：先本地压（体验层），再传（服务端还会按体积 + mime 白名单再校验一遍） */
+  async function handleUpload(file: File): Promise<string> {
+    const reason = imageRejectReason(file)
+    if (reason) throw new Error(reason)
+    const blob = await compressImage(file)
+    return uploadImage(blob)
+  }
+
+  if (loading) return <div className="p-6"><Spin /> <span className="ml-2 text-sm text-zinc-500">正在加载记录…</span></div>
+  if (notFound || !rec) {
+    return (
+      <AdminPage title="练习实践">
+        <Card size="small" className="shadow-sm">
+          <Empty description="记录不存在或已被删除" />
+          <div className="mt-3 text-center">
+            <Button onClick={() => router.push("/practice")}>返回列表</Button>
+          </div>
+        </Card>
+      </AdminPage>
+    )
+  }
+
+  const dirty = metaDirty || contentDirty
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* 顶部工具行：返回 / 记录号 / 未保存提示 / 右侧切换查看-编辑 */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button icon={<ArrowLeft size={14} />} onClick={() => router.push("/practice")}>返回列表</Button>
+        <span className="text-xs text-zinc-400">#{rec.id}</span>
+        {mode === "edit" && dirty && <Tag color="orange">有未保存改动</Tag>}
+        <Space className="ml-auto" size={8}>
+          {mode === "edit" ? (
+            <Button onClick={() => router.replace(`/practice?id=${rec.id}&mode=view`)}>切换到查看</Button>
+          ) : (
+            <Button type="primary" icon={<Pencil size={14} />}
+              onClick={() => router.replace(`/practice?id=${rec.id}&mode=edit`)}>修改</Button>
+          )}
+        </Space>
+      </div>
+
+      {/* 顶部一行：标题 + 类型 Tag，底部对齐（items-end）。
+          查看态是 h2 + 彩色 Tag；编辑态换成输入控件 —— 它们是「非内容数据」的编辑区。 */}
+      {mode === "view" ? (
+        <div className="flex items-end gap-3 flex-wrap">
+          <h2 className="m-0 text-xl font-semibold text-zinc-800 dark:text-zinc-100">{rec.title}</h2>
+          <Tag color={typeColor(rec.type)} className="!m-0 !mb-0.5">{labelOf(rec.type, types)}</Tag>
+          <span className="ml-auto text-xs text-zinc-400">
+            创建 {fmtTime(rec.created_at)}
+            {rec.created_by_name ? ` · ${rec.created_by_name}` : ""}
+            {" ｜ "}
+            最近更新 {fmtTime(rec.updated_at)}
+            {rec.updated_by_name ? ` · ${rec.updated_by_name}` : ""}
+          </span>
+        </div>
+      ) : (
+        <div className="flex items-end gap-3 flex-wrap">
+          <Input
+            size="large"
+            value={draftTitle}
+            maxLength={200}
+            placeholder="标题"
+            className="!max-w-xl"
+            onChange={(e) => setDraftTitle(e.target.value)}
+          />
+          <Select
+            size="large"
+            value={draftType || undefined}
+            placeholder="类型"
+            className="!w-44"
+            options={types.map((t) => ({ value: t.value, label: t.label }))}
+            onChange={(v) => { if (typeof v === "string") setDraftType(v) }}
+          />
+          <Button type="primary" icon={<Save size={14} />} loading={savingMeta}
+            disabled={!metaDirty} onClick={saveMeta}>保存信息</Button>
+          <span className="text-xs text-zinc-400 pb-2">
+            创建 {fmtTime(rec.created_at)}
+            {rec.created_by_name ? ` · ${rec.created_by_name}` : ""}
+          </span>
+        </div>
+      )}
+
+      {/* 内容区。
+          编辑态直接用 MdEditor —— 它在宽屏下本身就是「左源码 / 右实时预览」两栏（与 /docs 同款）。
+          查看态换成 MdPreview 整宽铺满：需求要的正是「隐藏编辑器、预览占满整页」。 */}
+      {mode === "view" ? (
+        <Card size="small" className="shadow-sm">
+          {rec.content?.trim()
+            ? <MdPreview value={rec.content} />
+            : <Empty description="这条记录还没有正文" />}
+        </Card>
+      ) : (
+        <Card size="small" className="shadow-sm"
+          title="正文（Markdown）"
+          extra={
+            <Space size={8}>
+              {contentDirty && <Tag color="orange" className="!m-0">未保存</Tag>}
+              <Button type="primary" size="small" icon={<Save size={13} />} loading={savingContent}
+                disabled={!contentDirty} onClick={saveContent}>保存内容</Button>
+            </Space>
+          }>
+          <MdEditor value={draftContent} onChange={setDraftContent} minHeight={560} onUploadImage={handleUpload} />
+          <div className="mt-2 text-xs text-zinc-400">
+            工具栏「🖼」插入图片：长边超过 1600px 会先本地压缩再上传，正文里只存一个短链接。
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
