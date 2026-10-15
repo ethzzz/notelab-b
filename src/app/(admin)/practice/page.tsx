@@ -1,6 +1,7 @@
 "use client"
 
-// 练习实践 —— 记录做完每道练习题后的解答，并一键发布到博客。
+// 博客文章生成（原「练习实践」，2026-10-15 移进「博客管理」菜单）——
+// 一条记录 = 一道题，写完一键发到博客的解答页；可再次发布覆盖内容，也可下线撤下来。
 //
 // 干什么：把「学习路线里每一篇的练习题」以及「非博客内容的自选练习」的解答沉淀下来，
 // 一条记录 = 一道题，正文用 Markdown 写、可以贴截图；配好发布信息后可直接推到博客。
@@ -23,7 +24,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button, Card, Empty, Form, Input, Popconfirm, Select, Space, Spin, Tag, Tooltip } from "antd"
-import { ArrowLeft, Eye, Pencil, Plus, Save, Send, Trash2 } from "lucide-react"
+import { ArrowLeft, Eye, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react"
 import { AdminPage, DataTable, FilterBar, ModalForm, actionColumn } from "@/components/admin"
 import MdEditor, { MdPreview } from "@/components/md-editor"
 import PublishFieldsForm from "@/components/practice/publish-fields"
@@ -31,7 +32,7 @@ import PublishConfirm from "@/components/practice/publish-confirm"
 import { toast } from "@/lib/toast"
 import {
   compressImage, createRecord, deleteRecord, imageRejectReason, loadMeta, loadRecord, loadRecords,
-  publishFieldsOf, slugPreview, updateRecordContent, updateRecordMeta, uploadImage,
+  publishFieldsOf, slugPreview, unpublishRecord, updateRecordContent, updateRecordMeta, uploadImage,
   type PracticeFields, type PracticeMeta, type PracticeRecord, type PracticeRecordFull, type PublishFields,
 } from "@/lib/practice"
 
@@ -138,6 +139,17 @@ function List() {
     }
   }
 
+  /** 下线：撤掉发布态（博客上立刻 404）。记录与插图都留着，重新发布即回到同一地址。 */
+  async function onUnpublish(r: PracticeRecord) {
+    try {
+      const res = await unpublishRecord(r.id)
+      toast.success(`已下线：${res.slug}`)
+      void fetchList()
+    } catch (e) {
+      toast.error(`下线失败：${(e as Error)?.message || e}`)
+    }
+  }
+
   const columns = useMemo(() => [
     { title: "ID", dataIndex: "id", key: "id", width: 70 },
     {
@@ -180,21 +192,31 @@ function List() {
           onClick={() => router.push(`/practice?id=${r.id}&mode=edit`)}>修改</Button>
         <Button size="small" type="text" icon={<Send size={13} />}
           onClick={() => setPubId(r.id)}>发布</Button>
+        {/* 下线只对「已发布」有意义；未发布时不给按钮，省得点了才被告知"无需下线" */}
+        {r.published_slug && (
+          <Popconfirm
+            title="下线这篇文章？"
+            description={`下线后博客上的 ${r.published_slug} 会立刻 404。记录与插图都会留着，重新发布即可恢复，地址不变。`}
+            okText="下线" cancelText="取消"
+            onConfirm={() => onUnpublish(r)}>
+            <Button size="small" type="text" icon={<Undo2 size={13} />}>下线</Button>
+          </Popconfirm>
+        )}
         <Popconfirm title="删除这条记录？" description="删除后不可恢复（正文里引用的图片不会被回收）。"
           okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
           onConfirm={() => onDelete(r.id)}>
           <Button size="small" type="text" danger icon={<Trash2 size={13} />}>删除</Button>
         </Popconfirm>
       </Space>
-    ), 280),
+    ), 340),
   ], [meta, items, page, router])
 
   return (
     <div className="flex flex-col gap-4">
       <AdminPage
         level={1}
-        title="🏋️ 练习实践"
-        description="记录完成每道练习题后的解答：一条记录一道题，正文支持 Markdown 与插图；配好发布信息可一键推到博客。"
+        title="🏋️ 博客文章生成"
+        description="一条记录 = 一道题：Markdown 正文 + 插图，配好发布信息后一键发到博客的解答页。发布后可随时改内容覆盖，或下线撤下来（记录与插图都保留）。"
         extra={
           <Button type="primary" icon={<Plus size={14} />} onClick={() => setModalOpen(true)}>
             创建记录
@@ -391,7 +413,7 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
   if (loading) return <div className="p-6"><Spin /> <span className="ml-2 text-sm text-zinc-500">正在加载记录…</span></div>
   if (notFound || !rec) {
     return (
-      <AdminPage title="练习实践">
+      <AdminPage title="博客文章生成">
         <Card size="small" className="shadow-sm">
           <Empty description="记录不存在或已被删除" />
           <div className="mt-3 text-center">

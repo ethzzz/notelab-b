@@ -217,6 +217,17 @@ export async function publishRecord(id: number): Promise<PublishResult> {
   return apiJson<PublishResult>(`/api/practice/records/${id}/publish`, { method: "POST" })
 }
 
+/** 下线的返回：说清「哪个地址下线了」 */
+export type UnpublishResult = { ok: boolean; slug: string; note: string }
+
+/**
+ * 下线：撤掉发布态（博客上立刻 404），**不删记录也不删插图** —— 重新发布即可回到同一个地址。
+ * 与「删除」是两回事：删除是这条记录不要了，下线只是不让外面看到。
+ */
+export async function unpublishRecord(id: number): Promise<UnpublishResult> {
+  return apiJson<UnpublishResult>(`/api/practice/records/${id}/unpublish`, { method: "POST" })
+}
+
 // ------------------------------------------------------------------ 插图
 
 /**
