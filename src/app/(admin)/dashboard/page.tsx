@@ -60,7 +60,14 @@ export default function DashboardPage() {
     apiJson("/api/dashboard/stats").then((r) => setStats(r.data)).catch(() => setFailed(true))
   }, [])
 
-  // 功能入口：去掉仪表盘自己（path 为 "/"）与练习实践（前缀 /practice）
+  // 功能入口：去掉仪表盘自己（path 为 "/"）与练习实践（前缀 /practice）。
+  //
+  // ⚠️ 这个列表**实际渲染 0 张卡**，而且不是 bug：/api/menu 顶层是「分组 + 叶子」混排，
+  // 这里只看顶层叶子。实测顶层叶子只有两项 —— 仪表盘（/）与练习实践（/practice），
+  // 其余 8 个全是分组（带 children）。也就是说原来的仪表盘上就只有那一张练习实践卡，
+  // 这正是它看起来空的原因。保留这段是因为它对任何菜单结构都成立：
+  // 将来顶层若新增叶子会自动出现在这里；而要让分组里的功能也铺开成入口，
+  // 得递归展开 children —— 那是另一种产品选择（仪表盘会变成第二份侧边栏），没做。
   const ready = menu.filter((m) => m.ready && m.path !== "/" && !String(m.path || "").startsWith("/practice"))
 
   // 指标卡按当前账号实际可进的页面过滤；pages 缺失（后端抖动 / 旧后端）时不过滤，别把卡片全藏了
