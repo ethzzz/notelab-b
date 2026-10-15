@@ -2,14 +2,16 @@
 
 // 发布二次确认弹窗。
 //
-// 为什么要有「二次确认」而不是直接发：发布 = 往博客仓 commit + push，会触发线上构建部署。
-// 所以这个弹窗必须让用户看得到**将要发生什么**，否则就只是「再点一次确定」：
-//   · 文件名（它同时就是博客 URL，错了只能靠肉眼发现）
+// 为什么要有「二次确认」而不是直接发：发布 = 把这条记录标成「对博客公开」，
+// 此后博客的解答页会直接读它（匿名可访问）。所以弹窗必须让用户看得到**将要发生什么**，
+// 否则就只是「再点一次确定」：
+//   · 地址标识（它就是博客 URL 的最后一段，错了只能靠肉眼发现）
 //   · 会归到哪篇路线文章下（找不到的话聚合页会把它丢进「独立分组」）
-//   · 要带走几张插图（正文里的 /api/practice/images/{id} 在博客上是 404，必须导出）
+//   · 会公开几张插图（正文里存的是 /api/practice/images/{id}，那是 B 端受权限保护的接口，
+//     匿名读者拿到的是 401 —— 发布时会给这些图打上公开名，改由公开接口直出）
 //   · 这是在新建还是在覆盖上一版
 //
-// 内容全部来自服务端的 /publish-preview（和真实发布**共用同一个计划构建函数**），
+// 内容全部来自服务端的 /publish-preview（与真实发布**共用同一个计划构建函数**），
 // 所以「看到的」就是「会发生的」。
 
 import { useEffect, useState } from "react"
@@ -105,7 +107,7 @@ export default function PublishConfirm({
                   </a>
                 </div>
                 <div className="mt-1 text-xs text-zinc-500">
-                  commit {result.commit} · 导出插图 {result.images} 张
+                  {result.images > 0 ? `公开插图 ${result.images} 张` : "本篇没有插图"}
                 </div>
                 <div className="mt-1 text-xs text-zinc-500">{result.note}</div>
               </>
@@ -137,8 +139,13 @@ export default function PublishConfirm({
             <Alert
               type="info"
               showIcon
-              message="这一步会往博客仓提交并推送，触发线上构建"
-              description={<span className="text-xs">push 后约 3–5 分钟线上可见。此前的版本会被这次内容覆盖。</span>}
+              message="这一步会让博客上的读者能看到它"
+              description={
+                <span className="text-xs">
+                  博客页面直接读数据库，发布后刷新即见 —— 不需要重新构建，也没有等待时间。
+                  重复发布同一地址会覆盖上一版内容。
+                </span>
+              }
             />
           )}
 
@@ -148,9 +155,9 @@ export default function PublishConfirm({
             bordered
             items={[
               {
-                key: "file",
-                label: "文件名",
-                children: <span className="font-mono text-[12.5px]">{pv.slug}.md</span>,
+                key: "slug",
+                label: "地址标识",
+                children: <span className="font-mono text-[12.5px]">{pv.slug}</span>,
               },
               {
                 key: "url",
@@ -174,9 +181,10 @@ export default function PublishConfirm({
                 label: "插图",
                 children: pv.images.length === 0
                   ? <span className="text-zinc-500">无</span>
-                  : <span>{pv.images.length} 张将被导出到博客：
+                  : <span>
+                      {pv.images.length} 张会随页面一起公开
                       <span className="ml-1 font-mono text-[11.5px] text-zinc-500">
-                        public/images/solutions/{pv.slug}-1…
+                        {`（${pv.slug}-1、${pv.slug}-2…）`}
                       </span>
                     </span>,
               },
@@ -186,7 +194,7 @@ export default function PublishConfirm({
                 children: pv.willUpdate
                   ? <Tag color="blue">覆盖已发布的同名解答</Tag>
                   : pv.published
-                    ? <Tag color="orange">改名为新文件，并删除旧的 {pv.oldSlug}.md</Tag>
+                    ? <Tag color="orange">改名为新地址（旧地址 {pv.oldSlug} 将失效）</Tag>
                     : <Tag color="green">新建</Tag>,
               },
             ]}
@@ -197,13 +205,6 @@ export default function PublishConfirm({
               <ul className="m-0 pl-4">{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
             } />
           )}
-
-          <details className="rounded-lg border border-solid border-[rgba(128,128,128,.3)] px-3 py-2">
-            <summary className="cursor-pointer text-xs text-zinc-500">查看将写入的 frontmatter</summary>
-            <pre className="mt-2 overflow-x-auto text-[11.5px] leading-relaxed text-zinc-600 dark:text-zinc-300">
-              {pv.frontmatter}
-            </pre>
-          </details>
         </div>
       )}
     </Modal>

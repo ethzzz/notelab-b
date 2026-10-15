@@ -80,7 +80,7 @@ function fmtTime(s: string): string {
 function PubTag({ r }: { r: PracticeRecord }) {
   if (!r.published_slug) return <Tag className="!m-0">未发布</Tag>
   return (
-    <Tooltip title={`${r.published_slug} · ${fmtTime(r.published_at)} · ${r.published_commit}`}>
+    <Tooltip title={`${r.published_slug} · ${fmtTime(r.published_at)}`}>
       <Tag color="green" className="!m-0">已发布</Tag>
     </Tooltip>
   )
@@ -155,7 +155,7 @@ function List() {
       render: (_: unknown, r: PracticeRecord) => {
         const s = slugPreview(publishFieldsOf(r))
         return r.module
-          ? <Tooltip title={s ? `${s}.md` : ""}>
+          ? <Tooltip title={s || ""}>
               <span className="text-zinc-600 dark:text-zinc-300">
                 {r.module}{r.chapter ? ` · ${r.chapter}` : ""}{r.order_no ? ` · 第${r.order_no}题` : ""}
               </span>
@@ -469,16 +469,16 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
         </div>
       )}
 
-      {/* 发布信息摘要（两种模式都显示：至少能一眼看到将生成的文件名） */}
+      {/* 发布信息摘要（两种模式都显示：至少能一眼看到它对应的博客地址） */}
       <div className="text-xs text-zinc-500">
         {slug ? (
           <>
-            将发布为 <code className="font-mono text-[12px]">{slug}.md</code>
+            地址标识 <code className="font-mono text-[12px]">{slug}</code>
             <span className="mx-1">·</span>
             <span className="font-mono">/blog/solutions/{slug}/</span>
             {rec.published_slug === slug && <Tag color="green" className="!m-0 !ml-2">与已发布一致</Tag>}
             {rec.published_slug && rec.published_slug !== slug && (
-              <Tag color="orange" className="!m-0 !ml-2">改名后发布将删除旧的 {rec.published_slug}.md</Tag>
+              <Tag color="orange" className="!m-0 !ml-2">改名后发布会让旧地址 {rec.published_slug} 失效</Tag>
             )}
           </>
         ) : (
@@ -512,7 +512,7 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
           <MdEditor value={draftContent} onChange={setDraftContent} minHeight={560} onUploadImage={handleUpload} />
           <div className="mt-2 text-xs text-zinc-400">
             工具栏「🖼」插入图片：长边超过 1600px 会先本地压缩再上传，正文里只存一个短链接。
-            发布到博客时会自动把插图导出到博客仓并改写链接。
+            发布后这些图会改由公开接口直出（匿名读者可见），正文本身不用改。
           </div>
         </Card>
       )}

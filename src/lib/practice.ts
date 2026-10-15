@@ -116,8 +116,8 @@ export function slugPreview(f: PublishFields): string {
 export type PublishPreview = {
   ok: boolean
   ready: boolean
+  /** 地址标识：它是博客 URL 的最后一段，也是对外唯一的键 */
   slug: string
-  target: string
   url: string
   module: string
   chapter: string
@@ -125,8 +125,8 @@ export type PublishPreview = {
   difficulty: string
   relatedPost: string
   relatedPostFound: boolean
-  frontmatter: string
-  images: { id: number; target: string; url: string }[]
+  /** 会随页面一起公开的插图。publicName 是它们对外的文件名，也是匿名访问的凭据 */
+  images: { id: number; publicName: string; url: string }[]
   blockers: string[]
   warnings: string[]
   published: { slug: string; commit: string; at: string } | null
@@ -139,8 +139,6 @@ export type PublishResult = {
   ok: boolean
   slug: string
   url: string
-  path: string
-  commit: string
   images: number
   relatedPost: string
   warnings: string[]
@@ -214,7 +212,7 @@ export async function publishPreview(id: number): Promise<PublishPreview> {
   return apiJson<PublishPreview>(`/api/practice/records/${id}/publish-preview`)
 }
 
-/** 真发布：导出插图 → 写 src/content/solutions/<slug>.md → commit + push */
+/** 真发布：给插图打公开名 + 把记录标成已发布（博客页面直接读库，不入 git、不触发构建） */
 export async function publishRecord(id: number): Promise<PublishResult> {
   return apiJson<PublishResult>(`/api/practice/records/${id}/publish`, { method: "POST" })
 }

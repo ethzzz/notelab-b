@@ -95,7 +95,7 @@ export default function PublishFieldsForm({
         <Input placeholder="pivot-index" maxLength={100} />
       </Form.Item>
 
-      <Form.Item name="tags" label="标签" tooltip="逗号分隔，会写进博客 frontmatter 的 tags">
+      <Form.Item name="tags" label="标签" tooltip="逗号分隔，会作为博客解答页上的标签显示">
         <Input placeholder="算法,对撞指针,LeetCode" maxLength={255} />
       </Form.Item>
 
@@ -103,19 +103,19 @@ export default function PublishFieldsForm({
         <Input.TextArea rows={2} maxLength={500} showCount placeholder="一句话说清这题考什么" />
       </Form.Item>
 
-      {/* 文件名预览：它同时就是博客 URL，填错只能靠「看一眼」发现 */}
+      {/* 地址预览：slug 就是博客 URL 的最后一段，填错只能靠「看一眼」发现 */}
       <div className="rounded-lg border border-dashed border-[rgba(128,128,128,.45)] px-3 py-2 text-xs leading-relaxed">
         {slug ? (
           <>
-            <span className="text-zinc-500">将发布为 </span>
-            <code className="font-mono text-[12px] font-medium">{slug}.md</code>
+            <span className="text-zinc-500">地址标识 </span>
+            <code className="font-mono text-[12px] font-medium">{slug}</code>
             <div className="mt-0.5 text-zinc-500">
               博客地址：<span className="font-mono">/blog/solutions/{slug}/</span>
             </div>
           </>
         ) : (
           <span className="text-zinc-500">
-            填完「路线模块 / 篇章号 / 题号 / 英文短名」后，这里会显示将生成的博客文件名
+            填完「路线模块 / 篇章号 / 题号 / 英文短名」后，这里会显示它对应的博客地址
           </span>
         )}
       </div>
