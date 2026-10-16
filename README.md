@@ -99,26 +99,33 @@ pm2 logs notelab-b     # 日志
    的前提下，入口放在「权限管理」页顶部（直达按钮）。
 2. C 端菜单/路由权限由后端控制；`/api/c-admin/*` 后端仅校验 B 端登录（未限超管），前端入口放在超管可见的权限页内。
 3. 未做**全站**真实浏览器自动化测试，交互正确性依赖构建零报错 + 代码走查 + 接口层 curl 验证。
-   例外：博客管理的三个页面有浏览器级验收（`.sync/shot-blog-p3b.js`：带登录态用系统 Chrome/CDP
-   打开页面、点「预览」、截图 + 读 DOM 断言），见下节。
+   例外：博客管理的三个页面与练习解答的博客预览有浏览器级验收（`.sync/shot-blog-p3b.js`、
+   `.sync/shot-practice-preview.js`：带登录态用系统 Chrome/CDP 打开页面、点预览、截图 + 读 DOM 断言），见下节。
 
-## 博客管理三页（2026-10-16 起）
+## 博客内容：两套东西，别混（2026-10-16 理顺）
 
-| 路由 | 干什么 |
-|---|---|
-| `/admin/blog-gen` | **文章起草 / 编辑（新建=编辑同页）**：`?slug=<文章>` 决定编辑哪一篇；干跑检查、存草稿 / 发布、AI 起草、预览 |
-| `/admin/blog-articles` | 文章记录：浏览数 + 后台改动记录；行操作＝编辑 / 上线 / 下线 / 重新部署 / 删除（仅草稿） |
-| `/admin/blog-deploy` | **部署状态**：最近一次、配置、历史 20 条 + 日志抽屉；有构建时 5 秒轮询、空闲 20 秒 |
+| 页面 | 产物 | 真相源 | 发布方式 | 线上地址 |
+|---|---|---|---|---|
+| `/admin/blog-gen` **文章起草** | posts：路线文章 / 笔记 | 博客仓 `src/content/posts/*.md`（git） | commit+push → 服务器构建（约 1 分钟） | `/blog/posts/<slug>/`（进首页/归档/RSS/搜索） |
+| `/admin/practice` **练习解答** | solutions：练习题解 | MySQL `practice_record` | 标发布态，**运行时读接口，秒级生效** | `/blog/solutions/<slug>/`（不进首页/归档/RSS） |
+| `/admin/blog-articles` | — | 博客仓 + 统计表 | — | 文章记录：浏览数 + 后台改动记录 |
+| `/admin/blog-deploy` | — | `blog_deploy_job` | — | 部署状态：最近一次、配置、历史 20 条 + 日志抽屉（构建中 5 秒轮询） |
 
-- **「干跑检查」与真写共用同一份计划**（Java 侧 `BlogArticleService.plan()`），所以弹窗里看到的
-  URL / 阻塞项 / 警告就是真写会遇到的那些；**AI 起草的结果直接填进同一套字段**，不另存一份。
-- **预览为什么与线上一致**：点「预览」是把当前内容 POST 给 `/api/blog/preview` 拿一个短时 token，
-  再把 `/blog/preview/<token>/` 嵌进 iframe —— 那一页由**博客自己的 Astro SSR** 渲染，
-  与线上文章页同一套布局与 markdown 管线（expressive-code / KaTeX / 提示块 / 标题锚点）。
-  编辑区右侧那个是编辑器自带的 marked 快速预览，两者不是一回事（页面上也标了）。
+> 菜单上「博客管理」只放 posts 相关的三页；「练习解答」是**独立分组**（leaf＝解答记录）。
+> 这次改名/归组只动了显示名与菜单归属，**页面 path 与权限码没变**（`page:/practice`），
+> 历史角色授权与 `/practice?id=N` 书签都不受影响。
+
+- **两个编辑器的预览是同一套机制**：点「预览」/「博客预览」→ 服务端把内容/发布计划放进短时存储
+  （`BlogPreviewService`，128 位 token + 30 分钟 TTL）→ iframe 嵌**博客自己的** SSR 路由
+  （文章 `/blog/preview/<token>/`、解答 `/blog/solutions/preview/<token>/`），所以预览＝线上观感
+  （expressive-code / KaTeX / 提示块 / 标题锚点）。载荷带 `kind`，两条路由各认自己的类型，跨类型 404。
+- 差异：文章的预览提交的是**编辑器当前内容**；解答的预览走 `POST /api/practice/records/{id}/blog-preview`，
+  读的是**库里已保存**的内容（有未保存改动时页面会提示）。
+- **「干跑检查」与真写共用同一份计划**（文章 `BlogArticleService.plan()`、解答 `PracticeController.buildPlan()`）；
+  **AI 起草的结果直接填进同一套字段**，不另存一份。
+- 编辑区右侧是编辑器自带的 marked 快速预览（看结构够用），与上面那个博客侧预览不是一回事（页面上标了）。
 - ⚠️ 构建进行中（约 1 分钟）改文章会被 **409** 拒：构建脚本要 `git pull` 并读整个工作区快照，
   与提交并发会互相踩（Java 侧 `BlogRepoService.exclusive` + `BlogDeployService` 的单线程队列）。
-  页面会说明原因，等它结束即可。
 - ⚠️ 这三页都是**仅超管**（`PermGuard.SUPER_ONLY_PAGES` + `/api/blog` 在受限前缀里）；
   新增页面时 `MenuTree` 与 `PageRoutes` **两处常量都要改**，仅超管页还要进 `SUPER_ONLY_PAGES`，
   接口归属要进 `RouteGroups`（详见根 `AGENTS.md`）。
