@@ -109,11 +109,19 @@ pm2 logs notelab-b     # 日志
 | `/admin/blog-gen` **文章起草** | posts：路线文章 / 笔记 | 博客仓 `src/content/posts/*.md`（git） | commit+push → 服务器构建（约 1 分钟） | `/blog/posts/<slug>/`（进首页/归档/RSS/搜索） |
 | `/admin/practice` **练习解答** | solutions：练习题解 | MySQL `practice_record` | 标发布态，**运行时读接口，秒级生效** | `/blog/solutions/<slug>/`（不进首页/归档/RSS） |
 | `/admin/blog-articles` | — | 博客仓 + 统计表 | — | 文章记录：浏览数 + 后台改动记录 |
-| `/admin/blog-deploy` | — | `blog_deploy_job` | — | 部署状态：最近一次、配置、历史 20 条 + 日志抽屉（构建中 5 秒轮询） |
+| `/admin/blog-deploy` | — | `blog_deploy_job` | — | 部署状态：最近一次、配置、历史 20 条 + 日志抽屉（构建中 5 秒轮询）；**历史分「部署 / 搜索索引」两类任务** |
 
 > 菜单上「博客管理」只放 posts 相关的三页；「练习解答」是**独立分组**（leaf＝解答记录）。
 > 这次改名/归组只动了显示名与菜单归属，**页面 path 与权限码没变**（`page:/practice`），
 > 历史角色授权与 `/practice?id=N` 书签都不受影响。
+
+- **站内搜索（pagefind）**：文章天然在索引里（构建产物）；解答是运行时渲染、构建产物里没有它们，
+  所以发布/下线解答后会自动排一次**搜索索引重建**任务（`job_kind=reindex`，实测 4–5 秒）——
+  它抓已发布解答的 SSR HTML → 重建索引 → 原子换入 `/var/www/blog/pagefind`。
+  ⚠️ `npm run build` 里的 pagefind 每次都会把题解从索引里抹掉，所以 `ops/deploy-ssr.sh` 末尾也补跑这一步
+  （索引的完整形态 = 静态页 + 这一步）。想手动补：`bash /root/blog-src/ops/reindex-search.sh`。
+- `blog_deploy_job.job_kind` 区分两类任务：`deploy`（构建发布，约 1 分钟）与 `reindex`（只重建索引，几秒）。
+  ⚠️「部署期间不许改文章」只算 `deploy`：索引任务不该挡住编辑。
 
 - **两个编辑器的预览是同一套机制**：点「预览」/「博客预览」→ 服务端把内容/发布计划放进短时存储
   （`BlogPreviewService`，128 位 token + 30 分钟 TTL）→ iframe 嵌**博客自己的** SSR 路由
