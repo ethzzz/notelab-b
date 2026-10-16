@@ -1,7 +1,9 @@
 "use client"
 
-// 博客文章生成（原「练习实践」，2026-10-15 移进「博客管理」菜单）——
+// 练习解答（原「博客文章生成」，2026-10-16 改名并从「博客管理」挪进自己的菜单分组 g_solutions）——
 // 一条记录 = 一道题，写完一键发到博客的解答页；可再次发布覆盖内容，也可下线撤下来。
+// ⚠️ 它产的是**题解**、真相源是 MySQL、发布即生效（运行时读接口）；
+//    与「文章起草」（产文章、真相源是博客仓、发布要构建约 1 分钟）不是一回事，别再并排放。
 //
 // 干什么：把「学习路线里每一篇的练习题」以及「非博客内容的自选练习」的解答沉淀下来，
 // 一条记录 = 一道题，正文用 Markdown 写、可以贴截图；配好发布信息后可直接推到博客。
@@ -23,14 +25,15 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Button, Card, Empty, Form, Input, Popconfirm, Select, Space, Spin, Tag, Tooltip } from "antd"
-import { ArrowLeft, Eye, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react"
+import { Button, Card, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip } from "antd"
+import { ArrowLeft, ExternalLink, Eye, Pencil, Plus, RotateCw, Save, Send, Trash2, Undo2 } from "lucide-react"
 import { AdminPage, DataTable, FilterBar, ModalForm, actionColumn } from "@/components/admin"
 import MdEditor, { MdPreview } from "@/components/md-editor"
 import PublishFieldsForm from "@/components/practice/publish-fields"
 import PublishConfirm from "@/components/practice/publish-confirm"
 import { toast } from "@/lib/toast"
 import {
+  blogPreview,
   compressImage, createRecord, deleteRecord, imageRejectReason, loadMeta, loadRecord, loadRecords,
   publishFieldsOf, slugPreview, unpublishRecord, updateRecordContent, updateRecordMeta, uploadImage,
   type PracticeFields, type PracticeMeta, type PracticeRecord, type PracticeRecordFull, type PublishFields,
@@ -215,7 +218,7 @@ function List() {
     <div className="flex flex-col gap-4">
       <AdminPage
         level={1}
-        title="🏋️ 博客文章生成"
+        title="🏋️ 练习解答"
         description="一条记录 = 一道题：Markdown 正文 + 插图，配好发布信息后一键发到博客的解答页。发布后可随时改内容覆盖，或下线撤下来（记录与插图都保留）。"
         extra={
           <Button type="primary" icon={<Plus size={14} />} onClick={() => setModalOpen(true)}>
@@ -345,6 +348,10 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
   const [savingContent, setSavingContent] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  /** 博客侧预览（iframe 地址）+ 忙碌标记。⚠️ 预览读的是**库里已保存**的内容，不是编辑器里的草稿 */
+  const [blogPvUrl, setBlogPvUrl] = useState("")
+  const [blogPvOpen, setBlogPvOpen] = useState(false)
+  const [blogPvBusy, setBlogPvBusy] = useState(false)
 
   useEffect(() => {
     void loadMeta().then(setMeta).catch(() => { /* 字典失败不影响阅读 */ })
@@ -410,10 +417,31 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
     return uploadImage(blob)
   }
 
+  /**
+   * 博客预览：把这条记录的**发布计划**交给博客自己的页面渲染（与「文章起草」同一条机制）。
+   *
+   * <p>⚠️ 服务端读的是**库里已保存**的内容 —— 编辑区里有未保存改动时，预览的是旧版本，
+   * 所以这里显式提醒一句，而不是让人对着预览纳闷「我明明改了」。
+   */
+  async function openBlogPreview() {
+    setBlogPvBusy(true)
+    try {
+      const r = await blogPreview(rec!.id)
+      setBlogPvUrl(`${window.location.origin}${r.url}`)
+      setBlogPvOpen(true)
+      if (metaDirty || contentDirty) toast.warning("预览的是**已保存**的内容：你还有未保存的改动，先保存再看")
+      if (r.blockers?.length) toast.warning(`可以预览，但发布信息还差：${r.blockers.join("；")}`)
+    } catch (e) {
+      toast.error(`预览失败：${(e as Error)?.message || e}`)
+    } finally {
+      setBlogPvBusy(false)
+    }
+  }
+
   if (loading) return <div className="p-6"><Spin /> <span className="ml-2 text-sm text-zinc-500">正在加载记录…</span></div>
   if (notFound || !rec) {
     return (
-      <AdminPage title="博客文章生成">
+      <AdminPage title="练习解答">
         <Card size="small" className="shadow-sm">
           <Empty description="记录不存在或已被删除" />
           <div className="mt-3 text-center">
@@ -436,6 +464,11 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
         <PubTag r={rec} />
         {mode === "edit" && dirty && <Tag color="orange">有未保存改动</Tag>}
         <Space className="ml-auto" size={8}>
+          <Tooltip title="用博客自己的页面渲染这条解答（与线上解答页一致）；读的是已保存的内容">
+            <Button icon={<Eye size={14} />} loading={blogPvBusy} onClick={() => void openBlogPreview()}>
+              博客预览
+            </Button>
+          </Tooltip>
           <Button icon={<Send size={14} />} onClick={() => setConfirmOpen(true)}>发布到博客</Button>
           {mode === "edit" ? (
             <Button onClick={() => router.replace(`/practice?id=${rec.id}&mode=view`)}>切换到查看</Button>
@@ -587,6 +620,31 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
           void loadRecord(id).then((r) => setRec(r)).catch(() => { })
         }}
       />
+
+      {/* 博客预览：与「文章起草」同一条机制 —— 服务端把发布计划放进短时存储，
+          iframe 指向**博客自己的**解答页路由，所以看到的就是线上观感（含代码高亮/提示块/公式）。
+          ⚠️ 它读的是**库里已保存**的内容：有未保存改动时先保存再看，否则看到的是旧版本。 */}
+      <Modal
+        open={blogPvOpen}
+        onCancel={() => setBlogPvOpen(false)}
+        footer={null}
+        width="92vw"
+        style={{ top: 16 }}
+        title={
+          <Space wrap>
+            <span>博客预览（博客自己的页面渲染，与线上解答页一致）</span>
+            <Button size="small" icon={<RotateCw size={12} />} loading={blogPvBusy} onClick={() => void openBlogPreview()}>
+              按已保存内容刷新
+            </Button>
+            <Button size="small" icon={<ExternalLink size={12} />} href={blogPvUrl} target="_blank">新窗口打开</Button>
+            <span className="text-xs text-zinc-400">地址 30 分钟后自动失效</span>
+          </Space>
+        }
+      >
+        {blogPvUrl
+          ? <iframe src={blogPvUrl} title="解答预览" className="w-full rounded border-0" style={{ height: "76vh" }} />
+          : <div className="p-10 text-center text-zinc-400">还没有预览</div>}
+      </Modal>
     </div>
   )
 }

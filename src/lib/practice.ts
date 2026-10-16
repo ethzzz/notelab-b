@@ -217,6 +217,25 @@ export async function publishRecord(id: number): Promise<PublishResult> {
   return apiJson<PublishResult>(`/api/practice/records/${id}/publish`, { method: "POST" })
 }
 
+/**
+ * 博客侧预览：服务端把这条记录的**发布计划**放进短时存储，返回可嵌 iframe 的地址
+ * （博客的 `/blog/solutions/preview/<token>/` 用它**自己的**渲染管线出页面，所以预览＝线上观感）。
+ *
+ * ⚠️ 服务端读的是**库里已保存**的内容：编辑区有未保存改动时，先保存再预览。
+ */
+export type BlogPreviewResult = {
+  ok: boolean
+  token: string
+  url: string
+  slug: string
+  relatedPost: string
+  blockers: string[]
+}
+
+export async function blogPreview(id: number): Promise<BlogPreviewResult> {
+  return apiJson<BlogPreviewResult>(`/api/practice/records/${id}/blog-preview`, { method: "POST" })
+}
+
 /** 下线的返回：说清「哪个地址下线了」 */
 export type UnpublishResult = { ok: boolean; slug: string; note: string }
 
