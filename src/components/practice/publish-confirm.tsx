@@ -110,6 +110,11 @@ export default function PublishConfirm({
                   {result.images > 0 ? `公开插图 ${result.images} 张` : "本篇没有插图"}
                 </div>
                 <div className="mt-1 text-xs text-zinc-500">{result.note}</div>
+                {result.search && result.search.ok === false && (
+                  <div className="mt-1 text-xs text-amber-600">
+                    搜索索引：{result.search.reason || "没能入队"}（只影响能不能被搜到，页面已经能看了）
+                  </div>
+                )}
               </>
             }
           />

@@ -21,6 +21,8 @@ type Job = {
   id: number
   status: "queued" | "running" | "success" | "failed"
   trigger_kind: string
+  /** deploy = 构建发布；reindex = 只重建站内搜索索引（解答发布/下线后自动触发） */
+  job_kind: string
   trigger_by_name: string
   commit_hash: string
   verify_path: string
@@ -47,6 +49,13 @@ function fmt(s?: string | null): string {
 
 function secs(ms?: number | null): string {
   return ms ? `${(ms / 1000).toFixed(1)} 秒` : "-"
+}
+
+/** 触发来源的显示名。⚠️ 别用「非 manual 就是发布」这种二分：reindex 也是非 manual，会被显示成「发布」 */
+function labelOfTrigger(v: string): string {
+  if (v === "manual") return "手动"
+  if (v === "reindex") return "索引"
+  return "发布后自动"
 }
 
 export default function BlogDeployPage() {
@@ -99,10 +108,20 @@ export default function BlogDeployPage() {
       render: (v: string) => <Tag color={STATUS[v]?.color} className="!m-0">{STATUS[v]?.label || v}</Tag>,
     },
     {
+      title: "类型", dataIndex: "job_kind", key: "job_kind", width: 110,
+      render: (v: string) => (
+        <Tooltip title={v === "reindex" ? "只重建站内搜索索引（题解是运行时渲染，构建产物里没有它们）" : "构建并发布整站"}>
+          <Tag color={v === "reindex" ? "blue" : "geekblue"} className="!m-0">
+            {v === "reindex" ? "搜索索引" : "部署"}
+          </Tag>
+        </Tooltip>
+      ),
+    },
+    {
       title: "触发", dataIndex: "trigger_kind", key: "trigger_kind", width: 110,
       render: (v: string, r: Job) => (
-        <Tooltip title={`${v === "manual" ? "手动触发" : "发布后自动"} · ${r.trigger_by_name || "-"}`}>
-          <span className="text-xs">{v === "manual" ? "手动" : "发布"}{r.trigger_by_name ? ` · ${r.trigger_by_name}` : ""}</span>
+        <Tooltip title={`${labelOfTrigger(v)} · ${r.trigger_by_name || "-"}`}>
+          <span className="text-xs">{labelOfTrigger(v)}{r.trigger_by_name ? ` · ${r.trigger_by_name}` : ""}</span>
         </Tooltip>
       ),
     },
@@ -132,7 +151,7 @@ export default function BlogDeployPage() {
     <AdminPage
       level={1}
       title="🚀 部署状态"
-      description="博客是静态站：文章写进博客仓后要构建一次才会上线。这一页看构建进度、结果与失败原因。"
+      description="博客是静态站：文章写进博客仓后要构建一次才会上线。这一页看构建进度、结果与失败原因。解答发布/下线后会自动排一次「搜索索引」任务（题解是运行时渲染，构建产物里没有它们）。"
       extra={
         <Space>
           <Button icon={<RefreshCw size={14} />} loading={loading} onClick={() => void load()}>刷新</Button>
@@ -162,6 +181,9 @@ export default function BlogDeployPage() {
               <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
                 <Descriptions.Item label="状态">
                   <Tag color={STATUS[latest.status]?.color} className="!m-0">{STATUS[latest.status]?.label || latest.status}</Tag>
+                  <Tag color={latest.job_kind === "reindex" ? "blue" : "geekblue"} className="!m-0 ml-1">
+                    {latest.job_kind === "reindex" ? "搜索索引" : "部署"}
+                  </Tag>
                   {latest.status === "failed" && (
                     <Button size="small" type="link" icon={<RotateCw size={12} />} onClick={() => void trigger()}>重试</Button>
                   )}

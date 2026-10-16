@@ -144,6 +144,12 @@ export type PublishResult = {
   warnings: string[]
   updated: boolean
   note: string
+  /**
+   * 站内搜索索引重建的入队结果（解答页是运行时渲染，构建产物里没有它们，
+   * 所以发布/下线后要额外重建一次索引，否则题解搜不到）。
+   * ⚠️ 它失败不影响「已发布」：内容已经在库里、页面上能看，只是搜不到。
+   */
+  search?: { ok: boolean; jobId?: number; skipped?: boolean; reason?: string }
 }
 
 // ------------------------------------------------------------------ 读
