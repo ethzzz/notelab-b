@@ -10,9 +10,13 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Button, Segmented, Tooltip } from "antd"
 import { marked } from "marked"
 import DOMPurify from "dompurify"
+import { htmlToMarkdown } from "@/lib/html-to-md"
 import { toast } from "@/lib/toast"
 
 marked.setOptions({ gfm: true, breaks: true })
+
+/** 「粘贴时保留格式」的用户偏好（纯客户端，存 localStorage；不进后端配置） */
+const KEEP_FORMAT_KEY = "notelab.note.paste_keep_format"
 
 /** md → 消毒后的 HTML（无 DOM 环境（预渲染）时 DOMPurify 原样返回，hydration 后客户端重新渲染） */
 export function renderMd(md: string): string {
@@ -110,11 +114,45 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
   /** 注入后才显示「插入图片」。约定：传入原始 File，返回可直接写进 Markdown 的 URL */
   onUploadImage?: (file: File) => Promise<string>
 }) {
-  const taRef = useRef<HTMLTextAreaElement>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [narrow, setNarrow] = useState(false)
-  const [pane, setPane] = useState<"edit" | "preview">("edit")
-  const [uploading, setUploading] = useState(false)
+	const taRef = useRef<HTMLTextAreaElement>(null)
+	const fileRef = useRef<HTMLInputElement>(null)
+	/**
+	 * 本次粘贴是否要「强制纯文本」（Ctrl/Cmd+Shift+V）。
+	 *
+	 * ⚠️ 不能读 `e.shiftKey`：ClipboardEvent 继承自 UIEvent，**规范里根本没有这个属性**
+	 *    （shiftKey 属于 KeyboardEvent / MouseEvent），TS 直接报 TS2339，
+	 *    运行时也是 undefined —— 写下去就是「Shift 强制纯文本」静默失效。
+	 *    改为在 keydown 里记录：键盘触发粘贴时，keydown 一定先于 paste。
+	 */
+	const pastePlainRef = useRef(false)
+	const [narrow, setNarrow] = useState(false)
+	const [pane, setPane] = useState<"edit" | "preview">("edit")
+	const [uploading, setUploading] = useState(false)
+
+	// 粘贴保留格式：默认开。
+	// ⚠️ 读 localStorage 放在 effect 里，不要写进 useState 的初始化函数：
+	//    /notes 走的是 dynamic(ssr:false)，但 /practice 是**直接 import** 本组件 ——
+	//    初始化函数会在预渲染（Node 无 localStorage）时执行，直接炸在渲染阶段。
+	const [keepFormat, setKeepFormat] = useState(true)
+	useEffect(() => {
+		try {
+			setKeepFormat(localStorage.getItem(KEEP_FORMAT_KEY) !== "0")
+		} catch {
+			// 隐私模式 / 存储被禁：保持默认值（开）即可
+		}
+	}, [])
+
+	function toggleKeepFormat() {
+		setKeepFormat((v) => {
+			const next = !v
+			try {
+				localStorage.setItem(KEEP_FORMAT_KEY, next ? "1" : "0")
+			} catch {
+				// 存不下就只影响本次会话，不打断用户
+			}
+			return next
+		})
+	}
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 900px)")
@@ -134,15 +172,44 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
     onChange(ta.value)
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    // Tab 插入两空格（不跳出编辑区）
-    if (e.key === "Tab") {
-      e.preventDefault()
-      const ta = e.currentTarget
-      ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end")
-      onChange(ta.value)
-    }
-  }
+	function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+		// 记录 V 键是否带 Shift，供 onPaste 判断「粘贴为纯文本」
+		if (/^v$/i.test(e.key)) pastePlainRef.current = e.shiftKey
+
+		// Tab 插入两空格（不跳出编辑区）
+		if (e.key === "Tab") {
+			e.preventDefault()
+			const ta = e.currentTarget
+			ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end")
+			onChange(ta.value)
+		}
+	}
+
+	/**
+	 * 粘贴：把外部富文本（网页 / Word 的 text/html）转成 Markdown 再插入。
+	 *
+	 * 三种情况**不拦截**，交回浏览器原生粘贴（也就是纯文本）：
+	 *   ① 开关关掉；② 按住 Shift（Ctrl+Shift+V 是浏览器内置的「粘贴为纯文本」）；
+	 *   ③ 剪贴板没有 text/html，或转换结果为空（例如只复制了一张内嵌 data: 图）——
+	 *      这时若还 preventDefault，表现就是「粘贴了但什么都没发生」，比粘进纯文本更糟。
+	 *
+	 * ⚠️ getData 必须**同步**读、preventDefault 必须**同步**调：
+	 *    ClipboardEvent 在事件处理函数返回后即失效，不能放进 await 之后再读。
+	 */
+	function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+		// 一次性读取并复位：否则下一次用鼠标右键粘贴时会沿用上一次的按键状态
+		const plain = pastePlainRef.current
+		pastePlainRef.current = false
+		if (!keepFormat || plain) return
+		const html = e.clipboardData?.getData("text/html")
+		if (!html) return
+		const md = htmlToMarkdown(html)
+		if (!md) return
+		e.preventDefault()
+		const ta = e.currentTarget
+		ta.setRangeText(md, ta.selectionStart, ta.selectionEnd, "end")
+		onChange(ta.value)
+	}
 
   /**
    * 选图 → 上传 → 在光标处插入 `![alt](url)`。
@@ -196,11 +263,31 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
               {"🖼"}
             </Button>
           </Tooltip>
-          {/* ⚠️ 用 display:none 而不是条件渲染：input 必须在 DOM 里，click() 才有东西可点 */}
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
-        </span>
-      )}
-      {narrow && (
+					{/* ⚠️ 用 display:none 而不是条件渲染：input 必须在 DOM 里，click() 才有东西可点 */}
+					<input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
+				</span>
+			)}
+			<span className="contents">
+				<span className="mx-1 h-5 w-px bg-[rgba(128,128,128,.3)]" />
+				<Tooltip
+					title={
+						keepFormat
+							? "粘贴时保留格式：开 —— 从网页/Word 复制的标题、列表、加粗会转成 Markdown；按住 Ctrl+Shift+V 可临时按纯文本粘贴"
+							: "粘贴时保留格式：关 —— 当前粘贴为纯文本"
+					}
+				>
+					<Button
+						size="small"
+						type={keepFormat ? "primary" : "text"}
+						ghost={keepFormat}
+						className="min-w-8 px-1.5 text-xs"
+						onClick={toggleKeepFormat}
+					>
+						{"📋"}
+					</Button>
+				</Tooltip>
+			</span>
+			{narrow && (
         <Segmented
           size="small"
           className="ml-auto"
@@ -212,18 +299,19 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
     </div>
   )
 
-  const editPane = (
-    <textarea
-      ref={taRef}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={onKeyDown}
-      placeholder="用 Markdown 书写…（支持 GFM：表格/任务列表/删除线）"
-      spellCheck={false}
-      className="w-full flex-1 resize-none bg-transparent px-3 py-2 font-mono text-[13.5px] leading-relaxed outline-none"
-      style={{ minHeight }}
-    />
-  )
+	const editPane = (
+		<textarea
+			ref={taRef}
+			value={value}
+			onChange={(e) => onChange(e.target.value)}
+			onKeyDown={onKeyDown}
+			onPaste={onPaste}
+			placeholder="用 Markdown 书写…（支持 GFM：表格/任务列表/删除线）"
+			spellCheck={false}
+			className="w-full flex-1 resize-none bg-transparent px-3 py-2 font-mono text-[13.5px] leading-relaxed outline-none"
+			style={{ minHeight }}
+		/>
+	)
 
   const previewPane = (
     <div className="md-body w-full flex-1 overflow-auto px-4 py-2" style={{ minHeight }} dangerouslySetInnerHTML={{ __html: html }} />
