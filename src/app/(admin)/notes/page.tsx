@@ -1,16 +1,13 @@
 "use client"
 // 笔记页（Notion 式）：Markdown 保存 / 列表 / 编辑 / 查看
 // 接口契约以 NoteController 为准（/api/notes）；渲染用 md-editor 的 marked+DOMPurify
-import dynamic from "next/dynamic"
 import { useCallback, useEffect, useState } from "react"
 import { Card, Table, Button, Input, Space, Popconfirm } from "antd"
 import { Plus, ArrowLeft, Save, Eye, PenLine, Trash2, NotebookPen, Download } from "lucide-react"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
-import { MdPreview } from "@/components/md-editor"
-
-// 编辑器含 textarea/预览分屏，仅客户端加载
-const MdEditor = dynamic(() => import("@/components/md-editor"), { ssr: false })
+// MdEditor 默认导出已是「仅客户端 + 懒加载」，页面不用再自己 dynamic 包装（见 components/md-editor.tsx）
+import MdEditor, { MdPreview } from "@/components/md-editor"
 
 type NoteMeta = {
   id: number; title: string; size_bytes: number

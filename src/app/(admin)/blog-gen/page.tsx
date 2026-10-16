@@ -15,14 +15,13 @@
 // ⚠️ 写入响应里的 deploy 字段必须如实显示：草稿=不构建 / 发布=已排队 jobId / 部署进行中=409 被拒。
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import dynamic from "next/dynamic"
 import { Alert, AutoComplete, Button, Card, Collapse, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Switch, Tag, Typography } from "antd"
 import { ExternalLink, Eye, FileText, ListChecks, RotateCw, Save, Send, Wand2 } from "lucide-react"
 import { AdminPage } from "@/components/admin"
+// MdEditor 默认导出已是「仅客户端 + 懒加载」，页面不用再自己 dynamic 包装（见 components/md-editor.tsx）
+import MdEditor from "@/components/md-editor"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
-
-const MdEditor = dynamic(() => import("@/components/md-editor"), { ssr: false })
 
 const { Text, Paragraph } = Typography
 
