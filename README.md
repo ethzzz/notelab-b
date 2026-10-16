@@ -115,12 +115,14 @@ pm2 logs notelab-b     # 日志
 > 这次改名/归组只动了显示名与菜单归属，**页面 path 与权限码没变**（`page:/practice`），
 > 历史角色授权与 `/practice?id=N` 书签都不受影响。
 
-- **站内搜索（pagefind）**：文章天然在索引里（构建产物）；解答是运行时渲染、构建产物里没有它们，
-  所以发布/下线解答后会自动排一次**搜索索引重建**任务（`job_kind=reindex`，实测 4–5 秒）——
-  它抓已发布解答的 SSR HTML → 重建索引 → 原子换入 `/var/www/blog/pagefind`。
-  ⚠️ `npm run build` 里的 pagefind 每次都会把题解从索引里抹掉，所以 `ops/deploy-ssr.sh` 末尾也补跑这一步
-  （索引的完整形态 = 静态页 + 这一步）。想手动补：`bash /root/blog-src/ops/reindex-search.sh`。
-- `blog_deploy_job.job_kind` 区分两类任务：`deploy`（构建发布，约 1 分钟）与 `reindex`（只重建索引，几秒）。
+- **站内搜索（pagefind）与 sitemap**：文章天然在两份里（都是构建产物）；解答是运行时渲染、
+  构建产物里没有它们，所以发布/下线解答后会自动排一次**衍生索引重建**任务（`job_kind=reindex`，实测 4–5 秒）——
+  它抓已发布解答的 SSR HTML → 重建搜索索引 → 原子换入 `/var/www/blog/pagefind`，
+  并把解答 URL **幂等注入** `/var/www/blog/sitemap-0.xml`（带 `<!-- notelab:solutions -->` 标记）。
+  ⚠️ `npm run build` 里的 pagefind 与 `@astrojs/sitemap` 每次都会把题解从这两份里抹掉，
+  所以 `ops/deploy-ssr.sh` 末尾也补跑这一步（完整形态 = 静态页 + 这一步）。
+  想手动补：`bash /root/blog-src/ops/refresh-indexes.sh`。
+- `blog_deploy_job.job_kind` 区分两类任务：`deploy`（构建发布，约 1 分钟）与 `reindex`（重建搜索索引 + sitemap，几秒）。
   ⚠️「部署期间不许改文章」只算 `deploy`：索引任务不该挡住编辑。
 
 - **两个编辑器的预览是同一套机制**：点「预览」/「博客预览」→ 服务端把内容/发布计划放进短时存储
