@@ -8,8 +8,9 @@
 //   · 浏览数 ← 博客侧读者浏览器匿名上报，**按访客去重**（同一个人同一篇只算一次）
 //   · 改动记录 ← **只记经过后台系统的改动**。日常维护是直接在仓库里改 md 的，那些不在里面
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Button, Card, Drawer, Empty, Input, Space, Spin, Tag, Tooltip } from "antd"
-import { Eye, RefreshCw } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Button, Card, Drawer, Empty, Input, Popconfirm, Space, Spin, Tag, Tooltip } from "antd"
+import { Eye, Pencil, RefreshCw, RotateCw, Send, Trash2, Undo2 } from "lucide-react"
 import { AdminPage, DataTable, actionColumn } from "@/components/admin"
 import { apiJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
@@ -42,11 +43,13 @@ function fmtTime(v: string): string {
 }
 
 export default function BlogArticlesPage() {
+  const router = useRouter()
   const [items, setItems] = useState<Article[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState("")
   const [detail, setDetail] = useState<{ article: Article; logs: ArticleLog[] } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [busy, setBusy] = useState("")
 
   const fetchList = useCallback(async () => {
     setLoading(true)
@@ -73,6 +76,55 @@ export default function BlogArticlesPage() {
     } finally {
       setDetailLoading(false)
     }
+  }
+
+  /**
+   * 上线 / 下线：只动 frontmatter 的 draft 那一行（正文与其它字段一个字节都不动）。
+   * 两个方向都会触发一次构建 —— 上线要让它出现，下线要让它消失，都是读者能看到的变化。
+   */
+  async function toggleDraft(a: Article) {
+    const next = !a.draft
+    setBusy(`draft-${a.slug}`)
+    try {
+      const r = await apiJson<any>(`/api/blog/articles/${encodeURIComponent(a.slug)}/draft`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft: next }),
+      })
+      const dep = r.deploy
+      toast.success(
+        `已${next ? "下线（转草稿）" : "上线"}：${a.slug}` +
+        (dep?.skipped ? "" : dep?.ok ? `；已排队部署 #${dep.jobId}（约 1 分钟）` : `；没触发部署：${dep?.reason || "未知"}`),
+      )
+      void fetchList()
+    } catch (e) {
+      toast.error((e as Error).message || "操作失败")
+    } finally { setBusy("") }
+  }
+
+  /** 删除：服务端只允许删草稿（已发布必须先下线），所以按钮也只在草稿行出现 */
+  async function remove(a: Article) {
+    setBusy(`del-${a.slug}`)
+    try {
+      await apiJson(`/api/blog/articles/${encodeURIComponent(a.slug)}`, { method: "DELETE" })
+      toast.success(`已删除：${a.slug}`)
+      setDetail(null)
+      void fetchList()
+    } catch (e) {
+      toast.error((e as Error).message || "删除失败")
+    } finally { setBusy("") }
+  }
+
+  /** 重新构建并发布（内容没变也想重跑 —— 例如线上被别的部署覆盖过） */
+  async function redeploy(a: Article) {
+    setBusy(`dep-${a.slug}`)
+    try {
+      const r = await apiJson<any>("/api/blog/deploy", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(a.draft ? {} : { slug: a.slug }),
+      })
+      toast.success(`已排队部署 #${r.jobId}，进度见「部署状态」`)
+    } catch (e) {
+      toast.warning((e as Error).message || "没能开始部署")
+    } finally { setBusy("") }
   }
 
   // 前端筛选：202 篇一次取回，没必要为搜索再跑一次接口
@@ -133,10 +185,31 @@ export default function BlogArticlesPage() {
         : <span className="text-xs text-zinc-400">后台无记录</span>,
     },
     actionColumn((_: unknown, r: Article) => (
-      <Button size="small" type="text" icon={<Eye size={13} />} onClick={() => void openDetail(r.slug)}>
-        详情
-      </Button>
-    ), 100),
+      <Space size={0}>
+        <Button size="small" type="text" icon={<Eye size={13} />} onClick={() => void openDetail(r.slug)}>详情</Button>
+        <Button size="small" type="text" icon={<Pencil size={13} />}
+          onClick={() => router.push(`/blog-gen?slug=${encodeURIComponent(r.slug)}`)}>编辑</Button>
+        <Tooltip title={r.draft ? "发布上线（会触发一次构建，约 1 分钟）" : "下线：转草稿，线上不再可访问"}>
+          <Button size="small" type="text" loading={busy === `draft-${r.slug}`}
+            icon={r.draft ? <Send size={13} /> : <Undo2 size={13} />}
+            onClick={() => void toggleDraft(r)}>{r.draft ? "上线" : "下线"}</Button>
+        </Tooltip>
+        <Tooltip title="重新构建并发布（约 1 分钟）">
+          <Button size="small" type="text" loading={busy === `dep-${r.slug}`}
+            icon={<RotateCw size={13} />} onClick={() => void redeploy(r)}>部署</Button>
+        </Tooltip>
+        {r.draft && (
+          <Popconfirm
+            title={`删除 ${r.slug}？`}
+            description="删除只对草稿开放（线上本来就没有它）。已发布的请先下线。"
+            okText="删除" okButtonProps={{ danger: true }} cancelText="取消"
+            onConfirm={() => void remove(r)}
+          >
+            <Button size="small" type="text" danger loading={busy === `del-${r.slug}`} icon={<Trash2 size={13} />}>删除</Button>
+          </Popconfirm>
+        )}
+      </Space>
+    ), 340),
   ], [items])
 
   return (
