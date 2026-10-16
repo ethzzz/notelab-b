@@ -314,8 +314,13 @@ function Editor({ editing }: { editing: string }) {
             <MdEditor value={d.content} minHeight={460} onChange={(v) => patch({ content: v })} />
           </div>
           <Paragraph type="secondary" className="!mb-0 !text-xs">
+            ⚠️ 编辑区右侧那个面板是<b>编辑器自带的快速预览</b>（marked 渲染，够用来看结构）；
+            要看与线上<b>完全一致</b>的观感（代码高亮 / 提示块 / 公式 / 目录），点上方的「预览」——
+            那是博客自己的页面渲染出来的。
+          </Paragraph>
+          <Paragraph type="secondary" className="!mb-0 !text-xs">
             ⚠️ 标签与分类是 frontmatter 里的自由文本：分类写歪会让同一类内容在归档页裂成好几组，
-            所以下拉里的候选取自**仓内现状**，尽量照着选。
+            所以下拉里的候选取自<b>仓内现状</b>，尽量照着选。
           </Paragraph>
         </Space>
       </Card>
