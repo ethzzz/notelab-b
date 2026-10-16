@@ -98,4 +98,27 @@ pm2 logs notelab-b     # 日志
 1. `/c-users` 未进左侧菜单：菜单树是 Java 端常量（MenuTree）+ RBAC 过滤，不改 Java
    的前提下，入口放在「权限管理」页顶部（直达按钮）。
 2. C 端菜单/路由权限由后端控制；`/api/c-admin/*` 后端仅校验 B 端登录（未限超管），前端入口放在超管可见的权限页内。
-3. 未做真实浏览器自动化测试，交互正确性依赖构建零报错 + 代码走查 + 接口层 curl 验证。
+3. 未做**全站**真实浏览器自动化测试，交互正确性依赖构建零报错 + 代码走查 + 接口层 curl 验证。
+   例外：博客管理的三个页面有浏览器级验收（`.sync/shot-blog-p3b.js`：带登录态用系统 Chrome/CDP
+   打开页面、点「预览」、截图 + 读 DOM 断言），见下节。
+
+## 博客管理三页（2026-10-16 起）
+
+| 路由 | 干什么 |
+|---|---|
+| `/admin/blog-gen` | **文章起草 / 编辑（新建=编辑同页）**：`?slug=<文章>` 决定编辑哪一篇；干跑检查、存草稿 / 发布、AI 起草、预览 |
+| `/admin/blog-articles` | 文章记录：浏览数 + 后台改动记录；行操作＝编辑 / 上线 / 下线 / 重新部署 / 删除（仅草稿） |
+| `/admin/blog-deploy` | **部署状态**：最近一次、配置、历史 20 条 + 日志抽屉；有构建时 5 秒轮询、空闲 20 秒 |
+
+- **「干跑检查」与真写共用同一份计划**（Java 侧 `BlogArticleService.plan()`），所以弹窗里看到的
+  URL / 阻塞项 / 警告就是真写会遇到的那些；**AI 起草的结果直接填进同一套字段**，不另存一份。
+- **预览为什么与线上一致**：点「预览」是把当前内容 POST 给 `/api/blog/preview` 拿一个短时 token，
+  再把 `/blog/preview/<token>/` 嵌进 iframe —— 那一页由**博客自己的 Astro SSR** 渲染，
+  与线上文章页同一套布局与 markdown 管线（expressive-code / KaTeX / 提示块 / 标题锚点）。
+  编辑区右侧那个是编辑器自带的 marked 快速预览，两者不是一回事（页面上也标了）。
+- ⚠️ 构建进行中（约 1 分钟）改文章会被 **409** 拒：构建脚本要 `git pull` 并读整个工作区快照，
+  与提交并发会互相踩（Java 侧 `BlogRepoService.exclusive` + `BlogDeployService` 的单线程队列）。
+  页面会说明原因，等它结束即可。
+- ⚠️ 这三页都是**仅超管**（`PermGuard.SUPER_ONLY_PAGES` + `/api/blog` 在受限前缀里）；
+  新增页面时 `MenuTree` 与 `PageRoutes` **两处常量都要改**，仅超管页还要进 `SUPER_ONLY_PAGES`，
+  接口归属要进 `RouteGroups`（详见根 `AGENTS.md`）。
