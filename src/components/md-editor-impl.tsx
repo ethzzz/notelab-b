@@ -1,22 +1,50 @@
 "use client"
-// Notion 式 Markdown 编辑器：左侧源码（等宽字体+工具栏），右侧实时预览（marked 渲染 + DOMPurify 消毒）。
+// Notion 式 Markdown 编辑器：左侧源码（CodeMirror 6 + 工具栏），右侧实时预览（marked 渲染 + DOMPurify 消毒）。
 // 窄屏（≤900px）自动折叠为"编辑/预览"单面板切换。受控组件：value/onChange。
 //
 // ⚠️ 这是**实现**文件，页面不要直接 import 它 —— 统一走 ./md-editor（入口），
 //    那里负责 `ssr: false` 的懒加载包装，保证「编辑器怎么加载」只有一处定义。
 //    渲染相关（renderMd / MD_BODY_CSS / MdPreview）在 ./md-preview，本文件只是复用。
 //
+// 为什么用 CodeMirror 6 而不是原生 <textarea>（2026-10-17 换的）：
+//   原来是个裸 textarea，除了换行什么都没有 —— 没语法高亮、没快捷键、没括号配对，
+//   长文档里找一段代码块全靠肉眼。CodeMirror 提供的是编辑**表面**（高亮/快捷键/搜索/多光标），
+//   内容仍是纯 Markdown 字符串，存储与发布链路一字未动。
+//   刻意**没有**换成 WYSIWYG（MDXEditor / Milkdown 那类）：它们内部有文档模型，
+//   保存时要序列化回 Markdown、会悄悄重排格式 —— 而这个仓每天都要 diff 文章。
+//
 // 插图：可选注入 onUploadImage —— 传了才在工具栏出现「插入图片」按钮。
 // 编辑器**不关心图片存哪**（本仓是 /api/practice/images/{id}），只负责
 // 「选文件 → 拿到 URL → 在光标处插入 Markdown」这一段；上传实现由调用方注入。
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { indentWithTab } from "@codemirror/commands"
+import { markdown } from "@codemirror/lang-markdown"
+import { EditorView, keymap } from "@codemirror/view"
+import CodeMirror from "@uiw/react-codemirror"
 import { Button, Segmented, Tooltip } from "antd"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { MD_BODY_CSS, renderMd } from "@/components/md-preview"
 import { htmlToMarkdown } from "@/lib/html-to-md"
 import { toast } from "@/lib/toast"
 
 /** 「粘贴时保留格式」的用户偏好（纯客户端，存 localStorage；不进后端配置） */
 const KEEP_FORMAT_KEY = "notelab.note.paste_keep_format"
+
+/**
+ * 编辑区主题：**背景透明 + 颜色继承**，跟着外层容器走，不用为浅色/深色各维护一套。
+ * 字体与原来的 textarea 保持同一个等宽栈。
+ * 语法高亮的 token 颜色仍由 CodeMirror 的默认高亮样式提供。
+ */
+const CM_THEME = EditorView.theme({
+	"&": { backgroundColor: "transparent", color: "inherit", fontSize: "13.5px" },
+	"&.cm-focused": { outline: "none" },
+	".cm-scroller": { fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", lineHeight: "1.7" },
+	".cm-content": { padding: "8px 12px", caretColor: "currentColor" },
+	".cm-gutters": { backgroundColor: "transparent", border: "none", color: "rgba(128,128,128,.45)" },
+	".cm-activeLine": { backgroundColor: "rgba(128,128,128,.07)" },
+	".cm-activeLineGutter": { backgroundColor: "transparent" },
+	".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(22,119,255,.16)" },
+	".cm-cursor": { borderLeftColor: "currentColor" },
+})
 
 /** MdEditor 的 props —— 导出来是为了让入口的 `dynamic<MdEditorProps>` 拿到类型 */
 export type MdEditorProps = {
@@ -44,63 +72,73 @@ export type MdEditorProps = {
 }
 
 // ---------------- 工具栏动作 ----------------
-type Action = { key: string; label: string; title: string; run: (ta: HTMLTextAreaElement) => void }
+// 全部基于 EditorView 操作。原来的版本操作 HTMLTextAreaElement 的 selectionStart/setRangeText，
+// 而 CodeMirror 没有这些属性 —— 这是换内核时**唯一需要整体重写**的部分。
+type Action = { key: string; label: string; title: string; run: (view: EditorView) => void }
 
 /** 包裹选区（**粗体** 式）；无选区时插入占位文本并选中 */
-function wrapSel(ta: HTMLTextAreaElement, before: string, after: string, placeholder: string) {
-	const { selectionStart: s, selectionEnd: e, value } = ta
-	const sel = value.slice(s, e) || placeholder
-	ta.setRangeText(before + sel + after, s, e, "select")
-	ta.selectionStart = s + before.length
-	ta.selectionEnd = s + before.length + sel.length
+function wrapSel(view: EditorView, before: string, after: string, placeholder: string) {
+	const { from, to } = view.state.selection.main
+	const sel = view.state.sliceDoc(from, to) || placeholder
+	view.dispatch({
+		changes: { from, to, insert: before + sel + after },
+		selection: { anchor: from + before.length, head: from + before.length + sel.length },
+	})
 }
 
 /** 给选区覆盖的每行加前缀（列表/引用式） */
-function prefixLines(ta: HTMLTextAreaElement, prefix: string) {
-	const { selectionStart: s, selectionEnd: e, value } = ta
-	const ls = value.lastIndexOf("\n", s - 1) + 1
-	const seg = value.slice(ls, Math.max(e, s))
+function prefixLines(view: EditorView, prefix: string) {
+	const { from, to } = view.state.selection.main
+	const startLine = view.state.doc.lineAt(from)
+	// ⚠️ 选区末尾若正好落在行首，那一行不该被算进来（否则「光标停在第一行末」会把下一行也加上前缀）
+	const endLine = to > from && view.state.doc.lineAt(to).from === to ? null : view.state.doc.lineAt(to)
+	const lineEnd = endLine ? endLine.to : to
+	const seg = view.state.sliceDoc(startLine.from, lineEnd)
 	const out = seg
 		.split("\n")
 		.map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : prefix + l))
 		.join("\n")
-	ta.setRangeText(out, ls, Math.max(e, s), "end")
+	view.dispatch({ changes: { from: startLine.from, to: lineEnd, insert: out } })
 }
 
-function insertBlock(ta: HTMLTextAreaElement, text: string) {
-	const { selectionStart: s, selectionEnd: e, value } = ta
-	const needNL = s > 0 && value[s - 1] !== "\n" ? "\n" : ""
-	ta.setRangeText(needNL + text, s, e, "end")
+function insertBlock(view: EditorView, text: string) {
+	const { from, to } = view.state.selection.main
+	const prev = from > 0 ? view.state.sliceDoc(from - 1, from) : ""
+	const needNL = from > 0 && prev !== "\n" ? "\n" : ""
+	const insert = needNL + text
+	view.dispatch({
+		changes: { from, to, insert },
+		selection: { anchor: from + insert.length },
+	})
 }
 
 const ACTIONS: Action[] = [
-	{ key: "b", label: "B", title: "粗体 **文本**", run: (ta) => wrapSel(ta, "**", "**", "粗体文本") },
-	{ key: "i", label: "I", title: "斜体 *文本*", run: (ta) => wrapSel(ta, "*", "*", "斜体文本") },
-	{ key: "s", label: "S̶", title: "删除线 ~~文本~~", run: (ta) => wrapSel(ta, "~~", "~~", "删除文本") },
-	{ key: "h1", label: "H1", title: "一级标题", run: (ta) => prefixLines(ta, "# ") },
-	{ key: "h2", label: "H2", title: "二级标题", run: (ta) => prefixLines(ta, "## ") },
-	{ key: "h3", label: "H3", title: "三级标题", run: (ta) => prefixLines(ta, "### ") },
-	{ key: "ul", label: "•—", title: "无序列表", run: (ta) => prefixLines(ta, "- ") },
-	{ key: "ol", label: "1.", title: "有序列表", run: (ta) => prefixLines(ta, "1. ") },
-	{ key: "task", label: "☑", title: "任务列表", run: (ta) => prefixLines(ta, "- [ ] ") },
-	{ key: "quote", label: "❝", title: "引用", run: (ta) => prefixLines(ta, "> ") },
-	{ key: "code", label: "</>", title: "行内代码", run: (ta) => wrapSel(ta, "`", "`", "code") },
-	{ key: "pre", label: "```", title: "代码块", run: (ta) => insertBlock(ta, "```\n\n```\n") },
-	{ key: "link", label: "🔗", title: "链接 [文本](url)", run: (ta) => wrapSel(ta, "[", "](https://)", "链接文本") },
-	{ key: "table", label: "▦", title: "表格", run: (ta) => insertBlock(ta, "| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n|  |  |  |\n") },
-	{ key: "hr", label: "―", title: "分割线", run: (ta) => insertBlock(ta, "\n---\n") },
+	{ key: "b", label: "B", title: "粗体 **文本**", run: (v) => wrapSel(v, "**", "**", "粗体文本") },
+	{ key: "i", label: "I", title: "斜体 *文本*", run: (v) => wrapSel(v, "*", "*", "斜体文本") },
+	{ key: "s", label: "S̶", title: "删除线 ~~文本~~", run: (v) => wrapSel(v, "~~", "~~", "删除文本") },
+	{ key: "h1", label: "H1", title: "一级标题", run: (v) => prefixLines(v, "# ") },
+	{ key: "h2", label: "H2", title: "二级标题", run: (v) => prefixLines(v, "## ") },
+	{ key: "h3", label: "H3", title: "三级标题", run: (v) => prefixLines(v, "### ") },
+	{ key: "ul", label: "•—", title: "无序列表", run: (v) => prefixLines(v, "- ") },
+	{ key: "ol", label: "1.", title: "有序列表", run: (v) => prefixLines(v, "1. ") },
+	{ key: "task", label: "☑", title: "任务列表", run: (v) => prefixLines(v, "- [ ] ") },
+	{ key: "quote", label: "❝", title: "引用", run: (v) => prefixLines(v, "> ") },
+	{ key: "code", label: "</>", title: "行内代码", run: (v) => wrapSel(v, "`", "`", "code") },
+	{ key: "pre", label: "```", title: "代码块", run: (v) => insertBlock(v, "```\n\n```\n") },
+	{ key: "link", label: "🔗", title: "链接 [文本](url)", run: (v) => wrapSel(v, "[", "](https://)", "链接文本") },
+	{ key: "table", label: "▦", title: "表格", run: (v) => insertBlock(v, "| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n|  |  |  |\n") },
+	{ key: "hr", label: "―", title: "分割线", run: (v) => insertBlock(v, "\n---\n") },
 ]
 
 export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage, renderPreview, hidePreview = false }: MdEditorProps) {
-	const taRef = useRef<HTMLTextAreaElement>(null)
+	const viewRef = useRef<EditorView | null>(null)
 	const fileRef = useRef<HTMLInputElement>(null)
 	/**
 	 * 本次粘贴是否要「强制纯文本」（Ctrl/Cmd+Shift+V）。
 	 *
-	 * ⚠️ 不能读 `e.shiftKey`：ClipboardEvent 继承自 UIEvent，**规范里根本没有这个属性**
-	 *    （shiftKey 属于 KeyboardEvent / MouseEvent），TS 直接报 TS2339，
-	 *    运行时也是 undefined —— 写下去就是「Shift 强制纯文本」静默失效。
-	 *    改为在 keydown 里记录：键盘触发粘贴时，keydown 一定先于 paste。
+	 * ⚠️ 不能在 paste 事件上读 `e.shiftKey`：ClipboardEvent 继承自 UIEvent，**规范里没有这个属性**
+	 *    （shiftKey 属于 KeyboardEvent / MouseEvent）。改为 keydown 时记录 ——
+	 *    键盘触发粘贴时，keydown 一定先于 paste。
 	 */
 	const pastePlainRef = useRef(false)
 	const [narrow, setNarrow] = useState(false)
@@ -143,51 +181,55 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 	// 有自定义预览时不跑 marked：省一次反正没人看的解析
 	const html = useMemo(() => (renderPreview ? "" : renderMd(value)), [value, renderPreview])
 
-	function runAction(a: Action) {
-		const ta = taRef.current
-		if (!ta) return
-		a.run(ta)
-		ta.focus()
-		onChange(ta.value)
-	}
-
-	function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-		// 记录 V 键是否带 Shift，供 onPaste 判断「粘贴为纯文本」
-		if (/^v$/i.test(e.key)) pastePlainRef.current = e.shiftKey
-
-		// Tab 插入两空格（不跳出编辑区）
-		if (e.key === "Tab") {
-			e.preventDefault()
-			const ta = e.currentTarget
-			ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end")
-			onChange(ta.value)
-		}
-	}
+	// 语言 / 主题 / Tab 缩进：与 keepFormat 无关，**引用必须稳定**。
+	// 不稳定的话每次渲染都会 reconfigure，光标位置与撤销历史会丢。
+	const baseExtensions = useMemo(() => [markdown(), CM_THEME, EditorView.lineWrapping, keymap.of([indentWithTab])], [])
 
 	/**
 	 * 粘贴：把外部富文本（网页 / Word 的 text/html）转成 Markdown 再插入。
 	 *
-	 * 四种情况**不拦截**，交回浏览器原生粘贴（也就是纯文本）：
+	 * 四种情况**不拦截**（返回 false → 交回 CodeMirror 的默认粘贴 = 纯文本）：
 	 *   ① 开关关掉；② 按住 Shift（Ctrl+Shift+V 是浏览器内置的「粘贴为纯文本」）；
 	 *   ③ 剪贴板没有 text/html；④ 转换结果为空（例如只复制了一张内嵌 data: 图）——
-	 *      ③④ 若还 preventDefault，表现就是「粘贴了但什么都没发生」，比粘进纯文本更糟。
+	 *      ③④ 若还拦下来，表现就是「粘贴了但什么都没发生」，比粘进纯文本更糟。
 	 *
-	 * ⚠️ getData 必须**同步**读、preventDefault 必须**同步**调：
-	 *    ClipboardEvent 在事件处理函数返回后即失效，不能放进 await 之后再读。
+	 * ⚠️ getData 必须**同步**读：ClipboardEvent 在事件处理返回后即失效。
+	 * ⚠️ 这段单独 memo（依赖 keepFormat），切换开关时只重建这一条，不动语言与主题 ——
+	 *    否则会把撤销历史一起清掉。
 	 */
-	function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-		// 一次性读取并复位：否则下一次用鼠标右键粘贴时会沿用上一次的按键状态
-		const plain = pastePlainRef.current
-		pastePlainRef.current = false
-		if (!keepFormat || plain) return
-		const html = e.clipboardData?.getData("text/html")
-		if (!html) return
-		const md = htmlToMarkdown(html)
-		if (!md) return
-		e.preventDefault()
-		const ta = e.currentTarget
-		ta.setRangeText(md, ta.selectionStart, ta.selectionEnd, "end")
-		onChange(ta.value)
+	const pasteExtensions = useMemo(
+		() => [
+			EditorView.domEventHandlers({
+				keydown: (e) => {
+					if (/^v$/i.test(e.key)) pastePlainRef.current = e.shiftKey
+					return false
+				},
+				paste: (e, view) => {
+					const plain = pastePlainRef.current
+					pastePlainRef.current = false
+					if (!keepFormat || plain) return false
+					const pasted = e.clipboardData?.getData("text/html")
+					if (!pasted) return false
+					const md = htmlToMarkdown(pasted)
+					if (!md) return false
+					const { from, to } = view.state.selection.main
+					view.dispatch({
+						changes: { from, to, insert: md },
+						selection: { anchor: from + md.length },
+					})
+					return true // 已处理，阻止默认粘贴
+				},
+			}),
+		],
+		[keepFormat],
+	)
+
+	function runAction(a: Action) {
+		const view = viewRef.current
+		if (!view) return
+		a.run(view)
+		view.focus()
+		// 内容变化经 CodeMirror 的 updateListener 回传给 onChange，这里不必再手动触发
 	}
 
 	/**
@@ -209,11 +251,10 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 		try {
 			const url = await onUploadImage(f)
 			const alt = f.name.replace(/\.[^.]+$/, "") || "图片"
-			const ta = taRef.current
-			if (ta) {
-				insertBlock(ta, `![${alt}](${url})`)
-				ta.focus()
-				onChange(ta.value)
+			const view = viewRef.current
+			if (view) {
+				insertBlock(view, `![${alt}](${url})`)
+				view.focus()
 			} else {
 				onChange(`${value}\n![${alt}](${url})\n`)
 			}
@@ -291,16 +332,24 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 	)
 
 	const editPane = (
-		<textarea
-			ref={taRef}
+		<CodeMirror
 			value={value}
-			onChange={(e) => onChange(e.target.value)}
-			onKeyDown={onKeyDown}
-			onPaste={onPaste}
+			height={`${minHeight}px`}
 			placeholder="用 Markdown 书写…（支持 GFM：表格/任务列表/删除线）"
-			spellCheck={false}
-			className="w-full flex-1 resize-none bg-transparent px-3 py-2 font-mono text-[13.5px] leading-relaxed outline-none"
-			style={{ minHeight }}
+			theme="light"
+			basicSetup={{
+				lineNumbers: false, // 笔记不需要行号，观感与原来的 textarea 一致
+				foldGutter: false,
+				highlightActiveLineGutter: false,
+				highlightActiveLine: true,
+				autocompletion: false, // Markdown 的自动补全会挡住输入
+			}}
+			extensions={[...baseExtensions, ...pasteExtensions]}
+			onChange={(v) => onChange(v)}
+			onCreateEditor={(view) => {
+				viewRef.current = view
+			}}
+			className="w-full"
 		/>
 	)
 
