@@ -18,8 +18,10 @@
 // 「选文件 → 拿到 URL → 在光标处插入 Markdown」这一段；上传实现由调用方注入。
 import { indentWithTab } from "@codemirror/commands"
 import { markdown } from "@codemirror/lang-markdown"
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { EditorView, keymap } from "@codemirror/view"
 import CodeMirror from "@uiw/react-codemirror"
+import { tags as t } from "@lezer/highlight"
 import { Button, Segmented, Tooltip } from "antd"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { MD_BODY_CSS, renderMd } from "@/components/md-preview"
@@ -30,9 +32,12 @@ import { toast } from "@/lib/toast"
 const KEEP_FORMAT_KEY = "notelab.note.paste_keep_format"
 
 /**
- * 编辑区主题：**背景透明 + 颜色继承**，跟着外层容器走，不用为浅色/深色各维护一套。
- * 字体与原来的 textarea 保持同一个等宽栈。
- * 语法高亮的 token 颜色仍由 CodeMirror 的默认高亮样式提供。
+ * 编辑区外观：**背景透明 + 文字继承**，跟着外层容器走。
+ *
+ * ⚠️ 不要用 `theme="light"`：@uiw 的预设主题会铺一层**白底**，而 B 端后台是深色主题，
+ *    配上继承来的白字就是「白字白底」—— 实测截图里只剩 `#` `**` 这些标记符号可见。
+ *    也不用 `@codemirror/theme-one-dark` 之类的固定配色：那会在浅色模式下反过来失效。
+ *    这里统一让 CodeMirror 只提供**结构**，颜色一律交给容器。
  */
 const CM_THEME = EditorView.theme({
 	"&": { backgroundColor: "transparent", color: "inherit", fontSize: "13.5px" },
@@ -45,6 +50,32 @@ const CM_THEME = EditorView.theme({
 	".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(22,119,255,.16)" },
 	".cm-cursor": { borderLeftColor: "currentColor" },
 })
+
+/**
+ * 语法高亮：全部用 `currentColor` / 半透明灰，**不写死颜色** —— 深浅色主题都能用。
+ * 正文用容器字色，标记符号（`#`、`**`）压成半透明灰，让内容比标记更显眼（Typora 那种感觉）。
+ *
+ * ⚠️ basicSetup 已经带了一份默认高亮（浅色配色，深色背景下会看不见），
+ *    这里叠一份非 fallback 的样式把它盖住。没点名到的 token 会回落到默认配色 ——
+ *    所以 Markdown 的主要 tag 要尽量列全。
+ */
+const MD_HIGHLIGHT = HighlightStyle.define([
+	{ tag: t.heading1, color: "currentColor", fontWeight: "700" },
+	{ tag: t.heading2, color: "currentColor", fontWeight: "700" },
+	{ tag: t.heading3, color: "currentColor", fontWeight: "600" },
+	{ tag: t.strong, color: "currentColor", fontWeight: "700" },
+	{ tag: t.emphasis, color: "currentColor", fontStyle: "italic" },
+	{ tag: t.strikethrough, color: "rgba(128,128,128,.95)", textDecoration: "line-through" },
+	{ tag: t.link, color: "#4a9eff", textDecoration: "underline" },
+	{ tag: t.url, color: "#4a9eff" },
+	{ tag: t.monospace, color: "currentColor", opacity: 0.9 },
+	{ tag: t.quote, color: "rgba(128,128,128,.95)", fontStyle: "italic" },
+	{ tag: t.list, color: "currentColor" },
+	// Markdown 的标记符号（# / ** / > / - 等）
+	{ tag: t.processingInstruction, color: "rgba(128,128,128,.85)" },
+	{ tag: t.contentSeparator, color: "rgba(128,128,128,.85)" },
+	{ tag: t.punctuation, color: "rgba(128,128,128,.85)" },
+])
 
 /** MdEditor 的 props —— 导出来是为了让入口的 `dynamic<MdEditorProps>` 拿到类型 */
 export type MdEditorProps = {
@@ -183,7 +214,10 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 
 	// 语言 / 主题 / Tab 缩进：与 keepFormat 无关，**引用必须稳定**。
 	// 不稳定的话每次渲染都会 reconfigure，光标位置与撤销历史会丢。
-	const baseExtensions = useMemo(() => [markdown(), CM_THEME, EditorView.lineWrapping, keymap.of([indentWithTab])], [])
+	const baseExtensions = useMemo(
+		() => [markdown(), CM_THEME, syntaxHighlighting(MD_HIGHLIGHT), EditorView.lineWrapping, keymap.of([indentWithTab])],
+		[],
+	)
 
 	/**
 	 * 粘贴：把外部富文本（网页 / Word 的 text/html）转成 Markdown 再插入。
@@ -336,7 +370,6 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 			value={value}
 			height={`${minHeight}px`}
 			placeholder="用 Markdown 书写…（支持 GFM：表格/任务列表/删除线）"
-			theme="light"
 			basicSetup={{
 				lineNumbers: false, // 笔记不需要行号，观感与原来的 textarea 一致
 				foldGutter: false,
