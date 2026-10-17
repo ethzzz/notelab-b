@@ -310,31 +310,34 @@ function Editor({ editing }: { editing: string }) {
             rows={2} placeholder="描述（列表页与分享卡片上的摘要）"
             value={d.description} onChange={(e) => patch({ description: e.target.value })}
           />
-          {/* ⚠️ 这个 key 不是装饰：外面的 antd <Space> 是按 children 的 index 生成的，
-              前面任何一项要不要渲染一变（比如某段提示随字段出现/消失），后面所有 item 就会错位，
-              编辑器整块被重建 —— 表现是右侧博客预览 iframe 重新加载、白一下。
-              显式 key 让 React 认得出「还是同一个编辑器」。 */}
-          <div key="editor" className="border border-solid border-[rgba(128,128,128,.25)] rounded">
-            <MdEditor
-              value={d.content}
-              minHeight={460}
-              onChange={(v) => patch({ content: v })}
-              /* 右栏换成「博客线上效果」：iframe 指向博客自己的渲染页，且只保留正文内容区 */
-              renderPreview={() => (
-                <BlogLivePreview
-                  /* 切文章时重建（否则上一篇的 iframe / 状态会留在右栏） */
-                  key={editing || "new"}
-                  title={d.title}
-                  slug={d.slug || editing || ""}
-                  category={d.category}
-                  tags={d.tags}
-                  description={d.description}
-                  draft={d.draft}
-                  content={d.content}
-                  height={460}
-                />
-              )}
-            />
+          {/* ⚠️ 预览**刻意不放进编辑器内部**（不用 MdEditor 的 renderPreview）：
+              MdEditor 自身在某些路径下会被 unmount/remount（验收实测到包裹它的 div 被替换两次），
+              而 iframe 一旦跟着重建就会整页重新加载 —— 右栏白一下。
+              把它放在编辑器**外面**，两者的生命周期就互不相干了。
+              key={"editor"} 让这块在大屏/窄屏切换时保持稳定。 */}
+          <div key="editor" className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <div className="min-w-0 rounded border border-solid border-[rgba(128,128,128,.25)]">
+              <MdEditor
+                value={d.content}
+                minHeight={460}
+                onChange={(v) => patch({ content: v })}
+                hidePreview
+              />
+            </div>
+            <div className="min-w-0 overflow-hidden rounded border border-solid border-[rgba(128,128,128,.25)]">
+              <BlogLivePreview
+                /* 切文章时重建（否则上一篇的 iframe / 状态会留在右栏） */
+                key={editing || "new"}
+                title={d.title}
+                slug={d.slug || editing || ""}
+                category={d.category}
+                tags={d.tags}
+                description={d.description}
+                draft={d.draft}
+                content={d.content}
+                height={500}
+              />
+            </div>
           </div>
           <Paragraph type="secondary" className="!mb-0 !text-xs">
             右侧面板就是<b>博客自己的渲染</b>（代码高亮 / 提示块 / 公式都与线上一致），只保留正文内容区；

@@ -29,9 +29,18 @@ export type MdEditorProps = {
 	 * 自定义右栏预览；不传则用内置的 marked 预览。
 	 *
 	 * 用途是 /blog-gen：那里要的是**博客线上效果**（expressive-code 代码高亮 / 提示块 / KaTeX），
-	 * 全在构建期/服务端管线里，marked 复刻不了。所以右栏做成注入式，由调用方把 iframe 塞进来。
+	 * 全在构建期/服务端管线里，marked 复刻不了。
+	 *
+	 * ⚠️ 但**不要用这个塞 iframe**：编辑器自身在某些路径下会被 unmount/remount（实测过），
+	 *    而 iframe 一旦跟着重建就会重新加载整页 —— 右栏白一下。
+	 *    需要 iframe 的场合请用 `hidePreview` + 自己在外层排两栏（见 /blog-gen）。
 	 */
 	renderPreview?: (md: string) => ReactNode
+	/**
+	 * 只渲染编辑区，不渲染内置右栏（也不会渲染窄屏的「编辑/预览」切换）。
+	 * 调用方自己负责在旁边放预览 —— 这样预览的生命周期与编辑器解耦。
+	 */
+	hidePreview?: boolean
 }
 
 // ---------------- 工具栏动作 ----------------
@@ -82,7 +91,7 @@ const ACTIONS: Action[] = [
 	{ key: "hr", label: "―", title: "分割线", run: (ta) => insertBlock(ta, "\n---\n") },
 ]
 
-export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage, renderPreview }: MdEditorProps) {
+export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage, renderPreview, hidePreview = false }: MdEditorProps) {
 	const taRef = useRef<HTMLTextAreaElement>(null)
 	const fileRef = useRef<HTMLInputElement>(null)
 	/**
@@ -266,7 +275,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 					</Button>
 				</Tooltip>
 			</span>
-			{narrow && (
+			{narrow && !hidePreview && (
 				<Segmented
 					size="small"
 					className="ml-auto"
@@ -309,7 +318,10 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 			<style>{MD_BODY_CSS}</style>
 			<div>
 				{toolbar}
-				{narrow ? (
+				{hidePreview ? (
+					// 单栏：预览由调用方自己放在外面（这样它不会跟着编辑器一起重建）
+					<div className="flex">{editPane}</div>
+				) : narrow ? (
 					pane === "edit" ? (
 						<div className="flex">{editPane}</div>
 					) : (
