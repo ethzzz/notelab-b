@@ -180,6 +180,15 @@ function List() {
     },
     { title: "发布", key: "pub", width: 100, render: (_: unknown, r: PracticeRecord) => <PubTag r={r} /> },
     {
+      title: "浏览", key: "views", width: 90,
+      // 浏览数来自博客读者浏览器的匿名上报（按对外 slug 计数）——没发布就没有地址，也就没有数字
+      render: (_: unknown, r: PracticeRecord) => r.published_slug
+        ? <span className="tabular-nums text-zinc-600 dark:text-zinc-300">
+            {(r.views ?? 0).toLocaleString()}
+          </span>
+        : <span className="text-zinc-400">—</span>,
+    },
+    {
       title: "更新时间", dataIndex: "updated_at", key: "updated_at", width: 165,
       render: (v: string) => <span className="text-zinc-500">{fmtTime(v)}</span>,
     },
@@ -534,6 +543,10 @@ function Detail({ id, mode }: { id: number; mode: "view" | "edit" }) {
             {rec.published_slug === slug && <Tag color="green" className="!m-0 !ml-2">与已发布一致</Tag>}
             {rec.published_slug && rec.published_slug !== slug && (
               <Tag color="orange" className="!m-0 !ml-2">改名后发布会让旧地址 {rec.published_slug} 失效</Tag>
+            )}
+            {/* 浏览数按**已发布 slug** 统计：改过名但没重发时，这个数字还挂在旧地址上 */}
+            {rec.published_slug && (
+              <span className="ml-2 text-zinc-400">· {(rec.views ?? 0).toLocaleString()} 次浏览</span>
             )}
           </>
         ) : (

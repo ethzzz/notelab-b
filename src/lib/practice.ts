@@ -36,6 +36,11 @@ export type PracticeRecord = {
   published_at: string
   published_slug: string
   published_commit: string
+  /**
+   * 博客浏览数（读者浏览器匿名上报，同访客同一篇只算一次）。
+   * ⚠️ 只有已发布的记录才有这个字段（没地址就谈不上被读）；后端查不到时会缺省，别拿它当 0 判「没数据」。
+   */
+  views?: number
   created_by: number
   created_by_name: string
   updated_by: number
