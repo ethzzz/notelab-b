@@ -9,7 +9,7 @@
 // 插图：可选注入 onUploadImage —— 传了才在工具栏出现「插入图片」按钮。
 // 编辑器**不关心图片存哪**（本仓是 /api/practice/images/{id}），只负责
 // 「选文件 → 拿到 URL → 在光标处插入 Markdown」这一段；上传实现由调用方注入。
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Button, Segmented, Tooltip } from "antd"
 import { MD_BODY_CSS, renderMd } from "@/components/md-preview"
 import { htmlToMarkdown } from "@/lib/html-to-md"
@@ -25,6 +25,13 @@ export type MdEditorProps = {
 	minHeight?: number
 	/** 注入后才显示「插入图片」。约定：传入原始 File，返回可直接写进 Markdown 的 URL */
 	onUploadImage?: (file: File) => Promise<string>
+	/**
+	 * 自定义右栏预览；不传则用内置的 marked 预览。
+	 *
+	 * 用途是 /blog-gen：那里要的是**博客线上效果**（expressive-code 代码高亮 / 提示块 / KaTeX），
+	 * 全在构建期/服务端管线里，marked 复刻不了。所以右栏做成注入式，由调用方把 iframe 塞进来。
+	 */
+	renderPreview?: (md: string) => ReactNode
 }
 
 // ---------------- 工具栏动作 ----------------
@@ -75,7 +82,7 @@ const ACTIONS: Action[] = [
 	{ key: "hr", label: "―", title: "分割线", run: (ta) => insertBlock(ta, "\n---\n") },
 ]
 
-export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage }: MdEditorProps) {
+export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage, renderPreview }: MdEditorProps) {
 	const taRef = useRef<HTMLTextAreaElement>(null)
 	const fileRef = useRef<HTMLInputElement>(null)
 	/**
@@ -124,7 +131,8 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 		return () => mq.removeEventListener("change", on)
 	}, [])
 
-	const html = useMemo(() => renderMd(value), [value])
+	// 有自定义预览时不跑 marked：省一次反正没人看的解析
+	const html = useMemo(() => (renderPreview ? "" : renderMd(value)), [value, renderPreview])
 
 	function runAction(a: Action) {
 		const ta = taRef.current
@@ -287,7 +295,12 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 		/>
 	)
 
-	const previewPane = (
+	const previewPane = renderPreview ? (
+		// 自定义预览自己负责滚动与高度（/blog-gen 塞的是博客的 iframe）
+		<div className="w-full flex-1 overflow-hidden" style={{ minHeight }}>
+			{renderPreview(value)}
+		</div>
+	) : (
 		<div className="md-body w-full flex-1 overflow-auto px-4 py-2" style={{ minHeight }} dangerouslySetInnerHTML={{ __html: html }} />
 	)
 

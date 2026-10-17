@@ -18,6 +18,7 @@ import { useSearchParams } from "next/navigation"
 import { Alert, AutoComplete, Button, Card, Collapse, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Switch, Tag, Typography } from "antd"
 import { ExternalLink, Eye, FileText, ListChecks, RotateCw, Save, Send, Wand2 } from "lucide-react"
 import { AdminPage } from "@/components/admin"
+import BlogLivePreview from "@/components/blog-live-preview"
 // MdEditor 默认导出已是「仅客户端 + 懒加载」，页面不用再自己 dynamic 包装（见 components/md-editor.tsx）
 import MdEditor from "@/components/md-editor"
 import { apiJson, postJson } from "@/lib/api"
@@ -310,12 +311,28 @@ function Editor({ editing }: { editing: string }) {
             value={d.description} onChange={(e) => patch({ description: e.target.value })}
           />
           <div className="border border-solid border-[rgba(128,128,128,.25)] rounded">
-            <MdEditor value={d.content} minHeight={460} onChange={(v) => patch({ content: v })} />
+            <MdEditor
+              value={d.content}
+              minHeight={460}
+              onChange={(v) => patch({ content: v })}
+              /* 右栏换成「博客线上效果」：iframe 指向博客自己的渲染页，且只保留正文内容区 */
+              renderPreview={() => (
+                <BlogLivePreview
+                  title={d.title}
+                  slug={d.slug || editing || ""}
+                  category={d.category}
+                  tags={d.tags}
+                  description={d.description}
+                  draft={d.draft}
+                  content={d.content}
+                  height={460}
+                />
+              )}
+            />
           </div>
           <Paragraph type="secondary" className="!mb-0 !text-xs">
-            ⚠️ 编辑区右侧那个面板是<b>编辑器自带的快速预览</b>（marked 渲染，够用来看结构）；
-            要看与线上<b>完全一致</b>的观感（代码高亮 / 提示块 / 公式 / 目录），点上方的「预览」——
-            那是博客自己的页面渲染出来的。
+            右侧面板就是<b>博客自己的渲染</b>（代码高亮 / 提示块 / 公式都与线上一致），只保留正文内容区；
+            停止输入约 1 秒后自动更新。要看含侧栏与目录的<b>整页</b>，点上方的「预览」。
           </Paragraph>
           <Paragraph type="secondary" className="!mb-0 !text-xs">
             ⚠️ 标签与分类是 frontmatter 里的自由文本：分类写歪会让同一类内容在归档页裂成好几组，
