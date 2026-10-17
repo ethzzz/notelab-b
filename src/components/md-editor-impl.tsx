@@ -77,6 +77,16 @@ const MD_HIGHLIGHT = HighlightStyle.define([
 	{ tag: t.punctuation, color: "rgba(128,128,128,.85)" },
 ])
 
+/**
+ * 兜底样式（`!important`）：即便某个版本/某处再塞一层默认主题（比如 @uiw 的 theme 默认值
+ * 注入的白底），也不会把编辑区变成「白底 + 继承来的白字」。transparent 本身是跟随容器的，
+ * 浅色/深色主题下都正确，所以这里用 !important 是安全的。
+ */
+const CM_CSS = `
+.cm-editor, .cm-editor .cm-scroller { background-color: transparent !important; }
+.cm-editor .cm-content { color: inherit !important; }
+`
+
 /** MdEditor 的 props —— 导出来是为了让入口的 `dynamic<MdEditorProps>` 拿到类型 */
 export type MdEditorProps = {
 	value: string
@@ -212,10 +222,11 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 	// 有自定义预览时不跑 marked：省一次反正没人看的解析
 	const html = useMemo(() => (renderPreview ? "" : renderMd(value)), [value, renderPreview])
 
-	// 语言 / 主题 / Tab 缩进：与 keepFormat 无关，**引用必须稳定**。
+	// 语言 / 高亮 / Tab 缩进：与 keepFormat 无关，**引用必须稳定**。
 	// 不稳定的话每次渲染都会 reconfigure，光标位置与撤销历史会丢。
+	// ⚠️ CM_THEME 不放在这里：它必须走 `theme` prop（原因见 editPane 处的注释）。
 	const baseExtensions = useMemo(
-		() => [markdown(), CM_THEME, syntaxHighlighting(MD_HIGHLIGHT), EditorView.lineWrapping, keymap.of([indentWithTab])],
+		() => [markdown(), syntaxHighlighting(MD_HIGHLIGHT), EditorView.lineWrapping, keymap.of([indentWithTab])],
 		[],
 	)
 
@@ -370,6 +381,14 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 			value={value}
 			height={`${minHeight}px`}
 			placeholder="用 Markdown 书写…（支持 GFM：表格/任务列表/删除线）"
+			/**
+			 * ⚠️ 主题必须走 `theme` prop，不能只放在 `extensions` 里。
+			 *    @uiw/react-codemirror 的 theme 默认值是 `"light"`，它会注入一层**白底**，
+			 *    优先级压过 extensions 里的 EditorView.theme —— 实测 computed style 是
+			 *    `rgb(255,255,255)`，而我在 extensions 里设的是 transparent。
+			 *    配上深色后台继承来的白字，就是白字白底、正文全看不见。
+			 */
+			theme={CM_THEME}
 			basicSetup={{
 				lineNumbers: false, // 笔记不需要行号，观感与原来的 textarea 一致
 				foldGutter: false,
@@ -398,6 +417,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 	return (
 		<>
 			<style>{MD_BODY_CSS}</style>
+			<style>{CM_CSS}</style>
 			<div>
 				{toolbar}
 				{hidePreview ? (
