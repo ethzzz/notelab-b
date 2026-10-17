@@ -310,7 +310,11 @@ function Editor({ editing }: { editing: string }) {
             rows={2} placeholder="描述（列表页与分享卡片上的摘要）"
             value={d.description} onChange={(e) => patch({ description: e.target.value })}
           />
-          <div className="border border-solid border-[rgba(128,128,128,.25)] rounded">
+          {/* ⚠️ 这个 key 不是装饰：外面的 antd <Space> 是按 children 的 index 生成的，
+              前面任何一项要不要渲染一变（比如某段提示随字段出现/消失），后面所有 item 就会错位，
+              编辑器整块被重建 —— 表现是右侧博客预览 iframe 重新加载、白一下。
+              显式 key 让 React 认得出「还是同一个编辑器」。 */}
+          <div key="editor" className="border border-solid border-[rgba(128,128,128,.25)] rounded">
             <MdEditor
               value={d.content}
               minHeight={460}
