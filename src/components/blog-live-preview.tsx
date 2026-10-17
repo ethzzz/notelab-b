@@ -51,6 +51,8 @@ export default function BlogLivePreview({
 }: BlogLivePreviewProps) {
 	const frameRef = useRef<HTMLIFrameElement>(null)
 	const buildingRef = useRef(false)
+	/** 已建好的预览地址。**必须是 ref**，见下面 effect 里的说明 */
+	const srcRef = useRef("")
 	const [src, setSrc] = useState("")
 	const [ready, setReady] = useState(false)
 	const [err, setErr] = useState("")
@@ -61,20 +63,27 @@ export default function BlogLivePreview({
 	/**
 	 * ① 首次拿到正文时建 iframe。
 	 *
-	 * ⚠️ 不能写成「只在 slug 变化时跑」：组件挂载时正文通常还是空的（页面刚打开、用户还没写），
-	 *    那次 effect 直接 return；等用户开始写了，effect 又不会重跑 —— 预览永远是 about:blank。
-	 *    （第一版就是这么写的，验收时被抓出来的。）
-	 *    所以判据是「有内容 && 还没有 src」，`buildingRef` 挡住重叠请求。
-	 *    切换文章由父组件传 `key` 重建本组件（状态自动清空），不需要在这里盯 slug。
+	 * ⚠️ 判据必须用 ref，不能用 state：
+	 *    effect 闭包捕获的 `src` 是**那次渲染时的快照**。POST 还在飞的时候如果正文又变了，
+	 *    React 会排一个新 effect，而它手里的 `src` 仍是 `""` —— 等上一个 POST 收尾、
+	 *    `buildingRef` 一复位，它就会再 POST 一次、再 setSrc 一次 → iframe 导航 → 右栏白一下。
+	 *    这个 bug 只能靠「读最新值」的 ref 挡住（验收时实测到 token 变了两次才定位到）。
+	 *
+	 * ⚠️ 也不能写成「只在 slug 变化时跑」：组件挂载时正文通常还是空的，那次会直接 return，
+	 *    等用户开始写时 effect 又不会重跑 —— 预览永远是 about:blank（第一版就是这个错）。
+	 *
+	 * 切换文章由父组件传 `key` 重建本组件（状态自然清空），不需要在这里盯 slug。
 	 */
 	useEffect(() => {
-		if (src || buildingRef.current || !content.trim()) return
+		if (srcRef.current || buildingRef.current || !content.trim()) return
 		buildingRef.current = true
 		void (async () => {
 			try {
 				const url = await makePreview(fields, content)
+				if (srcRef.current) return // 并发窗口里已经被设过了，别覆盖
+				srcRef.current = `${url}?embed=1`
 				setErr("")
-				setSrc(`${url}?embed=1`)
+				setSrc(srcRef.current)
 			} catch (e) {
 				setErr(`预览初始化失败：${(e as Error)?.message || e}`)
 			} finally {
@@ -82,7 +91,7 @@ export default function BlogLivePreview({
 			}
 		})()
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [content, src])
+	}, [content])
 
 	// ② 内容 / 元信息变化 → 防抖后局部替换。
 	//    ready 之前不发：iframe 里的监听脚本还没挂上，发了也是白发。
