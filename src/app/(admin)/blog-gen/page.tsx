@@ -318,6 +318,8 @@ function Editor({ editing }: { editing: string }) {
               /* 右栏换成「博客线上效果」：iframe 指向博客自己的渲染页，且只保留正文内容区 */
               renderPreview={() => (
                 <BlogLivePreview
+                  /* 切文章时重建（否则上一篇的 iframe / 状态会留在右栏） */
+                  key={editing || "new"}
                   title={d.title}
                   slug={d.slug || editing || ""}
                   category={d.category}

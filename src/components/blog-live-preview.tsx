@@ -50,6 +50,7 @@ export default function BlogLivePreview({
 	debounceMs = 900,
 }: BlogLivePreviewProps) {
 	const frameRef = useRef<HTMLIFrameElement>(null)
+	const buildingRef = useRef(false)
 	const [src, setSrc] = useState("")
 	const [ready, setReady] = useState(false)
 	const [err, setErr] = useState("")
@@ -57,30 +58,31 @@ export default function BlogLivePreview({
 
 	const fields = { title, slug, category, tags, description, draft }
 
-	// ① 首屏 / 切换文章（slug 变）→ 重建 iframe。
-	//    只在 slug 变化时跑：内容变化走下面的局部更新，重建会让整块白一下。
-	// eslint-disable-next-line react-hooks/exhaustive-deps
+	/**
+	 * ① 首次拿到正文时建 iframe。
+	 *
+	 * ⚠️ 不能写成「只在 slug 变化时跑」：组件挂载时正文通常还是空的（页面刚打开、用户还没写），
+	 *    那次 effect 直接 return；等用户开始写了，effect 又不会重跑 —— 预览永远是 about:blank。
+	 *    （第一版就是这么写的，验收时被抓出来的。）
+	 *    所以判据是「有内容 && 还没有 src」，`buildingRef` 挡住重叠请求。
+	 *    切换文章由父组件传 `key` 重建本组件（状态自动清空），不需要在这里盯 slug。
+	 */
 	useEffect(() => {
-		let dead = false
-		setReady(false)
-		setErr("")
-		if (!content.trim()) {
-			setSrc("")
-			return
-		}
+		if (src || buildingRef.current || !content.trim()) return
+		buildingRef.current = true
 		void (async () => {
 			try {
 				const url = await makePreview(fields, content)
-				if (dead) return
+				setErr("")
 				setSrc(`${url}?embed=1`)
 			} catch (e) {
-				if (!dead) setErr(`预览初始化失败：${(e as Error)?.message || e}`)
+				setErr(`预览初始化失败：${(e as Error)?.message || e}`)
+			} finally {
+				buildingRef.current = false
 			}
 		})()
-		return () => {
-			dead = true
-		}
-	}, [slug])
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [content, src])
 
 	// ② 内容 / 元信息变化 → 防抖后局部替换。
 	//    ready 之前不发：iframe 里的监听脚本还没挂上，发了也是白发。
@@ -91,7 +93,9 @@ export default function BlogLivePreview({
 				try {
 					setUpdating(true)
 					const url = await makePreview(fields, content)
-					const res = await fetch(`${url}fragment`, { cache: "no-store" })
+					// ⚠️ 尾斜杠不能省：博客仓是 `trailingSlash: "always"`，
+					//    请求 /fragment 会先吃一个 301 再跟到 /fragment/（每次更新多一次往返）
+					const res = await fetch(`${url}fragment/`, { cache: "no-store" })
 					if (!res.ok) return
 					const d = (await res.json()) as {
 						ok?: boolean
