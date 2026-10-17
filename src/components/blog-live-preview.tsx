@@ -32,10 +32,42 @@ export type BlogLivePreviewProps = {
 	debounceMs?: number
 }
 
+/**
+ * 最近建过的预览：**同一份内容只换一个 token**。
+ *
+ * 为什么需要它：初始化 effect 在某些路径下会被触发不止一次（父级重挂 / effect 重跑），
+ * 而每次 POST 都拿到**新 token** → iframe 的 `src` 变 → 右栏白一下。
+ * 加了这层缓存后，「重复初始化」退化成 no-op：相同内容 → 相同地址 → 不发生导航。
+ *
+ * ⚠️ TTL 必须比后端短：Java 侧是 30 分钟，这里留 20 分钟余量，
+ *    否则命中一个已过期的 token，iframe 会显示「预览已过期」。
+ */
+const CACHE_LIMIT = 24
+const CACHE_TTL_MS = 20 * 60_000
+const CACHE = new Map<string, { url: string; at: number }>()
+
+/** 内容指纹（djb2）：只用于缓存命中，不做安全用途 */
+function fingerprint(s: string): string {
+	let h = 5381
+	for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+	return String(h)
+}
+
 /** 建一份预览，返回带尾斜杠的绝对地址（`/blog/preview/<token>/`） */
 async function makePreview(fields: Record<string, unknown>, md: string): Promise<string> {
+	const key = `${String(fields.slug)}|${fingerprint(md)}`
+	const hit = CACHE.get(key)
+	if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.url
+
 	const r = await postJson("/api/blog/preview", { ...fields, content_md: md })
-	return `${window.location.origin}${r.url as string}`
+	const url = `${window.location.origin}${r.url as string}`
+
+	if (CACHE.size >= CACHE_LIMIT) {
+		const oldest = CACHE.keys().next().value
+		if (oldest) CACHE.delete(oldest)
+	}
+	CACHE.set(key, { url, at: Date.now() })
+	return url
 }
 
 export default function BlogLivePreview({
