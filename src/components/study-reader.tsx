@@ -156,20 +156,42 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 	const [active, setActive] = useState("")
 	const tocRef = useRef<HTMLElement | null>(null)
 
+	/**
+	 * 当前章节高亮。
+	 *
+	 * 不用 IntersectionObserver：它观察的是**挂载时抓到的那些 DOM 节点**，而本页的正文是
+	 * dangerouslySetInnerHTML 渲染的，内容一旦被整体替换（数据刷新、Suspense 重挂载），
+	 * 观察器手里就是一批已经脱离文档的旧节点 —— 表现正是「只有 React 渲染的 #weeks 会亮，其余永远不亮」。
+	 *
+	 * 改成滚动时按位置现算：每次都用 getElementById 重新取当前节点，节点被换掉也不影响；
+	 * 13 个标题的 getBoundingClientRect 开销可以忽略，且用 rAF 合并滚动事件。
+	 */
 	useEffect(() => {
-		const els = toc.map((t) => document.getElementById(t.id)).filter((el): el is HTMLElement => el !== null)
-		if (!els.length) return
-		const io = new IntersectionObserver(
-			(entries) => {
-				const visible = entries
-					.filter((e) => e.isIntersecting)
-					.sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-				if (visible[0]) setActive(visible[0].target.id)
-			},
-			{ rootMargin: "-72px 0px -68% 0px" },
-		)
-		els.forEach((el) => io.observe(el))
-		return () => io.disconnect()
+		let raf = 0
+		const compute = () => {
+			raf = 0
+			const els = toc.map((t) => document.getElementById(t.id)).filter((el): el is HTMLElement => el !== null)
+			if (!els.length) return
+			// 判定线放在 Header（56）下方一点：最后一个「顶边越过这条线」的标题就是当前章节
+			const line = 88
+			let current = els[0].id
+			for (const el of els) {
+				if (el.getBoundingClientRect().top <= line) current = el.id
+				else break
+			}
+			setActive(current)
+		}
+		const onScroll = () => {
+			if (!raf) raf = requestAnimationFrame(compute)
+		}
+		compute()
+		window.addEventListener("scroll", onScroll, { passive: true })
+		window.addEventListener("resize", onScroll)
+		return () => {
+			window.removeEventListener("scroll", onScroll)
+			window.removeEventListener("resize", onScroll)
+			if (raf) cancelAnimationFrame(raf)
+		}
 	}, [toc])
 
 	// 高亮项如果滚出目录可视区，把目录自己滚过去（不带动页面；页面上长文档一滚，目录就会「跟丢」）
