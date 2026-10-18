@@ -187,40 +187,28 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 	/** 预览区滚动容器（滚动联动要用） */
 	const previewBoxRef = useRef<HTMLDivElement>(null)
 	/**
-	 * 防回环锁：A 滚动触发 B 滚动，B 的 scroll 事件又会反推 A。
+	 * 「谁在滚谁主导」（"cm" = 用户正在滚编辑器，"pv" = 正在滚预览）。
 	 *
-	 * ⚠️ 复位时机是**关键**：原来用 80ms 时间锁 —— 验收（单次设 scrollTop 再等 600ms）能过，
-	 *    但真实滚轮是**逐帧**派发 scroll，80ms 会把中间 4~5 帧全部吞掉，
-	 *    手感变成「跳一下、卡住、再跳一下」，用户直接反馈「没同步」。
-	 *    改成 rAF：一帧后就放开，连续滚动时每帧都能同步。
-	 *    真正防回环靠的是两条同步里的「目标已到位就跳过」短路，锁只防同一帧的自激。
-	 */
-	const syncLockRef = useRef(false)
-	/**
-	 * 当前由**谁**主导滚动（"cm" = 用户正在滚编辑器，"pv" = 正在滚预览）。
+	 * 用户滚 A → 我们程序化滚 B → B 的 scroll 事件又反推 A，两边互相拽
+	 * （实测 pv 从 459 被拉回 120、cm 从 720 掉到 52）。所以必须区分
+	 * 「用户主动滚的」和「被程序带动的」：主导方的 scroll 才发起同步，被带动方直接忽略。
 	 *
-	 * ⚠️ 这是双向同步最关键的一件事，只靠「防回环锁」不够：
-	 *    用户滚预览 → 我们程序化地滚编辑器 → 编辑器的 scroll 事件又反过来推预览 →
-	 *    两边互相拽，实测预览从 459 一路被拉回 120，编辑器从 720 掉到 52。
-	 *    所以必须区分「用户主动滚的」和「被程序带动的」：主导方的 scroll 才发起同步，
-	 *    被带动方的 scroll 事件在主导期内**直接忽略**。
-	 *    250ms 是「人停顿一下」的量级：用户换手滚另一边时，新的一侧会立刻接管。
+	 * 🔴 过期判断用**时间戳**，绝不用 setTimeout / requestAnimationFrame：
+	 *    早先这里还有一个 rAF「防回环锁」，rAF 在**页面处于后台标签、或被浏览器节流时不会回调**。
+	 *    锁一旦没复位，两个方向的回调都直接 return —— 表现就是「怎么滚都完全不动」。
+	 *    用户实测正是这个症状（两边都试过、完全不动），而我的 CDP 环境里 rAF 正常，所以一直测不出来。
+	 *    现在防回环只靠「主导方 + 目标已到位就跳过」两条，不需要任何锁。
 	 */
-	const activeSideRef = useRef<"cm" | "pv" | null>(null)
-	const activeTimerRef = useRef<number | null>(null)
+	const ACTIVE_TTL_MS = 250
+	const activeRef = useRef<{ side: "cm" | "pv"; at: number } | null>(null)
 	const markActive = (side: "cm" | "pv") => {
-		activeSideRef.current = side
-		if (activeTimerRef.current) window.clearTimeout(activeTimerRef.current)
-		activeTimerRef.current = window.setTimeout(() => {
-			activeSideRef.current = null
-			activeTimerRef.current = null
-		}, 250)
+		activeRef.current = { side, at: Date.now() }
 	}
-	const lockSync = () => {
-		syncLockRef.current = true
-		requestAnimationFrame(() => {
-			syncLockRef.current = false
-		})
+	/** 当前主导方；超过 TTL 视为无人主导（用户停顿后换手滚另一边时，新的一侧立刻接管） */
+	const activeSide = (): "cm" | "pv" | null => {
+		const a = activeRef.current
+		if (!a) return null
+		return Date.now() - a.at < ACTIVE_TTL_MS ? a.side : null
 	}
 	/** CodeMirror 实例是异步创建的；滚动监听要等它挂上才能绑 */
 	const [cmReady, setCmReady] = useState(false)
@@ -345,11 +333,10 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 		const box = previewBoxRef.current
 		if (!syncEnabled || !box) return
 		const onScroll = () => {
-			if (syncLockRef.current) return
 			// 编辑器在主导（用户正在滚它）→ 这次预览滚动是我们程序设的，不要再反推回去。
 			// ⚠️ 这条判断必须和 ③ 里那条**对称**：只挡一边的话，被带动的一侧会把主导权抢过去，
 			//    之后真正在滚的那一侧全被忽略（实测 cm 只滚了 227 就停了）。
-			if (activeSideRef.current === "cm") return
+			if (activeSide() === "cm") return
 			const view = viewRef.current
 			if (!view) return
 			markActive("pv") // 用户正在滚预览：这一侧主导
@@ -367,11 +354,17 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 			// 即使锁的时机没卡准，也不会两边互相推着抖
 			const topPos = view.posAtCoords({ x: 1, y: 1 })
 			if (topPos != null && view.state.doc.lineAt(topPos).number === n) return
-			lockSync()
 			view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
 		}
 		box.addEventListener("scroll", onScroll, { passive: true })
-		return () => box.removeEventListener("scroll", onScroll)
+		// 兜底：个别环境下 scroll 事件可能不派发（被内层元素吞掉 / 被扩展干扰），
+		// 用 wheel 再驱动一次。重复同步无害 —— 回调里有「目标已到位就跳过」。
+		const onWheel = () => requestAnimationFrame(onScroll)
+		box.addEventListener("wheel", onWheel, { passive: true })
+		return () => {
+			box.removeEventListener("scroll", onScroll)
+			box.removeEventListener("wheel", onWheel)
+		}
 	}, [syncEnabled])
 
 	/** ③ 编辑器滚动 → 预览滚到同一个块 */
@@ -380,9 +373,8 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 		const box = previewBoxRef.current
 		if (!syncEnabled || !view || !box) return
 		const onScroll = () => {
-			if (syncLockRef.current) return
 			// 预览在主导（用户正在滚它）→ 这次编辑器滚动是被程序带动的，不要再反推回去
-			if (activeSideRef.current === "pv") return
+			if (activeSide() === "pv") return
 			markActive("cm")
 			// 顶部可见行。
 			// ⚠️ 别用 `lineBlockAtHeight(0)`：它的 height 是**相对文档顶部**的
@@ -407,12 +399,18 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 				target === box.firstElementChild ? 0 : box.scrollTop + (target.getBoundingClientRect().top - boxTop)
 			// 已经在目标位置 → 跳过（防回环的真正保险，锁只管同一帧的自激）
 			if (Math.abs(box.scrollTop - targetTop) < 3) return
-			lockSync()
 			box.scrollTop = targetTop
 		}
 		const scroller = view.scrollDOM
 		scroller.addEventListener("scroll", onScroll, { passive: true })
-		return () => scroller.removeEventListener("scroll", onScroll)
+		// 兜底：同 ②，用 wheel 再驱动一次（CodeMirror 自己会处理 wheel，scroll 事件一般有，
+		// 但多一层不吃亏；重复同步被「目标已到位就跳过」挡掉）
+		const onWheel = () => requestAnimationFrame(onScroll)
+		scroller.addEventListener("wheel", onWheel, { passive: true })
+		return () => {
+			scroller.removeEventListener("scroll", onScroll)
+			scroller.removeEventListener("wheel", onWheel)
+		}
 	}, [syncEnabled, cmReady])
 
 	function runAction(a: Action) {
