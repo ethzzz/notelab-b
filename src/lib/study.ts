@@ -32,8 +32,8 @@ export const STUDY_DOCS: Record<string, StudyDoc> = {
 	},
 	react: {
 		lang: "react",
-		title: "React · 8 周路线",
-		subtitle: "面向本项目前端：状态、渲染、App Router、表单、缓存与上线",
+		title: "React · 8 周（C 端）",
+		subtitle: "面向 notelab-c：匿名访问、首屏预算、URL 即状态、SEO 与上线",
 		icon: "⚛️",
 		track: "typescript",
 		trackLabel: "TypeScript 课程（打底）",
