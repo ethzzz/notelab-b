@@ -11,6 +11,12 @@ export type StudyDoc = {
 	/** 配套的「编程学习」课程 code（见 /learning?track=）；没有就留空 */
 	track?: string
 	trackLabel?: string
+	/**
+	 * 内容修订号。**大纲被重写时必须递增**：进度是按「步骤 id」存在 localStorage 里的，
+	 * 而步骤 id（1.1、1.2…）会复用 —— 内容换了、id 没换，旧勾选就会错误地落到新步骤上。
+	 * 递增后旧进度键被弃用，等于从零开始，而不是显示一堆「已完成」的陌生步骤。
+	 */
+	rev?: string
 }
 
 export const STUDY_DOCS: Record<string, StudyDoc> = {
@@ -37,6 +43,8 @@ export const STUDY_DOCS: Record<string, StudyDoc> = {
 		icon: "⚛️",
 		track: "typescript",
 		trackLabel: "TypeScript 课程（打底）",
+		// 2026-10-19 大纲从「B 端语境」重写为「C 端语境」，步骤含义整体变了 → 进度作废重来
+		rev: "2",
 	},
 }
 

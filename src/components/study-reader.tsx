@@ -31,7 +31,7 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 
 	const [open, setOpen] = useState<Record<string, boolean>>({})
 	const [progress, setProgress] = useState<Record<string, boolean>>({})
-	const storageKey = `study.progress.${doc.lang}`
+	const storageKey = `study.progress.${doc.lang}${doc.rev ? `.${doc.rev}` : ""}`
 
 	// 进度存本地：跨设备不同步，但不需要登录态、也不会因为误点污染服务端
 	useEffect(() => {
