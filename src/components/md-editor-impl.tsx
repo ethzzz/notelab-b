@@ -346,6 +346,10 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 		if (!syncEnabled || !box) return
 		const onScroll = () => {
 			if (syncLockRef.current) return
+			// 编辑器在主导（用户正在滚它）→ 这次预览滚动是我们程序设的，不要再反推回去。
+			// ⚠️ 这条判断必须和 ③ 里那条**对称**：只挡一边的话，被带动的一侧会把主导权抢过去，
+			//    之后真正在滚的那一侧全被忽略（实测 cm 只滚了 227 就停了）。
+			if (activeSideRef.current === "cm") return
 			const view = viewRef.current
 			if (!view) return
 			markActive("pv") // 用户正在滚预览：这一侧主导
