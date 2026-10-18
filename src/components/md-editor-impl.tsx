@@ -24,7 +24,7 @@ import CodeMirror from "@uiw/react-codemirror"
 import { tags as t } from "@lezer/highlight"
 import { Button, Segmented, Tooltip } from "antd"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { MD_BODY_CSS, renderMd } from "@/components/md-preview"
+import { MD_BODY_CSS, computeBlockStarts, renderMd } from "@/components/md-preview"
 import { htmlToMarkdown } from "@/lib/html-to-md"
 import { toast } from "@/lib/toast"
 
@@ -174,6 +174,21 @@ const ACTIONS: Action[] = [
 export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage, renderPreview, hidePreview = false }: MdEditorProps) {
 	const viewRef = useRef<EditorView | null>(null)
 	const fileRef = useRef<HTMLInputElement>(null)
+	/** 预览区滚动容器（滚动联动要用） */
+	const previewBoxRef = useRef<HTMLDivElement>(null)
+	/**
+	 * 防回环锁：A 滚动触发 B 滚动，B 的 scroll 事件又会反推 A —— 不加锁会互相拽着抖。
+	 * 用「时间锁」而不是布尔开关：滚动事件是异步派发的，同步复位挡不住下一帧的事件。
+	 */
+	const syncLockRef = useRef(false)
+	const lockSync = () => {
+		syncLockRef.current = true
+		window.setTimeout(() => {
+			syncLockRef.current = false
+		}, 80)
+	}
+	/** CodeMirror 实例是异步创建的；滚动监听要等它挂上才能绑 */
+	const [cmReady, setCmReady] = useState(false)
 	/**
 	 * 本次粘贴是否要「强制纯文本」（Ctrl/Cmd+Shift+V）。
 	 *
@@ -268,6 +283,76 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 		],
 		[keepFormat],
 	)
+
+	// ---------------- 编辑区 ↔ 预览：滚动联动 ----------------
+	// 只在「双栏 + 内置 marked 预览」时生效：
+	//   · narrow（窄屏单面板切换）没有两栏，没得同步
+	//   · hidePreview（/blog-gen）右栏是博客 iframe，跨文档拿不到滚动位置
+	//   · renderPreview 由调用方自定义，不归这里管
+	const syncEnabled = !narrow && !hidePreview && !renderPreview
+
+	/** ① 给预览的每个顶层块打上「源码起始行」，供双向定位 */
+	useEffect(() => {
+		const box = previewBoxRef.current
+		if (!box) return
+		const starts = computeBlockStarts(value)
+		const kids = Array.from(box.children) as HTMLElement[]
+		kids.forEach((el, i) => {
+			if (starts[i] != null) el.setAttribute("data-src-line", String(starts[i]))
+		})
+	}, [value])
+
+	/** ② 预览滚动 → 编辑器滚到同一个块 */
+	useEffect(() => {
+		const box = previewBoxRef.current
+		if (!syncEnabled || !box) return
+		const onScroll = () => {
+			if (syncLockRef.current) return
+			const view = viewRef.current
+			if (!view) return
+			// 「顶部已越过视口顶端」的最后一个块，就是当前正在看的块
+			const boxTop = box.getBoundingClientRect().top
+			let line: number | null = null
+			for (const el of Array.from(box.children) as HTMLElement[]) {
+				if (el.getBoundingClientRect().top - boxTop > 2) break
+				const l = Number(el.dataset.srcLine)
+				if (l) line = l
+			}
+			if (line == null) return
+			lockSync()
+			const n = Math.min(line, view.state.doc.lines)
+			view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
+		}
+		box.addEventListener("scroll", onScroll, { passive: true })
+		return () => box.removeEventListener("scroll", onScroll)
+	}, [syncEnabled])
+
+	/** ③ 编辑器滚动 → 预览滚到同一个块 */
+	useEffect(() => {
+		const view = viewRef.current
+		const box = previewBoxRef.current
+		if (!syncEnabled || !view || !box) return
+		const onScroll = () => {
+			if (syncLockRef.current) return
+			// 顶部可见行。用 lineBlockAtHeight(0) 而不是 visibleRanges[0]：
+			// 后者给的是「有内容的范围」，滚到某个块的中间时会漏掉上半行
+			const topLine = view.state.doc.lineAt(view.lineBlockAtHeight(0).from).number
+			let target: HTMLElement | null = null
+			for (const el of Array.from(box.children) as HTMLElement[]) {
+				const l = Number(el.dataset.srcLine)
+				if (!l) continue
+				if (l > topLine) break
+				target = el
+			}
+			if (!target) return
+			lockSync()
+			const boxTop = box.getBoundingClientRect().top
+			box.scrollTop += target.getBoundingClientRect().top - boxTop
+		}
+		const scroller = view.scrollDOM
+		scroller.addEventListener("scroll", onScroll, { passive: true })
+		return () => scroller.removeEventListener("scroll", onScroll)
+	}, [syncEnabled, cmReady])
 
 	function runAction(a: Action) {
 		const view = viewRef.current
@@ -400,6 +485,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 			onChange={(v) => onChange(v)}
 			onCreateEditor={(view) => {
 				viewRef.current = view
+				setCmReady(true)
 			}}
 			className="w-full"
 		/>
@@ -411,7 +497,14 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 			{renderPreview(value)}
 		</div>
 	) : (
-		<div className="md-body w-full flex-1 overflow-auto px-4 py-2" style={{ minHeight }} dangerouslySetInnerHTML={{ __html: html }} />
+		// 高度与左侧 CodeMirror **严格对齐**（都是 minHeight + 内部滚动）。
+		// 用 minHeight 的话内容一长右栏就被撑高，两栏上沿对齐、下沿错位，看着像两个不相干的面板。
+		<div
+			ref={previewBoxRef}
+			className="md-body w-full overflow-auto px-4 py-2"
+			style={{ height: minHeight }}
+			dangerouslySetInnerHTML={{ __html: html }}
+		/>
 	)
 
 	return (
