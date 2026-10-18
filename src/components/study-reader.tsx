@@ -65,6 +65,22 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 		router.push(n === null ? `/study/${doc.lang}` : `/study/${doc.lang}?week=${n}`, { scroll: false })
 	}
 
+	/**
+	 * 回「全部周次」。
+	 *
+	 * 为什么要带兜底：周是 `?week=N` 的查询参数，而"回到没有查询参数的同一个路径"依赖客户端路由
+	 * 真的把 search 清掉。实际用下来出现过点了没反应的情况（尤其从菜单再点一次、或页面被缓存时）。
+	 * 所以先走客户端路由（快），400ms 后如果地址栏还带着 week=，就直接整页跳转 —— 一定会回到概览。
+	 */
+	const backToOverview = useCallback(() => {
+		router.push(`/study/${doc.lang}`)
+		window.setTimeout(() => {
+			if (window.location.search.includes("week=")) {
+				window.location.href = window.location.pathname
+			}
+		}, 400)
+	}, [router, doc.lang])
+
 	// ---------------------------------------------------------------- 折叠块
 
 	const renderParts = (parts: StudyPart[], scope: string) =>
@@ -188,6 +204,17 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 		<AdminPage
 			title={
 				<span className="inline-flex items-center gap-2">
+					{week && (
+						<button
+							type="button"
+							className="study-back-btn"
+							onClick={backToOverview}
+							title="返回全部周次"
+							aria-label="返回全部周次"
+						>
+							←
+						</button>
+					)}
 					<span>{doc.icon}</span>
 					<span>{week ? `第 ${week.n} 周 · ${week.title}` : doc.title}</span>
 				</span>
@@ -213,7 +240,7 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 							progress={progress}
 							onToggle={toggleStep}
 							renderParts={renderParts}
-							onBack={() => goWeek(null)}
+							onBack={backToOverview}
 							prev={data.weeks[data.weeks.findIndex((w) => w.n === week.n) - 1]}
 							next={data.weeks[data.weeks.findIndex((w) => w.n === week.n) + 1]}
 							onGo={goWeek}
@@ -229,6 +256,13 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 						/>
 					)}
 				</article>
+
+				{/* 长文档滚到任何位置都能一键回概览：正文顶部的按钮会滚出视口 */}
+				{week && (
+					<button type="button" className="study-fab" onClick={backToOverview} title="返回全部周次">
+						← 返回概览
+					</button>
+				)}
 			</div>
 		</AdminPage>
 	)
@@ -340,7 +374,7 @@ function WeekView({
 		<>
 			<div className="mb-3 flex items-center gap-3">
 				<Button size="small" onClick={onBack}>
-					← 路线概览
+					← 全部周次
 				</Button>
 				<span className="study-progress-text">
 					本周 {done}/{week.steps.length} 步
@@ -464,6 +498,12 @@ const STUDY_CSS = `
 .study-step.is-done .study-step-title{color:rgba(128,128,128,1)}
 .study-step-body{margin-top:.2em}
 .study-pager{display:flex;justify-content:space-between;gap:1em;margin:2.6em 0 1em;max-width:900px}
+
+/* ---- 返回入口（头部按钮 + 悬浮球） ---- */
+.study-back-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;border:1px solid var(--line);background:rgba(128,128,128,.06);color:inherit;font-size:15px;line-height:1;cursor:pointer;transition:border-color .15s,color .15s}
+.study-back-btn:hover{border-color:rgba(22,119,255,.5);color:var(--accent)}
+.study-fab{position:fixed;right:24px;bottom:24px;z-index:30;display:inline-flex;align-items:center;gap:.35em;padding:.55em 1em;border-radius:999px;border:1px solid rgba(22,119,255,.4);background:#1677ff;color:#fff;font-size:13px;line-height:1.4;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.2)}
+.study-fab:hover{background:#0958d9}
 
 /* ---- highlight.js token（亮色） ---- */
 .study-doc .hljs-comment,.study-doc .hljs-quote{color:#6e7781;font-style:italic}
