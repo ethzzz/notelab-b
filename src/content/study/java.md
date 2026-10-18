@@ -81,6 +81,26 @@ mvn -v             # 输出里应有 Java version: 17
 三条都对了才算过。版本不一致说明 `PATH` 里还有别的 java，先解决它。
 :::
 
+:::error 环境没配好时最常见的三条
+```text
+'java' 不是内部或外部命令，也不是可运行的程序或批处理文件。
+```
+↓ PATH 没配，或者配了但没重开终端。
+
+```text
+Error: could not open `C:\Program Files\Java\jre1.8\lib\amd64\jvm.cfg'
+```
+↓ `JAVA_HOME` 指到了 `bin` 目录（或指到了 JRE）。要指到 JDK 根目录。
+
+```text
+java.lang.UnsupportedClassVersionError: Hello has been compiled by a more recent version
+of the Java Runtime (class file version 61.0), this version ... recognizes only 52.0
+```
+↓ 用 17 编译、用 8 运行。`javac -version` 和 `java -version` 必须是同一个 JDK。
+
+**怎么读**：先看第一条错误，它通常就是根因；后面的 `Caused by` 才是被包住的下层原因。
+:::
+
 #### 步骤 0.2 手敲 Hello.java 并运行
 
 新建 `C:\code\hello\Hello.java`，用 `javac` 编译、`java` 运行，再用 `-cp` 跑一次。
@@ -103,6 +123,14 @@ javac Hello.java     # 生成 Hello.class
 java Hello           # 输出 hello, java 17.x
 java -cp . Hello     # 等价：显式指定 classpath
 ```
+:::
+
+:::error 找不到或无法加载主类
+```text
+错误: 找不到或无法加载主类 Hello
+原因: java.lang.ClassNotFoundException: Hello
+```
+**三个原因，按顺序查**：① 没编译（先 `javac`）；② classpath 不对（`java` 找的是 `.class` 所在目录，不是 `.java`）；③ 类名大小写不一致，或带了 `package` 却没按包路径放。
 :::
 
 #### 步骤 0.3 用 Maven 建第一个项目
@@ -241,6 +269,15 @@ public class Book {
 ```
 :::
 
+:::error NullPointerException 只说了半句
+```text
+Exception in thread "main" java.lang.NullPointerException:
+    Cannot invoke "String.length()" because "s" is null
+    at com.example.Book.titleLength(Book.java:23)
+```
+**怎么读**：JDK 14 起，NPE 消息会直接告诉你「谁为 null、在调什么方法」——`because "s" is null` 就是答案。`at` 的第一行是**你的**代码（`Book.java:23`），后面的 `at` 才是 JDK 内部。先看第一行。
+:::
+
 #### 步骤 2.2 用接口抽出「可搜索」
 
 定义 `interface Searchable { List<Book> search(String keyword); }`，让 `Library` 实现它。
@@ -318,6 +355,16 @@ List<Integer> linked = new LinkedList<>();
 System.out.println("尾部追加 array=" + time(() -> { for (int i = 0; i < 100_000; i++) array.add(i); }));
 System.out.println("尾部追加 linked=" + time(() -> { for (int i = 0; i < 100_000; i++) linked.add(i); }));
 ```
+:::
+
+:::error 边遍历边删元素：ConcurrentModificationException
+```text
+Exception in thread "main" java.util.ConcurrentModificationException
+    at java.base/java.util.ArrayList$Itr.checkForComodification(ArrayList.java:1013)
+    at java.base/java.util.ArrayList$Itr.next(ArrayList.java:967)
+```
+**原因**：`for (Book b : books) { if (...) books.remove(b); }` —— 迭代器发现集合被改了。
+**改法**：`books.removeIf(b -> ...)`，或显式 `Iterator<Book> it = books.iterator(); it.remove();`。
 :::
 
 #### 步骤 3.2 复现 HashMap 的并发问题
@@ -416,6 +463,16 @@ List<RecordItem> back = om.readValue(new File("data.json"),
 ```
 :::
 
+:::error Jackson 不认识 LocalDate
+```text
+com.fasterxml.jackson.databind.exc.InvalidDefinitionException:
+Java 8 date/time type `java.time.LocalDate` not supported by default:
+add Module "com.fasterxml.jackson.datatype:jackson-datatype-jsr310"
+```
+**原因**：自己 `new ObjectMapper()` 时没注册 `JavaTimeModule`（Spring Boot 默认已经配好了）。
+**改法**：`.registerModule(new JavaTimeModule())`，并且 `.disable(WRITE_DATES_AS_TIMESTAMPS)`，否则日期会变成数组。
+:::
+
 #### 步骤 4.3 拼出「记账本」
 
 命令行菜单：添加 / 按月统计 / 按分类统计 / 导出 CSV；数据存 JSON；文件不存在自动初始化。
@@ -484,6 +541,13 @@ void 金额为零应允许() {
     // 边界值：0 是合法输入，别把 <0 写成 <=0
 }
 ```
+:::
+
+:::error 测试一个都没跑
+```text
+Tests run: 0, Failures: 0, Errors: 0, Skipped: 0
+```
+**这不是通过，是没找到测试。** 三查：① 类名不以 `Test` 结尾（Surefire 默认只扫 `*Test`）；② 方法上没有 `@Test`；③ 依赖里只有 `junit-jupiter-api` 没有 `junit-jupiter-engine`。
 :::
 
 #### 步骤 5.2 用参数化测试覆盖边界
@@ -568,6 +632,19 @@ try (PreparedStatement ps = conn.prepareStatement(sql)) {
     try (ResultSet rs = ps.executeQuery()) { return rs.next(); }
 }
 ```
+:::
+
+:::error 连不上数据库的两个不同错误
+```text
+java.sql.SQLException: Access denied for user 'root'@'localhost' (using password: YES)
+```
+↓ **账号密码或权限问题**。`using password: YES` 说明密码传了但不对；`using password: NO` 说明根本没配密码。
+
+```text
+Communications link failure
+The last packet sent successfully to the server was 0 milliseconds ago.
+```
+↓ **网络问题**，不是密码：MySQL 没启动 / 端口不对 / 防火墙 / `useSSL` 与服务器配置不匹配。先 `telnet 127.0.0.1 3306` 确认端口通不通。
 :::
 
 #### 步骤 6.3 写一个会回滚的转账
@@ -754,6 +831,17 @@ curl -s -X POST http://127.0.0.1:8080/api/tasks -H 'Content-Type: application/js
 返回 200 且 JSON 字段名与你定义的一致，才算通。
 :::
 
+:::error 端口被占用
+```text
+***************************
+APPLICATION FAILED TO START
+***************************
+Description:
+Web server failed to start. Port 8080 was already in use.
+```
+**查是谁占的**：`netstat -ano | findstr :8080` 拿到 PID → `taskkill /PID <pid> /F`；或者干脆 `server.port=8081`。
+:::
+
 #### 步骤 9.2 配置外置与多环境
 
 把数据库地址从代码挪到 `application.yml`，用环境变量覆盖，再加一个 `dev` profile。
@@ -835,6 +923,14 @@ public class InnerService {
     public void inner() { ... }
 }
 ```
+:::
+
+:::error 抛了异常但没回滚
+**现象**：`outer()` 里调用带 `@Transactional` 的方法，抛异常后数据仍然写进去了。
+**三个原因，按顺序查**：
+1. **自调用**——同一个类里 `this.inner()`，绕过了代理（本周步骤 10.2 就是复现它）；
+2. **异常被吞**——`catch (Exception e) { log.warn(...) }`，代理根本看不到异常；
+3. **只回滚运行时异常**——受检异常要写 `@Transactional(rollbackFor = Exception.class)`。
 :::
 
 **验收**
@@ -946,6 +1042,15 @@ PATCH /api/tasks/1     B 的 cookie        → 403
 这三条都对了，鉴权才算做完。
 :::
 
+:::error 401 和 403 别混
+| 状态码 | 含义 | 常见原因 |
+|---|---|---|
+| **401** | 没登录 / 会话过期 | Cookie 没带上、跨域没带 `credentials`、token 过期 |
+| **403** | 登录了，但没这个权限 | 角色没勾这页、接口要求超管、资源不属于你 |
+
+最容易误判的一种：后端把未登录**302 跳到登录页**，前端只看到 200 的 HTML，于是「请求成功但没有数据」。看响应头里的 `Location`，或者用 `fetch` 的 `redirect: "manual"` 判断。
+:::
+
 **验收**
 
 - [ ] 能复现并修复越权访问
@@ -1025,6 +1130,14 @@ DB_PASSWORD=xxx java -jar target/app.jar --server.port=8080
 # 后台常驻 + 限制内存
 nohup java -Xms256m -Xmx512m -jar app.jar > app.log 2>&1 &
 ```
+:::
+
+:::error jar 里没有主类
+```text
+no main manifest attribute, in app.jar
+```
+**原因**：这个 jar 不是 Spring Boot 的 fat jar。要么没配 `spring-boot-maven-plugin` 的 `repackage`，要么打出来的是原始 jar（没有把依赖一起打进去）。
+**判断**：`java -jar` 能跑起来的 jar，`BOOT-INF/` 目录一定存在。
 :::
 
 #### 步骤 14.2 systemd 守护 + nginx 反代
@@ -1139,11 +1252,57 @@ ssh myapp "/root/Notelab/notelab-java/ops/sync-deploy.sh notelab-java"
 ```
 :::
 
+:::error push 了但线上没变
+**这不是缓存问题，先看部署日志**：`/root/ops/sync-deploy-<仓>.log`。
+该脚本的设计是「**构建失败不重启**」——老进程继续对外服务，所以表现成「代码推上去了，行为没变」。
+另外两种：`git pull` 因为工作区脏被拒绝执行（有人手改过服务器）；或者改的仓和部署的仓不是同一个。
+:::
+
 **验收**
 
 - [ ] 10 分钟内能说清 `notelab-java` 的请求链路
 - [ ] 有一次真实上线（哪怕只加了一个字段）
 - [ ] 能回答「坏了会怎样 / 怎么发现 / 怎么回滚」
+
+---
+
+## 怎么读报错（比背错误信息有用）
+
+报错不是「失败通知」，是**别人写好的一份诊断报告**。会读的人 5 分钟定位，不会读的人改三天。
+
+### 三条通用规则
+
+1. **先看第一行，不是最后一行**。最后一行往往是 `Caused by` 的根因，但第一行通常已经说了「哪个类、什么错」。
+2. **在 `at` 里找第一个属于你代码的栈帧**。`at com.example.Book.borrow(Book.java:23)` 才是要改的地方；`at java.base/...` 是 JDK 内部，改不了也不用看。
+3. **一次只改一个变量**。报错给了行号就只改那一处，改完重跑；一次改五处，出错就不知道是谁的问题。
+
+### 「报错 → 先查什么」对照表
+
+| 报错关键字 | 先查什么 |
+|---|---|
+| `ClassNotFoundException` | 依赖有没有加、类名拼错、jar 冲突 |
+| `NoSuchMethodError` | 依赖版本冲突（编译时是新版，运行时是旧版） |
+| `UnsupportedClassVersionError` | 编译与运行用的 JDK 版本不一致 |
+| `Port already in use` | 谁占了端口（`netstat -ano`），或改端口 |
+| `Communications link failure` | 网络 / 端口 / 防火墙，**不是密码** |
+| `Access denied for user` | 账号密码 / 权限，**不是网络** |
+| `OutOfMemoryError: Java heap space` | 一次查太多、没分页、或真泄漏；先看 `-Xmx` |
+| `StackOverflowError` | 递归没有终止条件 / 对象循环引用 |
+| `ConcurrentModificationException` | 遍历时改了集合，用 `removeIf` |
+| `Tests run: 0` | 测试没被扫到，不是通过 |
+| `no main manifest attribute` | 不是 Spring Boot 的 fat jar |
+
+### 报错信息本身也是你写的代码
+
+```java
+// ❌ 半年后：这是啥？
+throw new RuntimeException("error");
+
+// ✅ 半年后：一眼知道哪个订单、什么状态、为什么不行
+throw new IllegalStateException("订单 " + id + " 当前状态 " + status + "，不能取消");
+```
+
+**记住**：你写下的每一条异常消息，都是写给未来半夜排查问题的自己。
 
 ---
 

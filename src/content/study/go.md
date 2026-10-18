@@ -24,6 +24,8 @@
 
 ## 第 1 周：语法与工具链
 
+**本周目标**：能写命令、结构体、方法、错误处理，并用 `go test` 验证。
+
 #### 步骤 1.1 切片的坑：append 之后原切片没变
 
 写一段代码，对切片 `append` 后检查原切片长度，再用「共享底层数组」制造一个互相污染的 bug。
@@ -43,6 +45,23 @@ c := slices.Clone(a)     // 真副本
 c[0] = 1
 fmt.Println(a[0], c[0])  // 99 1
 ```
+:::
+
+:::error 编译期最常见的三条
+```text
+./main.go:8:2: undefined: fmt
+```
+↓ 少了 `import "fmt"` —— Go 不会自动导入，也不会给你「你是不是想用 fmt」的提示。
+
+```text
+./main.go:12:2: declared and not used: x
+```
+↓ Go 把「声明了不用」当**错误**（不是警告）。要么用掉，要么改成 `_ = x`。
+
+```text
+./main.go:15:9: cannot use 1 (untyped int constant) as string value in argument
+```
+↓ Go 没有隐式转换，`int` 和 `string` 之间必须显式 `strconv.Itoa`。
 :::
 
 #### 步骤 1.2 错误处理与 %w
@@ -78,6 +97,8 @@ fmt.Println(errors.Is(err, ErrDivideByZero)) // true
 ---
 
 ## 第 2 周：并发（Go 的核心）
+
+**本周目标**：能用 goroutine + channel 写出「不会泄漏、能被取消」的并发代码。
 
 #### 步骤 2.1 worker pool
 
@@ -150,6 +171,18 @@ fmt.Println(atomic.LoadInt64(&counter)) // 稳定 2000
 ```
 :::
 
+:::error 死锁：所有 goroutine 都在等
+```text
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [chan send]:
+main.main()
+    /app/main.go:12 +0x5c
+```
+**怎么读**：它告诉你**最后一个动作**是什么（这里是 `chan send`）。无缓冲 channel 的发送必须有人同时在收，否则永远阻塞。
+**三种常见死锁**：无缓冲 channel 只发不收；`wg.Wait()` 在 `wg.Add` 之前；锁的获取顺序相反。
+:::
+
 **验收**
 
 - [ ] 能说出「为什么每个阻塞操作都要接 ctx」
@@ -159,6 +192,8 @@ fmt.Println(atomic.LoadInt64(&counter)) // 稳定 2000
 ---
 
 ## 第 3 周：HTTP 服务与工程结构
+
+**本周目标**：写出一个能被别人调用的 HTTP 服务，结构清晰。
 
 #### 步骤 3.1 最小 HTTP 服务 + 中间件
 
@@ -223,6 +258,8 @@ _ = srv.Shutdown(shutdownCtx)
 
 ## 第 4 周：真实落点（部署到本项目）
 
+**本周目标**：让 Go 服务成为本项目的一部分，而不是一个练习 demo。
+
 #### 步骤 4.1 交叉编译并部署
 
 在 Windows 上直接构建 Linux 二进制，`scp` 到服务器，用 `systemd` 托管，只监听 `127.0.0.1:80xx`。
@@ -237,6 +274,18 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o app
 scp app myapp:/opt/assetd/
 ssh myapp "systemctl restart assetd"
 ```
+:::
+
+:::error 拷到服务器上跑不起来
+```text
+bash: ./app: cannot execute binary file: Exec format error
+```
+↓ 架构不对（在 arm 机器上跑了 amd64 的包，或反过来）。`file app` 能看出目标架构。
+
+```text
+./app: /lib64/ld-linux-x86-64.so.2: bad ELF interpreter
+```
+↓ 开了 CGO，链接了目标机没有的库。构建时加 `CGO_ENABLED=0` 出静态二进制。
 :::
 
 #### 步骤 4.2 挂 nginx 并压测

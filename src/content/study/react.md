@@ -22,6 +22,8 @@
 
 ## 第 1 周：组件、props、状态
 
+**本周目标**：能解释「状态 → 渲染」的关系，并写出不会无限重渲染的组件。
+
 #### 步骤 1.1 验证「连写三次 setState 只加 1」
 
 写一个按钮，`onClick` 里连调三次 `setCount(count + 1)`，观察只加 1；再改成函数式更新。
@@ -70,6 +72,8 @@ React 用 key 判断「这是不是同一个组件实例」。下标作 key 时�
 
 ## 第 2 周：副作用与数据请求
 
+**本周目标**：能写出三态齐全、不会竞态、不会无限循环的请求逻辑。
+
 #### 步骤 2.1 修掉「切页竞态」
 
 做一个分页列表，快速切两页，旧请求后到会覆盖新数据；用 `AbortController` 或「请求序号」修掉。
@@ -90,6 +94,14 @@ useEffect(() => {
   return () => ac.abort()
 }, [page])
 ```
+:::
+
+:::error Too many re-renders
+```text
+Uncaught Error: Too many re-renders. React limits the number of renders to prevent an infinite loop.
+```
+**原因**：在渲染期间直接调了 setState —— 最常见的是 `onClick={setOpen(true)}`（少写了箭头函数，渲染时就执行了），或者 `useEffect` 依赖里放了一个每次新建的对象。
+**改法**：`onClick={() => setOpen(true)}`；依赖收窄到原始值。
 :::
 
 #### 步骤 2.2 三态齐全的错误页
@@ -118,6 +130,8 @@ return <List dataSource={data.items} ... />
 ---
 
 ## 第 3 周：Next.js App Router（本项目的真实形态）
+
+**本周目标**：能判断组件该不该 `"use client"`，能读懂页面守卫。
 
 #### 步骤 3.1 判断一个组件该不该 "use client"
 
@@ -151,6 +165,18 @@ return <List dataSource={data.items} ... />
 ```
 :::
 
+:::error 构建期报的两个错
+```text
+Error: useSearchParams() should be wrapped in a suspense boundary at page "/study/[lang]".
+```
+↓ 静态页里用了 `useSearchParams`，必须包一层 `<Suspense>`，否则整页会退化成动态渲染（或直接构建失败）。本项目的 `/learning`、`/study` 都是这个写法。
+
+```text
+Error: Hydration failed because the server rendered HTML didn't match the client.
+```
+↓ 服务端与客户端首帧不一致：常见是 `Date.now()` / `Math.random()` / `localStorage` 直接写在渲染里。把这类值放进 `useEffect`，或给首帧一个确定的占位。
+:::
+
 **验收**
 
 - [ ] 能说出一个组件该不该加 `"use client"`
@@ -160,6 +186,8 @@ return <List dataSource={data.items} ... />
 ---
 
 ## 第 4 周：工程化与真实交付
+
+**本周目标**：能独立完成「表单 → 请求 → 错误处理 → 构建 → 上线」这条链路。
 
 #### 步骤 4.1 表单校验与提交
 
