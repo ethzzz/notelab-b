@@ -594,26 +594,151 @@ ssh myapp "/root/Notelab/notelab-java/ops/sync-deploy.sh notelab-c"
 它同时踩到 C 端的四件事：匿名可见、要被索引、要能分享、要能上线。做完这一页，你就把 8 周的东西全用了一遍。
 :::
 
-:::solution 改动清单（4 处，缺一处就不生效）
-```text
-1. src/app/(home)/roadmap/page.tsx    路由壳：metadata + 渲染 HomeApp
-2. src/features/home/data/nav.ts      HomeTab 增加 'roadmap' + NAV_GROUPS 加条目
-3. src/features/home/lib/hooks.ts     parseHomeRoute 里加 "/roadmap" 的映射
-4. src/features/home/App.tsx          Record<HomeTab, TabContent> 补 roadmap 的内容
-   + 新组件 components/RoadmapTab.tsx（列表、阶段、进度条）
+:::solution 参考实现（4 个文件，先自己写，写完再对照）
+**先纠正一个常见误判**：不需要改 `lib/hooks.ts`。`parseHomeRoute` 的最后一段是
+`NAV_TAB_IDS.find((t) => t === segs[0])`，而 `NAV_TAB_IDS` 是从 `NAV_GROUPS` **自动派生**的 ——
+只要在 `nav.ts` 里加一条 `kind: 'tab'`，URL 就通了。**先读代码再动手**，能省掉一半改动。
+
+**① 路由壳 `src/app/(home)/roadmap/page.tsx`**（新建）
+```tsx
+import type { Metadata } from "next"
+import HomeApp from "@home/App"
+
+export const metadata: Metadata = {
+  title: "学习路线 · ethzzz",
+  description: "Java / Go / React 三条路线的阶段、课时与顺序，匿名可看，进度只存本机。",
+  openGraph: {
+    title: "学习路线",
+    description: "三条路线，按顺序学；每阶段都有产出物与验收标准。",
+  },
+}
+
+export default function RoadmapPage() {
+  return <HomeApp />
+}
 ```
-```text
-⚠️ 三处必须同时改：nav.ts 的类型是 Record 的键来源，hooks 决定 URL 能不能进，
-   App.tsx 的 Record<HomeTab, TabContent> 会强制你补内容 —— 漏了 tsc 直接报错，不会静默。
-⚠️ URL 段要避开 nginx 已占前缀：/blog /admin /api /ailab /games /vs /thunder /play /f
+
+**② 导航与 tab 类型 `src/features/home/data/nav.ts`**（改 2 处）
+```ts
+// 1) 联合类型加一项 —— 加了它，后面 App.tsx 的 Record 会强制你补内容
+export type HomeTab = 'projects' | 'posts' | 'tools' | 'learn' | 'roadmap' | 'knowledge' | 'dashboard';
+
+// 2) 「学习」分组里加一条（NAV_TAB_IDS 会自动包含它，URL 因此自动可用）
+{
+  id: 'learn',
+  label: '学习',
+  entries: [
+    { kind: 'tab', id: 'learn', label: '编程学习', icon: 'code' },
+    { kind: 'tab', id: 'roadmap', label: '学习路线', icon: 'layers' },
+    { kind: 'tab', id: 'knowledge', label: '知识库', icon: 'archive' },
+  ],
+},
 ```
+
+**③ 内容注册 `src/features/home/App.tsx`**（改 2 处）
+```tsx
+import { RoadmapTab } from './components/RoadmapTab';
+
+// 在 const base: Record<HomeTab, TabContent> = { ... } 里补一项
+roadmap: {
+  badge: metas.length || undefined,
+  title: '学习路线',
+  subtitle: '三条语言路线 · 阶段 / 课时 / 时长 · 匿名可看',
+  content: <RoadmapTab />,
+},
+```
+
+**④ 内容组件 `src/features/home/components/RoadmapTab.tsx`**（新建）
+```tsx
+"use client"
+import Link from "next/link"
+import { useLearning } from "../lib/hooks"
+
+export function RoadmapTab() {
+  const { metas, loading, error, stale, reload } = useLearning()
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-24 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-800" />
+        ))}
+      </div>
+    )
+  }
+
+  if (error && metas.length === 0) {
+    return (
+      <div className="mx-auto max-w-3xl rounded-xl border border-zinc-200 p-6 text-center dark:border-zinc-800">
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">学习路线加载失败：{error}</p>
+        <button
+          type="button"
+          onClick={reload}
+          className="mt-3 min-h-[44px] rounded-lg bg-zinc-900 px-4 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900"
+        >
+          重试
+        </button>
+      </div>
+    )
+  }
+
+  if (metas.length === 0) {
+    return <p className="mx-auto max-w-3xl py-10 text-center text-sm text-zinc-500">还没有学习内容。</p>
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl">
+      {stale && (
+        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+          当前展示的是缓存内容，刷新失败，可能不是最新。
+        </p>
+      )}
+
+      <ol className="ml-3 border-l border-zinc-200 dark:border-zinc-800">
+        {metas.map((t) => (
+          <li key={t.code} className="relative mb-4 pl-8">
+            <span
+              aria-hidden
+              className="absolute left-0 top-4 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-full border border-zinc-200 bg-white text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              {t.icon}
+            </span>
+
+            <Link
+              href={`/learn/${t.code}`}
+              className="block rounded-xl border border-zinc-200 p-4 transition hover:border-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-600"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-base font-semibold">{t.name}</h3>
+                <span className="text-xs text-zinc-500">
+                  {t.stages} 阶段 · {t.lessons} 课时 · 约 {Math.round(t.minutes / 60)} 小时
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{t.desc}</p>
+              <span className="mt-2 inline-block text-xs font-medium">开始学习 →</span>
+            </Link>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+```
+
+**⑤ 自检与两个进阶点**
 ```text
-验收：
-□ 匿名打开 /roadmap 能看到内容（先退出登录）
-□ 手机 375px 不横向滚动、触控 ≥44px
-□ curl 能看到 <title>学习路线…</title>
-□ 分享链接给另一个设备，打开一致
-□ npm run build 通过，线上 F5 不 404
+□ 匿名用户直接打开 /roadmap（先退出登录）能看到三条路线
+□ 375px 下不横向滚动；「重试」按钮高度 ≥44px
+□ curl https://haolo.cloud/roadmap | grep '<title>' 能看到「学习路线」
+□ 手机分享链接给另一台设备，打开一致
+□ npm run build 通过；线上 F5 不 404
+```
+
+```text
+进阶 1（渲染策略）：现在列表是客户端拉的，HTML 里只有 title/description。
+  若要正文也被索引，把取数挪到路由壳（服务端）再传进来 —— 这正是第 2 周那道题。
+进阶 2（缓存）：useLearning 自带「先缓存后刷新」，所以切 tab 不重复请求；
+  改造时别在组件里再写一份 fetch，否则同一份数据会拉两次。
 ```
 :::
 
