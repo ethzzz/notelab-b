@@ -186,31 +186,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 	const fileRef = useRef<HTMLInputElement>(null)
 	/** 预览区滚动容器（滚动联动要用） */
 	const previewBoxRef = useRef<HTMLDivElement>(null)
-	/**
-	 * 「谁在滚谁主导」（"cm" = 用户正在滚编辑器，"pv" = 正在滚预览）。
-	 *
-	 * 用户滚 A → 我们程序化滚 B → B 的 scroll 事件又反推 A，两边互相拽
-	 * （实测 pv 从 459 被拉回 120、cm 从 720 掉到 52）。所以必须区分
-	 * 「用户主动滚的」和「被程序带动的」：主导方的 scroll 才发起同步，被带动方直接忽略。
-	 *
-	 * 🔴 过期判断用**时间戳**，绝不用 setTimeout / requestAnimationFrame：
-	 *    早先这里还有一个 rAF「防回环锁」，rAF 在**页面处于后台标签、或被浏览器节流时不会回调**。
-	 *    锁一旦没复位，两个方向的回调都直接 return —— 表现就是「怎么滚都完全不动」。
-	 *    用户实测正是这个症状（两边都试过、完全不动），而我的 CDP 环境里 rAF 正常，所以一直测不出来。
-	 *    现在防回环只靠「主导方 + 目标已到位就跳过」两条，不需要任何锁。
-	 */
-	const ACTIVE_TTL_MS = 250
-	const activeRef = useRef<{ side: "cm" | "pv"; at: number } | null>(null)
-	const markActive = (side: "cm" | "pv") => {
-		activeRef.current = { side, at: Date.now() }
-	}
-	/** 当前主导方；超过 TTL 视为无人主导（用户停顿后换手滚另一边时，新的一侧立刻接管） */
-	const activeSide = (): "cm" | "pv" | null => {
-		const a = activeRef.current
-		if (!a) return null
-		return Date.now() - a.at < ACTIVE_TTL_MS ? a.side : null
-	}
-	/** CodeMirror 实例是异步创建的；滚动监听要等它挂上才能绑 */
+	/** CodeMirror 实例是异步创建的；同步循环要等它挂上才有意义 */
 	const [cmReady, setCmReady] = useState(false)
 	/**
 	 * 本次粘贴是否要「强制纯文本」（Ctrl/Cmd+Shift+V）。
@@ -328,98 +304,91 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 		})
 	}, [value])
 
-	/** ② 预览滚动 → 编辑器滚到同一个块 */
+	/**
+	 * 滚动联动：**轮询 scrollTop**，不监听 scroll 事件。
+	 *
+	 * 为什么推翻事件方案（第三轮返工）：用户环境里反复「完全不动」，而 CDP 里怎么测都正常。
+	 * 事件方案有三层都能让同步**静默死掉**的部件：
+	 *   ① scroll 事件是否派发（被内层吞 / 被扩展干扰）；
+	 *   ② 防回环锁是否复位（rAF 在后台标签不回调 → 锁永久置位）；
+	 *   ③ 主导方标记是否过期（依赖定时器）。
+	 * 任何一层失效都不报错、不打日志，只表现为「怎么滚都不动」。
+	 *
+	 * 轮询只依赖一件事：**scrollTop 变了没有**。
+	 *   谁变了谁主导（不需要标记），程序改完立刻更新 last 值记账（天然不回环）。
+	 *   rAF 被节流最多是「恢复后追上来」，不会永久失效。
+	 *   每帧两次 scrollTop 读取的开销可忽略（真正的成本是 DOM 遍历，只在变化时才做）。
+	 */
 	useEffect(() => {
-		const box = previewBoxRef.current
-		if (!syncEnabled || !box) return
-		const onScroll = () => {
-			// 编辑器在主导（用户正在滚它）→ 这次预览滚动是我们程序设的，不要再反推回去。
-			// ⚠️ 这条判断必须和 ③ 里那条**对称**：只挡一边的话，被带动的一侧会把主导权抢过去，
-			//    之后真正在滚的那一侧全被忽略（实测 cm 只滚了 227 就停了）。
-			if (activeSide() === "cm") return
+		if (!syncEnabled) return
+		let raf = 0
+		let lastCm = -1
+		let lastPv = -1
+		/** 编辑器当前顶部可见行（源码） */
+		const topLineOf = (view: EditorView) => {
+			const scrollTop = view.scrollDOM.scrollTop
+			let line = view.state.doc.lineAt(view.lineBlockAtHeight(scrollTop).from).number
+			// 兜底：scrollTop 已经很大却算成第 1 行 → 按比例粗估。
+			// 精度差一点没关系，**卡死在第一块**才是致命的。
+			if (line <= 1 && scrollTop > 200) {
+				const max = view.scrollDOM.scrollHeight - view.scrollDOM.clientHeight
+				line = Math.max(1, Math.round((max > 0 ? scrollTop / max : 0) * view.state.doc.lines))
+			}
+			return line
+		}
+		const tick = () => {
+			raf = requestAnimationFrame(tick)
 			const view = viewRef.current
-			if (!view) return
-			markActive("pv") // 用户正在滚预览：这一侧主导
-			// 「顶部已越过视口顶端」的最后一个块，就是当前正在看的块
-			const boxTop = box.getBoundingClientRect().top
-			let line: number | null = null
-			for (const el of Array.from(box.children) as HTMLElement[]) {
-				if (el.getBoundingClientRect().top - boxTop > 2) break
-				const l = Number(el.dataset.srcLine)
-				if (l) line = l
-			}
-			if (line == null) return
-			const n = Math.min(line, view.state.doc.lines)
-			// 编辑器顶部已经是这一行 → 不必再滚。这是防回环的**真正保险**：
-			// 即使锁的时机没卡准，也不会两边互相推着抖
-			const topPos = view.posAtCoords({ x: 1, y: 1 })
-			if (topPos != null && view.state.doc.lineAt(topPos).number === n) return
-			view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
-		}
-		box.addEventListener("scroll", onScroll, { passive: true })
-		// 兜底：个别环境下 scroll 事件可能不派发（被内层元素吞掉 / 被扩展干扰），
-		// 用 wheel 再驱动一次。重复同步无害 —— 回调里有「目标已到位就跳过」。
-		const onWheel = () => requestAnimationFrame(onScroll)
-		box.addEventListener("wheel", onWheel, { passive: true })
-		return () => {
-			box.removeEventListener("scroll", onScroll)
-			box.removeEventListener("wheel", onWheel)
-		}
-	}, [syncEnabled])
+			const box = previewBoxRef.current
+			if (!view || !box) return
+			const cm = view.scrollDOM.scrollTop
+			const pv = box.scrollTop
+			const cmMoved = Math.abs(cm - lastCm) > 0.5
+			const pvMoved = Math.abs(pv - lastPv) > 0.5
 
-	/** ③ 编辑器滚动 → 预览滚到同一个块 */
-	useEffect(() => {
-		const view = viewRef.current
-		const box = previewBoxRef.current
-		if (!syncEnabled || !view || !box) return
-		const onScroll = () => {
-			// 预览在主导（用户正在滚它）→ 这次编辑器滚动是被程序带动的，不要再反推回去
-			if (activeSide() === "pv") return
-			markActive("cm")
-			// 顶部可见行。
-			// 🔴 绝不能用 `posAtCoords({ x: 1, y: 1 })`：那个坐标落在 `.cm-content` 的 padding 里
-			//    （我们给它的 padding 是 8px 12px），属于「文档之外」，**会返回 null**。
-			//    一旦 null 就退化成 topLine=1 → 目标块永远是第一个 → targetTop=0
-			//    → 命中下面「已到位就跳过」→ 预览永远停在 0。
-			//    用户实测正是如此：cmScrollTop=6456 而 pvScrollTop=0，而 data-sync/data-cm-ready 都是 1。
-			//    `lineBlockAtHeight` 的 height 是**相对文档顶部**的像素，所以传 scrollTop 才是「视口顶部」。
-			const topBlock = view.lineBlockAtHeight(view.scrollDOM.scrollTop)
-			let topLine = view.state.doc.lineAt(topBlock.from).number
-			// 兜底：万一仍拿不到（scrollTop 很大却算出第 1 行），按滚动比例粗估。
-			// 精度差一点没关系，卡死不放才是致命的。
-			if (topLine <= 1 && view.scrollDOM.scrollTop > 200) {
-				const maxScroll = view.scrollDOM.scrollHeight - view.scrollDOM.clientHeight
-				const ratio = maxScroll > 0 ? view.scrollDOM.scrollTop / maxScroll : 0
-				topLine = Math.max(1, Math.round(ratio * view.state.doc.lines))
+			if (cmMoved && !pvMoved) {
+				// 用户滚了编辑器 → 带预览走
+				lastCm = cm
+				const topLine = topLineOf(view)
+				let target: HTMLElement | null = null
+				for (const el of Array.from(box.children) as HTMLElement[]) {
+					const l = Number(el.dataset.srcLine)
+					if (!l) continue
+					if (l > topLine) break
+					target = el
+				}
+				if (target) {
+					const boxTop = box.getBoundingClientRect().top
+					box.scrollTop =
+						target === box.firstElementChild
+							? 0
+							: box.scrollTop + (target.getBoundingClientRect().top - boxTop)
+				}
+				lastPv = box.scrollTop // 记账：这次 pv 变化是我们自己造成的
+			} else if (pvMoved && !cmMoved) {
+				// 用户滚了预览 → 带编辑器走
+				lastPv = pv
+				const boxTop = box.getBoundingClientRect().top
+				let line: number | null = null
+				for (const el of Array.from(box.children) as HTMLElement[]) {
+					if (el.getBoundingClientRect().top - boxTop > 2) break
+					const l = Number(el.dataset.srcLine)
+					if (l) line = l
+				}
+				if (line != null) {
+					const n = Math.min(line, view.state.doc.lines)
+					view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
+				}
+				lastCm = view.scrollDOM.scrollTop
+			} else {
+				lastCm = cm
+				lastPv = pv
 			}
-			let target: HTMLElement | null = null
-			for (const el of Array.from(box.children) as HTMLElement[]) {
-				const l = Number(el.dataset.srcLine)
-				if (!l) continue
-				if (l > topLine) break
-				target = el
-			}
-			if (!target) return
-			const boxTop = box.getBoundingClientRect().top
-			// 目标就是第一个块时归零：否则会停在「容器 padding + 首块 margin」那二十几像素的偏移上，
-			// 肉眼看不出来，但「滚到顶」永远不会真正回到 0
-			const targetTop =
-				target === box.firstElementChild ? 0 : box.scrollTop + (target.getBoundingClientRect().top - boxTop)
-			// 已经在目标位置 → 跳过（防回环的真正保险，锁只管同一帧的自激）
-			if (Math.abs(box.scrollTop - targetTop) < 3) return
-			box.scrollTop = targetTop
 		}
-		const scroller = view.scrollDOM
-		scroller.addEventListener("scroll", onScroll, { passive: true })
-		// 兜底：同 ②，用 wheel 再驱动一次（CodeMirror 自己会处理 wheel，scroll 事件一般有，
-		// 但多一层不吃亏；重复同步被「目标已到位就跳过」挡掉）
-		const onWheel = () => requestAnimationFrame(onScroll)
-		scroller.addEventListener("wheel", onWheel, { passive: true })
-		return () => {
-			scroller.removeEventListener("scroll", onScroll)
-			scroller.removeEventListener("wheel", onWheel)
-		}
+		raf = requestAnimationFrame(tick)
+		return () => cancelAnimationFrame(raf)
 	}, [syncEnabled, cmReady])
+
 
 	function runAction(a: Action) {
 		const view = viewRef.current
