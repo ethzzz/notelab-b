@@ -17,6 +17,9 @@ const nextConfig: NextConfig = {
     // 这里只兜住历史书签与外部链接；与上面两条同理，跳转发生在 React 之前，不经过页面守卫。
     { source: "/docs", destination: "/documents/editor", permanent: false },
     { source: "/notes", destination: "/documents/notes", permanent: false },
+    // 学习路线文档（2026-10-18）：/study 本身不是页面，默认进 Java 路线。
+    // 与上面同理放在 config 层：/study 不在 PageRoutes 里，放到页面里会被守卫拦掉。
+    { source: "/study", destination: "/study/java", permanent: false },
   ],
 }
 
