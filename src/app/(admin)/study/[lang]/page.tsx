@@ -22,13 +22,27 @@ import { STUDY_DOCS, type StudyData } from "@/lib/study"
 
 export const dynamic = "force-dynamic"
 
-/** 解析结果按语言缓存：md 是构建产物的一部分，运行期不会变（dev 下不缓存，改了立刻生效） */
-const cache = new Map<string, StudyData>()
+/**
+ * 解析结果缓存：key = 语言，value = { 文件 mtime, 解析结果 }。
+ *
+ * 为什么按 mtime 而不是「进程内永久缓存」：文档是运行时从磁盘读的，
+ * 而部署脚本对「仅文档变更」会跳过重启 —— 永久缓存会让新内容一直不生效。
+ * 每次请求 stat 一次（约 0.1ms），mtime 变了才重新解析，改完 push 即生效。
+ */
+const cache = new Map<string, { mtime: number; data: StudyData }>()
 
 async function loadStudy(lang: string): Promise<StudyData> {
-	const hit = cache.get(lang)
-	if (hit) return hit
 	const file = path.join(process.cwd(), "src", "content", "study", `${lang}.md`)
+	let mtime = 0
+	try {
+		mtime = (await fs.stat(file)).mtimeMs
+	} catch {
+		// 文件不存在：走下面的失败分支，不在这里抛
+	}
+
+	const hit = cache.get(lang)
+	if (hit && hit.mtime === mtime) return hit.data
+
 	let markdown: string
 	try {
 		markdown = await fs.readFile(file, "utf8")
@@ -43,7 +57,7 @@ async function loadStudy(lang: string): Promise<StudyData> {
 	if (warnings.length) {
 		console.warn(`[study] ${lang} 内容不完整（${warnings.length} 处）：\n  ${warnings.join("\n  ")}`)
 	}
-	if (process.env.NODE_ENV === "production") cache.set(lang, data)
+	cache.set(lang, { mtime, data })
 	return data
 }
 
