@@ -351,6 +351,12 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 			}
 			if (!target) return
 			lockSync()
+			// 目标就是第一个块时直接归零：否则会停在「容器 padding + 首块 margin」那个
+			// 二十几像素的小偏移上 —— 肉眼看不出来，但「滚到顶」再也不会真正回到 0。
+			if (target === box.firstElementChild) {
+				box.scrollTop = 0
+				return
+			}
 			const boxTop = box.getBoundingClientRect().top
 			box.scrollTop += target.getBoundingClientRect().top - boxTop
 		}
