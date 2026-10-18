@@ -32,11 +32,15 @@ import { toast } from "@/lib/toast"
 const KEEP_FORMAT_KEY = "notelab.note.paste_keep_format"
 
 /**
- * 滚动同步的**临时诊断开关**。
- * 打开时每次「编辑器带动预览」都打一条 console，用来确认 line / target / pv 的实际取值。
- * ⚠️ 排查完必须改回 false —— 滚动时每帧一条，会刷屏。
+ * 滚动同步的**诊断开关**：URL 带 `?syncdebug=1` 时打开。
+ *
+ * 打开后会打印每次同步的 `cm / line / target / pv`，以及注入锚点的结果
+ * （`[sync] inject 块锚点=N 预览块=M`）。`N=0` 说明 `computeBlockStarts` 对这份内容算不出锚点，
+ * 此时同步会退化成比例模式 —— 这是判断「走的是精确路径还是保底路径」的唯一凭据。
+ *
+ * 平时必须关：滚动时每帧一条，会把 console 刷满。
  */
-const DEBUG_SYNC = true
+const DEBUG_SYNC = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("syncdebug")
 
 /**
  * 编辑区外观：**背景透明 + 文字继承**，跟着外层容器走。
