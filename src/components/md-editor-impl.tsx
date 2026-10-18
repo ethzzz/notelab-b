@@ -91,7 +91,17 @@ const CM_CSS = `
 export type MdEditorProps = {
 	value: string
 	onChange: (v: string) => void
+	/** 最小高度（px）。没传 `height` 时用它 */
 	minHeight?: number
+	/**
+	 * 编辑区与预览的**实际高度**：数字=px，字符串=任意 CSS。
+	 *
+	 * 为什么要有它：笔记页是整屏编辑，固定 480px 太矮了 —— 它要「吃掉剩余高度」，
+	 * 而剩余高度写成 `"calc(100vh - 300px)"` 比用 JS 量算更稳（窗口缩放、字体加载、
+	 * 提示行换行都不会算错，也不用监听 resize）。
+	 * 传 `"100%"` 也可以，前提是父容器有确定高度。
+	 */
+	height?: number | string
 	/** 注入后才显示「插入图片」。约定：传入原始 File，返回可直接写进 Markdown 的 URL */
 	onUploadImage?: (file: File) => Promise<string>
 	/**
@@ -171,21 +181,26 @@ const ACTIONS: Action[] = [
 	{ key: "hr", label: "―", title: "分割线", run: (v) => insertBlock(v, "\n---\n") },
 ]
 
-export default function MdEditor({ value, onChange, minHeight = 480, onUploadImage, renderPreview, hidePreview = false }: MdEditorProps) {
+export default function MdEditor({ value, onChange, minHeight = 480, height, onUploadImage, renderPreview, hidePreview = false }: MdEditorProps) {
 	const viewRef = useRef<EditorView | null>(null)
 	const fileRef = useRef<HTMLInputElement>(null)
 	/** 预览区滚动容器（滚动联动要用） */
 	const previewBoxRef = useRef<HTMLDivElement>(null)
 	/**
-	 * 防回环锁：A 滚动触发 B 滚动，B 的 scroll 事件又会反推 A —— 不加锁会互相拽着抖。
-	 * 用「时间锁」而不是布尔开关：滚动事件是异步派发的，同步复位挡不住下一帧的事件。
+	 * 防回环锁：A 滚动触发 B 滚动，B 的 scroll 事件又会反推 A。
+	 *
+	 * ⚠️ 复位时机是**关键**：原来用 80ms 时间锁 —— 验收（单次设 scrollTop 再等 600ms）能过，
+	 *    但真实滚轮是**逐帧**派发 scroll，80ms 会把中间 4~5 帧全部吞掉，
+	 *    手感变成「跳一下、卡住、再跳一下」，用户直接反馈「没同步」。
+	 *    改成 rAF：一帧后就放开，连续滚动时每帧都能同步。
+	 *    真正防回环靠的是两条同步里的「目标已到位就跳过」短路，锁只防同一帧的自激。
 	 */
 	const syncLockRef = useRef(false)
 	const lockSync = () => {
 		syncLockRef.current = true
-		window.setTimeout(() => {
+		requestAnimationFrame(() => {
 			syncLockRef.current = false
-		}, 80)
+		})
 	}
 	/** CodeMirror 实例是异步创建的；滚动监听要等它挂上才能绑 */
 	const [cmReady, setCmReady] = useState(false)
@@ -200,6 +215,9 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 	const [narrow, setNarrow] = useState(false)
 	const [pane, setPane] = useState<"edit" | "preview">("edit")
 	const [uploading, setUploading] = useState(false)
+
+	/** 编辑区与预览共用的高度：数字转 px，字符串原样（`calc(...)` / `100%` 都行） */
+	const heightCss = typeof height === "number" ? `${height}px` : (height ?? `${minHeight}px`)
 
 	// 粘贴保留格式：默认开。
 	// ⚠️ 读 localStorage 放在 effect 里，不要写进 useState 的初始化函数：
@@ -319,8 +337,12 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 				if (l) line = l
 			}
 			if (line == null) return
-			lockSync()
 			const n = Math.min(line, view.state.doc.lines)
+			// 编辑器顶部已经是这一行 → 不必再滚。这是防回环的**真正保险**：
+			// 即使锁的时机没卡准，也不会两边互相推着抖
+			const topPos = view.posAtCoords({ x: 1, y: 1 })
+			if (topPos != null && view.state.doc.lineAt(topPos).number === n) return
+			lockSync()
 			view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
 		}
 		box.addEventListener("scroll", onScroll, { passive: true })
@@ -350,15 +372,15 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 				target = el
 			}
 			if (!target) return
-			lockSync()
-			// 目标就是第一个块时直接归零：否则会停在「容器 padding + 首块 margin」那个
-			// 二十几像素的小偏移上 —— 肉眼看不出来，但「滚到顶」再也不会真正回到 0。
-			if (target === box.firstElementChild) {
-				box.scrollTop = 0
-				return
-			}
 			const boxTop = box.getBoundingClientRect().top
-			box.scrollTop += target.getBoundingClientRect().top - boxTop
+			// 目标就是第一个块时归零：否则会停在「容器 padding + 首块 margin」那二十几像素的偏移上，
+			// 肉眼看不出来，但「滚到顶」永远不会真正回到 0
+			const targetTop =
+				target === box.firstElementChild ? 0 : box.scrollTop + (target.getBoundingClientRect().top - boxTop)
+			// 已经在目标位置 → 跳过（防回环的真正保险，锁只管同一帧的自激）
+			if (Math.abs(box.scrollTop - targetTop) < 3) return
+			lockSync()
+			box.scrollTop = targetTop
 		}
 		const scroller = view.scrollDOM
 		scroller.addEventListener("scroll", onScroll, { passive: true })
@@ -475,7 +497,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 	const editPane = (
 		<CodeMirror
 			value={value}
-			height={`${minHeight}px`}
+			height={heightCss}
 			placeholder="用 Markdown 书写…（支持 GFM：表格/任务列表/删除线）"
 			/**
 			 * ⚠️ 主题必须走 `theme` prop，不能只放在 `extensions` 里。
@@ -504,7 +526,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 
 	const previewPane = renderPreview ? (
 		// 自定义预览自己负责滚动与高度（/blog-gen 塞的是博客的 iframe）
-		<div className="w-full flex-1 overflow-hidden" style={{ minHeight }}>
+		<div className="w-full flex-1 overflow-hidden" style={{ height: heightCss }}>
 			{renderPreview(value)}
 		</div>
 	) : (
@@ -513,7 +535,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 		<div
 			ref={previewBoxRef}
 			className="md-body w-full overflow-auto px-4 py-2"
-			style={{ height: minHeight }}
+			style={{ height: heightCss }}
 			dangerouslySetInnerHTML={{ __html: html }}
 		/>
 	)

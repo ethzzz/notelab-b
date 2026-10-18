@@ -210,7 +210,14 @@ export default function NotesPage() {
           </Space>
         }
       >
-        <MdEditor value={draft.md} onChange={(md) => setDraft({ ...draft, md })} />
+        <MdEditor
+          value={draft.md}
+          onChange={(md) => setDraft({ ...draft, md })}
+          /* 吃掉剩余高度。300px = 顶栏 + 标题/操作栏 + 卡片内边距 + 下方提示行的合计；
+             `max(420px, …)` 兜住小窗口，免得窄屏下压到只剩一条缝。
+             用 calc 而不是 JS 量算：窗口缩放、字体加载、提示行换行都不用重算。 */
+          height="max(420px, calc(100vh - 300px))"
+        />
         <div className="mt-2 text-xs text-zinc-400">
           提示：支持 GFM（表格 / 任务列表 / 删除线）；Tab 插入缩进；保存后可在列表查看渲染效果。
         </div>
