@@ -39,7 +39,7 @@ type Stats = {
 
 /** 指标卡小图标：按 key 映射，省得后端为一个 emoji 多传一个字段 */
 const ICONS: Record<string, string> = {
-  bUsers: "👤", cUsers: "🧑", notes: "📝", documents: "📄",
+  bUsers: "👤", cUsers: "🧑", notes: "📝", prd: "📐", documents: "📄",
   canvas: "🎨", practice: "🧪", lowcode: "🧩", practiceImages: "🖼",
 }
 

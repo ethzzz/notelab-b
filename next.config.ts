@@ -11,6 +11,12 @@ const nextConfig: NextConfig = {
     // 旧入口与历史书签 307 到第一个子页。放在 config 层是为了让它发生在 React 之前，
     // 不经过 (admin) 的页面守卫（守卫只认"能进入的页面"，重定向不是页面）。
     { source: "/spire-editor", destination: "/spire-editor/cards", permanent: false },
+    // 文档管理（2026-10-18）：文档编辑 / 笔记从「工具箱」移到新的一级菜单「文档管理」，
+    // 路径同时迁到 /documents/*。权限码是 page:<path>，所以改路径 = 权限码变更
+    // （非超管角色要重新授权，旧 page:/docs、page:/notes 成为死码）。
+    // 这里只兜住历史书签与外部链接；与上面两条同理，跳转发生在 React 之前，不经过页面守卫。
+    { source: "/docs", destination: "/documents/editor", permanent: false },
+    { source: "/notes", destination: "/documents/notes", permanent: false },
   ],
 }
 
