@@ -236,3 +236,23 @@ export function parseStudy(markdown: string): StudyData {
 	const totalSteps = weeks.reduce((sum, w) => sum + w.steps.length, 0)
 	return { intro, weeks, appendix, tocIntro, tocAppendix, totalSteps }
 }
+
+/**
+ * 内容完整性自检：每个步骤都应该有「思路」和「代码 / 答案」。
+ *
+ * 为什么放在解析层而不是写个脚本：文档只在服务端解析一次（且有缓存），
+ * 这里点名比等到读者点开发现是空的要早得多 —— 部署日志里就能看到。
+ */
+export function studyWarnings(data: StudyData): string[] {
+	const out: string[] = []
+	for (const w of data.weeks) {
+		for (const s of w.steps) {
+			const kinds = new Set(
+				s.parts.filter((p): p is Extract<StudyPart, { type: "fold" }> => p.type === "fold").map((p) => p.kind),
+			)
+			if (!kinds.has("hint")) out.push(`第 ${w.n} 周「${s.label} ${s.title}」缺思路`)
+			if (!kinds.has("solution")) out.push(`第 ${w.n} 周「${s.label} ${s.title}」缺代码/答案`)
+		}
+	}
+	return out
+}

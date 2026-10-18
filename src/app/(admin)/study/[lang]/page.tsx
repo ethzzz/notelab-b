@@ -17,7 +17,7 @@ import path from "node:path"
 import { notFound } from "next/navigation"
 import { Suspense } from "react"
 import StudyReader from "@/components/study-reader"
-import { parseStudy } from "@/lib/study-render"
+import { parseStudy, studyWarnings } from "@/lib/study-render"
 import { STUDY_DOCS, type StudyData } from "@/lib/study"
 
 export const dynamic = "force-dynamic"
@@ -38,6 +38,11 @@ async function loadStudy(lang: string): Promise<StudyData> {
 	}
 	const data = parseStudy(markdown)
 	if (!data.weeks.length) throw new Error(`study/${lang}.md 没解析出任何周，检查「第 N 周：」标题格式`)
+	// 每步都该有「思路 + 代码答案」；缺了在这里点名，不用等读者点开才发现
+	const warnings = studyWarnings(data)
+	if (warnings.length) {
+		console.warn(`[study] ${lang} 内容不完整（${warnings.length} 处）：\n  ${warnings.join("\n  ")}`)
+	}
 	if (process.env.NODE_ENV === "production") cache.set(lang, data)
 	return data
 }
