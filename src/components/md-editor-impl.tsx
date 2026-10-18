@@ -334,9 +334,14 @@ export default function MdEditor({ value, onChange, minHeight = 480, onUploadIma
 		if (!syncEnabled || !view || !box) return
 		const onScroll = () => {
 			if (syncLockRef.current) return
-			// 顶部可见行。用 lineBlockAtHeight(0) 而不是 visibleRanges[0]：
-			// 后者给的是「有内容的范围」，滚到某个块的中间时会漏掉上半行
-			const topLine = view.state.doc.lineAt(view.lineBlockAtHeight(0).from).number
+			// 顶部可见行。
+			// ⚠️ 别用 `lineBlockAtHeight(0)`：它的 height 是**相对文档顶部**的
+			//    （@codemirror/view 的 d.ts 原文：「interpreted relative to the top of the document」），
+			//    传 0 永远得到第一行 —— 实测就是踩了这个坑：编辑器滚到中部，预览纹丝不动。
+			//    也別用 `visibleRanges[0]`：那是「有内容的范围」，滚到某块中间时会漏掉上半行。
+			//    `posAtCoords` 的 y 才是**视口坐标**，取到的正是可见的第一行。
+			const pos = view.posAtCoords({ x: 1, y: 1 })
+			const topLine = pos == null ? 1 : view.state.doc.lineAt(pos).number
 			let target: HTMLElement | null = null
 			for (const el of Array.from(box.children) as HTMLElement[]) {
 				const l = Number(el.dataset.srcLine)
