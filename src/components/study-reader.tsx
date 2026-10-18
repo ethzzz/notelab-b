@@ -99,6 +99,7 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 		if (week) {
 			collect(week.parts, `w${week.n}`)
 			week.steps.forEach((s) => collect(s.parts, `s${s.id}`))
+			collect(week.outro, `o${week.n}`)
 		} else {
 			collect(data.intro, "intro")
 			collect(data.appendix, "appendix")
@@ -267,15 +268,17 @@ function Overview({
 				<div className="study-bar">
 					<div className="study-bar-fill" style={{ width: `${pct}%` }} />
 				</div>
-				<span className="study-progress-text">
-					{doneTotal}/{data.totalSteps} 步已完成
-				</span>
 			</div>
 
 			<div className="max-w-[860px]">{renderParts(data.intro, "intro")}</div>
 
 			<div id="weeks" className="study-weeks">
-				<div className="study-section-title">全部周次</div>
+				<div className="study-section-title">
+					全部周次
+					<span className="study-progress-text ml-2">
+						{doneTotal}/{data.totalSteps}
+					</span>
+				</div>
 				{groups.map((g) => (
 					<div key={g.stage || "all"} className="study-stage">
 						<div className="study-stage-name">{g.stage || "主线"}</div>
@@ -362,6 +365,8 @@ function WeekView({
 				})}
 			</div>
 
+			<div className="max-w-[860px]">{renderParts(week.outro, `o${week.n}`)}</div>
+
 			<nav className="study-pager">
 				{prev ? (
 					<Button onClick={() => onGo(prev.n)}>
@@ -404,7 +409,7 @@ const STUDY_CSS = `
 .study-doc .md-body strong{font-weight:650}
 .study-doc .md-body code{background:var(--code);padding:.18em .42em;border-radius:5px;font-size:.875em;font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
 .study-doc .md-body pre{background:var(--code);border:1px solid var(--line);padding:14px 16px;border-radius:10px;overflow:auto;margin:.9em 0;line-height:1.62}
-.study-doc .md-body pre code{background:none;padding:0;font-size:.86em;color:inherit}
+.study-doc .md-body pre code{background:none;padding:0;font-size:.86em}
 .study-doc .md-body blockquote{margin:1em 0;padding:.6em 1em;border-left:3px solid rgba(128,128,128,.5);background:var(--soft);border-radius:0 8px 8px 0}
 .study-doc .md-body blockquote p{margin:.2em 0}
 .study-doc .md-body table{width:100%;border-collapse:collapse;margin:1em 0;font-size:.94em}
@@ -450,7 +455,7 @@ const STUDY_CSS = `
 .study-week-done{color:#237804;background:rgba(82,196,26,.14);border-radius:999px;padding:.05em .5em}
 
 /* ---- 步骤 ---- */
-.study-steps{display:flex;flex-direction:column;gap:1.6em;margin-top:1.6em}
+.study-steps{display:flex;flex-direction:column;gap:1.6em;margin-top:1.6em;max-width:900px}
 .study-step{border:1px solid var(--line);border-left:3px solid rgba(128,128,128,.35);border-radius:10px;padding:1em 1.2em 1.2em;scroll-margin-top:76px;transition:border-color .2s}
 .study-step.is-done{border-left-color:#52c41a;background:rgba(82,196,26,.045)}
 .study-step-head{display:flex;align-items:center;gap:.6em}
@@ -458,7 +463,7 @@ const STUDY_CSS = `
 .study-step-title{margin:0;font-size:1.05em;font-weight:650;line-height:1.5}
 .study-step.is-done .study-step-title{color:rgba(128,128,128,1)}
 .study-step-body{margin-top:.2em}
-.study-pager{display:flex;justify-content:space-between;gap:1em;margin:2.6em 0 1em}
+.study-pager{display:flex;justify-content:space-between;gap:1em;margin:2.6em 0 1em;max-width:900px}
 
 /* ---- highlight.js token（亮色） ---- */
 .study-doc .hljs-comment,.study-doc .hljs-quote{color:#6e7781;font-style:italic}

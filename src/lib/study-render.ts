@@ -130,8 +130,11 @@ export function parseStudy(markdown: string): StudyData {
 	let stage = ""
 	let buf: string[] = []
 	let seq = 0
+	/** 是否已经在「验收」之后：之后的段落归 week.outro，渲染在步骤下方 */
+	let inOutro = false
 
-	const target = (): StudyPart[] => (step ? step.parts : week ? week.parts : mode === "intro" ? intro : appendix)
+	const target = (): StudyPart[] =>
+		step ? step.parts : week ? (inOutro ? week.outro : week.parts) : mode === "intro" ? intro : appendix
 
 	const flush = () => {
 		const text = buf.join("\n")
@@ -148,8 +151,9 @@ export function parseStudy(markdown: string): StudyData {
 		if (weekMatch) {
 			flush()
 			step = null
+			inOutro = false
 			const n = Number(weekMatch[1])
-			week = { n, title: weekMatch[2], stage, parts: [], steps: [] }
+			week = { n, title: weekMatch[2], stage, parts: [], outro: [], steps: [] }
 			weeks.push(week)
 			mode = "week"
 			continue
@@ -163,15 +167,16 @@ export function parseStudy(markdown: string): StudyData {
 			let k = 2
 			while (seenStepIds.has(id)) id = `${no}-${k++}`
 			seenStepIds.add(id)
-			step = { id, label: `步骤 ${no}`, title: stepMatch[2], parts: [] }
+			step = { id, label: `步骤 ${no}`, title: stepMatch[2].replace(/`/g, ""), parts: [] }
 			week.steps.push(step)
 			continue
 		}
 
-		// 「验收」是周级别的收尾，不属于上面那个步骤
+		// 「验收」是周级别的收尾：之后的段落归 outro，渲染在步骤下方
 		if (/^\*\*验收\*\*/.test(line.trim())) {
 			flush()
 			step = null
+			inOutro = true
 			buf.push(line)
 			continue
 		}

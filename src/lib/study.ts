@@ -65,9 +65,12 @@ export type StudyWeek = {
 	title: string
 	/** 所属阶段（来自最近一个「阶段X」h2），没有则空串 */
 	stage: string
+	/** 周首内容（本周目标等），渲染在步骤之前 */
 	parts: StudyPart[]
+	/** 周尾内容（验收清单等），渲染在步骤之后 —— 与 parts 分开是因为它天然该收尾 */
+	outro: StudyPart[]
 	steps: StudyStep[]
-	/** 本周要能做到（取本周第一个粗体段落，用于概览页摘要） */
+	/** 本周要能做到（取「本周目标」行，用于概览页摘要） */
 	goal?: string
 }
 
