@@ -38,7 +38,9 @@ export function computeBlockStarts(md: string): number[] {
 	let tokens: { type: string; raw: string }[] = []
 	try {
 		tokens = marked.lexer(md || "") as unknown as { type: string; raw: string }[]
-	} catch {
+	} catch (e) {
+		// 不静默：返回空会让编辑器的滚动联动失去全部块锚点（退化成比例同步）
+		console.warn("[md-preview] computeBlockStarts 解析失败：", e)
 		return []
 	}
 	const out: number[] = []

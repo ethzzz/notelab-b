@@ -306,6 +306,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 		if (!box) return
 		const starts = computeBlockStarts(value)
 		const kids = Array.from(box.children) as HTMLElement[]
+		if (DEBUG_SYNC) console.log(`[sync] inject 块锚点=${starts.length} 预览块=${kids.length} value长=${value.length}`)
 		kids.forEach((el, i) => {
 			if (starts[i] != null) el.setAttribute("data-src-line", String(starts[i]))
 		})
@@ -375,6 +376,13 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 						target === box.firstElementChild
 							? 0
 							: box.scrollTop + (target.getBoundingClientRect().top - boxTop)
+				} else {
+					// 🔴 保底：预览里一个 data-src-line 都没有（用户实测 target 恒为 "-"）——
+					//    说明 computeBlockStarts 没能算出块起始行（内容里有 marked 解析不了的东西时它会返回空）。
+					//    这时按**滚动比例**同步。精度不如块对齐，但绝不会卡死在原地。
+					const cmMax = view.scrollDOM.scrollHeight - view.scrollDOM.clientHeight
+					const pvMax = box.scrollHeight - box.clientHeight
+					if (cmMax > 0 && pvMax > 0) box.scrollTop = (cm / cmMax) * pvMax
 				}
 				lastPvSet = box.scrollTop
 				lastPv = box.scrollTop
@@ -399,6 +407,11 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 					if (line != null) {
 						const n = Math.min(line, view.state.doc.lines)
 						view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
+					} else {
+						// 同上：没有块级锚点时按比例
+						const cmMax = view.scrollDOM.scrollHeight - view.scrollDOM.clientHeight
+						const pvMax = box.scrollHeight - box.clientHeight
+						if (cmMax > 0 && pvMax > 0) view.scrollDOM.scrollTop = (pv / pvMax) * cmMax
 					}
 					lastCm = view.scrollDOM.scrollTop
 				}
