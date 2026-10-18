@@ -560,8 +560,12 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 	) : (
 		// 高度与左侧 CodeMirror **严格对齐**（都是 minHeight + 内部滚动）。
 		// 用 minHeight 的话内容一长右栏就被撑高，两栏上沿对齐、下沿错位，看着像两个不相干的面板。
+		// `data-sync` / `data-cm-ready` 是给验收脚本读的诊断位（不影响渲染）：
+		// 「滚动没反应」要先能区分是「前置条件没满足」还是「监听逻辑错」。
 		<div
 			ref={previewBoxRef}
+			data-sync={syncEnabled ? "1" : "0"}
+			data-cm-ready={cmReady ? "1" : "0"}
 			className="md-body w-full overflow-auto px-4 py-2"
 			style={{ height: heightCss }}
 			dangerouslySetInnerHTML={{ __html: html }}
