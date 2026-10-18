@@ -377,13 +377,21 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 			if (activeSide() === "pv") return
 			markActive("cm")
 			// 顶部可见行。
-			// ⚠️ 别用 `lineBlockAtHeight(0)`：它的 height 是**相对文档顶部**的
-			//    （@codemirror/view 的 d.ts 原文：「interpreted relative to the top of the document」），
-			//    传 0 永远得到第一行 —— 实测就是踩了这个坑：编辑器滚到中部，预览纹丝不动。
-			//    也別用 `visibleRanges[0]`：那是「有内容的范围」，滚到某块中间时会漏掉上半行。
-			//    `posAtCoords` 的 y 才是**视口坐标**，取到的正是可见的第一行。
-			const pos = view.posAtCoords({ x: 1, y: 1 })
-			const topLine = pos == null ? 1 : view.state.doc.lineAt(pos).number
+			// 🔴 绝不能用 `posAtCoords({ x: 1, y: 1 })`：那个坐标落在 `.cm-content` 的 padding 里
+			//    （我们给它的 padding 是 8px 12px），属于「文档之外」，**会返回 null**。
+			//    一旦 null 就退化成 topLine=1 → 目标块永远是第一个 → targetTop=0
+			//    → 命中下面「已到位就跳过」→ 预览永远停在 0。
+			//    用户实测正是如此：cmScrollTop=6456 而 pvScrollTop=0，而 data-sync/data-cm-ready 都是 1。
+			//    `lineBlockAtHeight` 的 height 是**相对文档顶部**的像素，所以传 scrollTop 才是「视口顶部」。
+			const topBlock = view.lineBlockAtHeight(view.scrollDOM.scrollTop)
+			let topLine = view.state.doc.lineAt(topBlock.from).number
+			// 兜底：万一仍拿不到（scrollTop 很大却算出第 1 行），按滚动比例粗估。
+			// 精度差一点没关系，卡死不放才是致命的。
+			if (topLine <= 1 && view.scrollDOM.scrollTop > 200) {
+				const maxScroll = view.scrollDOM.scrollHeight - view.scrollDOM.clientHeight
+				const ratio = maxScroll > 0 ? view.scrollDOM.scrollTop / maxScroll : 0
+				topLine = Math.max(1, Math.round(ratio * view.state.doc.lines))
+			}
 			let target: HTMLElement | null = null
 			for (const el of Array.from(box.children) as HTMLElement[]) {
 				const l = Number(el.dataset.srcLine)
