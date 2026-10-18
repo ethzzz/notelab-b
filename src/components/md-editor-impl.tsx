@@ -32,6 +32,13 @@ import { toast } from "@/lib/toast"
 const KEEP_FORMAT_KEY = "notelab.note.paste_keep_format"
 
 /**
+ * 滚动同步的**临时诊断开关**。
+ * 打开时每次「编辑器带动预览」都打一条 console，用来确认 line / target / pv 的实际取值。
+ * ⚠️ 排查完必须改回 false —— 滚动时每帧一条，会刷屏。
+ */
+const DEBUG_SYNC = true
+
+/**
  * 编辑区外观：**背景透明 + 文字继承**，跟着外层容器走。
  *
  * ⚠️ 不要用 `theme="light"`：@uiw 的预设主题会铺一层**白底**，而 B 端后台是深色主题，
@@ -336,6 +343,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 			}
 			return line
 		}
+		let lastPvSet = -1 // 我们最后一次给预览设的值
 		const tick = () => {
 			raf = requestAnimationFrame(tick)
 			const view = viewRef.current
@@ -346,8 +354,12 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 			const cmMoved = Math.abs(cm - lastCm) > 0.5
 			const pvMoved = Math.abs(pv - lastPv) > 0.5
 
-			if (cmMoved && !pvMoved) {
-				// 用户滚了编辑器 → 带预览走
+			if (cmMoved) {
+				// 编辑器动了 → 带预览走。
+				// 🔴 这里**不能**要求「预览没动」：用户连续滚时，上一帧我们设的 pv 也在变，
+				//    于是 cmMoved && pvMoved 同时成立 → 掉进「什么都不做」的 else，
+				//    一半的帧被丢掉。用户实测的日志正是这个节奏：
+				//    cm 一路变而 pv 不动，等 cm 停手了 pv 才开始爬（cm=500 时 248→361→400）。
 				lastCm = cm
 				const topLine = topLineOf(view)
 				let target: HTMLElement | null = null
@@ -364,22 +376,32 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 							? 0
 							: box.scrollTop + (target.getBoundingClientRect().top - boxTop)
 				}
-				lastPv = box.scrollTop // 记账：这次 pv 变化是我们自己造成的
-			} else if (pvMoved && !cmMoved) {
-				// 用户滚了预览 → 带编辑器走
-				lastPv = pv
-				const boxTop = box.getBoundingClientRect().top
-				let line: number | null = null
-				for (const el of Array.from(box.children) as HTMLElement[]) {
-					if (el.getBoundingClientRect().top - boxTop > 2) break
-					const l = Number(el.dataset.srcLine)
-					if (l) line = l
+				lastPvSet = box.scrollTop
+				lastPv = box.scrollTop
+				if (DEBUG_SYNC) {
+					console.log(
+						`[sync] cm=${cm | 0} line=${topLine} target=${target?.dataset.srcLine ?? "-"} pv=${box.scrollTop | 0}/${pv | 0}`,
+					)
 				}
-				if (line != null) {
-					const n = Math.min(line, view.state.doc.lines)
-					view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
+			} else if (pvMoved) {
+				// 预览动了 → 先判断是不是我们自己设的（是就只记账，不反推编辑器）
+				if (Math.abs(pv - lastPvSet) < 3) {
+					lastPv = pv
+				} else {
+					lastPv = pv
+					const boxTop = box.getBoundingClientRect().top
+					let line: number | null = null
+					for (const el of Array.from(box.children) as HTMLElement[]) {
+						if (el.getBoundingClientRect().top - boxTop > 2) break
+						const l = Number(el.dataset.srcLine)
+						if (l) line = l
+					}
+					if (line != null) {
+						const n = Math.min(line, view.state.doc.lines)
+						view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: "start" }) })
+					}
+					lastCm = view.scrollDOM.scrollTop
 				}
-				lastCm = view.scrollDOM.scrollTop
 			} else {
 				lastCm = cm
 				lastPv = pv
