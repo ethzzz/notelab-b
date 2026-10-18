@@ -181,9 +181,15 @@ export function parseStudy(markdown: string): StudyData {
 			continue
 		}
 
-		// 本周目标：顺手抽出来给概览页当摘要
+		// 本周目标：抽出来给「周首信息栏」与概览摘要用，正文里不再重复渲染
 		if (week && /^\*\*本周目标\*\*/.test(line.trim())) {
-			week.goal = line.replace(/^\*\*本周目标\*\*[：:]\s*/, "").trim()
+			flush()
+			week.goal = line
+				.replace(/^\*\*本周目标\*\*[：:]\s*/, "")
+				.replace(/\*\*/g, "")
+				.replace(/`/g, "")
+				.trim()
+			continue
 		}
 
 		const foldMatch = line.match(FOLD_RE)

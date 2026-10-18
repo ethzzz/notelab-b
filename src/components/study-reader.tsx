@@ -3,18 +3,24 @@
 //
 // 分工：Markdown 解析与语法高亮在服务端（study-render.ts），这里只处理交互与状态。
 // 周用 ?week=N 切换，而不是子路由 —— 页面守卫是 page 精确匹配，子路由要逐条登记权限（见 page.tsx 注释）。
+//
+// 视觉原则（2026-10-18 重排）：**只允许一层盒子**。
+//   步骤卡片 = 唯一的容器；思路/代码/报错 = 卡片内的分隔行（不是又一个盒子）；
+//   代码块自带边框，所以它外面的折叠区必须保持无边框，否则就是三层嵌套。
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button, Checkbox } from "antd"
 import { AdminPage } from "@/components/admin"
-import type { StudyData, StudyDoc, StudyPart, StudyStep, StudyWeek, TocItem } from "@/lib/study"
+import type { StudyData, StudyDoc, StudyPart, StudyWeek, TocItem } from "@/lib/study"
 
 const FOLD_META = {
 	hint: { tag: "思路", hint: "想不明白再点开" },
 	solution: { tag: "代码 / 答案", hint: "参考实现" },
 	error: { tag: "常见报错", hint: "报错了对着看" },
 } as const
+
+type NavItem = TocItem & { no?: string }
 
 export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyData }) {
 	const router = useRouter()
@@ -135,15 +141,16 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 
 	// ---------------------------------------------------------------- 目录
 
-	const toc: TocItem[] = useMemo(() => {
+	const toc: NavItem[] = useMemo(() => {
 		if (week) {
-			return week.steps.map((s) => ({ id: `step-${s.id}`, text: `${s.label} ${s.title}`, level: 3 }))
+			return week.steps.map((s) => ({
+				id: `step-${s.id}`,
+				text: s.title,
+				level: 3,
+				no: s.label.replace(/^步骤\s*/, ""),
+			}))
 		}
-		return [
-			...data.tocIntro,
-			{ id: "weeks", text: "全部周次", level: 2 },
-			...data.tocAppendix,
-		]
+		return [...data.tocIntro, { id: "weeks", text: "全部周次", level: 2 }, ...data.tocAppendix]
 	}, [week, data])
 
 	const [active, setActive] = useState("")
@@ -164,29 +171,28 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 	}, [toc])
 
 	const nav = (
-		<ul className="m-0 list-none p-0 text-sm">
-			{toc.map((t) => (
-				<li key={t.id}>
+		<>
+			<div className="study-toc-title">{week ? "本周步骤" : "目录"}</div>
+			<nav className="study-toc-list">
+				{toc.map((t) => (
 					<a
+						key={t.id}
 						href={`#${t.id}`}
 						onClick={() => setActive(t.id)}
-						className={`block truncate rounded px-2 py-1.5 transition-colors ${
-							active === t.id
-								? "bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400"
-								: "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-						}`}
+						className={`study-toc-link${active === t.id ? " is-active" : ""}`}
 						title={t.text}
 					>
-						{t.text}
+						{t.no && <span className="study-toc-no">{t.no}</span>}
+						<span className="study-toc-text">{t.text}</span>
 					</a>
-				</li>
-			))}
-		</ul>
+				))}
+			</nav>
+		</>
 	)
 
 	const headerExtra = (
-		<span className="inline-flex items-center gap-2">
-			<span className="study-progress-text">
+		<span className="study-actions">
+			<span className="study-progress-chip">
 				已完成 {doneTotal}/{data.totalSteps}
 			</span>
 			<Button size="small" onClick={toggleAll} disabled={!allFoldKeys.length}>
@@ -203,7 +209,7 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 	return (
 		<AdminPage
 			title={
-				<span className="inline-flex items-center gap-2">
+				<span className="study-title">
 					{week && (
 						<button
 							type="button"
@@ -215,7 +221,7 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 							←
 						</button>
 					)}
-					<span>{doc.icon}</span>
+					<span className="study-title-icon">{doc.icon}</span>
 					<span>{week ? `第 ${week.n} 周 · ${week.title}` : doc.title}</span>
 				</span>
 			}
@@ -223,39 +229,30 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 			extra={headerExtra}
 		>
 			<style>{STUDY_CSS}</style>
-			<div className="study-doc flex items-start gap-6">
-				<nav className="sticky top-4 hidden max-h-[calc(100vh-7rem)] w-60 shrink-0 overflow-y-auto border-r border-zinc-200 pr-3 dark:border-zinc-800 xl:block">
-					<div className="mb-2 px-2 text-xs font-medium text-zinc-400">{week ? "本周步骤" : "目录"}</div>
-					{nav}
-				</nav>
-				<article className="min-w-0 flex-1">
-					<details className="mb-4 rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800 xl:hidden">
-						<summary className="cursor-pointer text-sm text-zinc-600 dark:text-zinc-400">{week ? "本周步骤" : "目录"}</summary>
-						<div className="mt-2">{nav}</div>
-					</details>
+			<div className="study-doc">
+				<div className="study-layout">
+					<aside className="study-toc">{nav}</aside>
+					<article className="study-content">
+						<details className="study-mobile-toc">
+							<summary>{week ? "本周步骤" : "目录"}</summary>
+							<div className="study-mobile-toc-body">{nav}</div>
+						</details>
 
-					{week ? (
-						<WeekView
-							week={week}
-							progress={progress}
-							onToggle={toggleStep}
-							renderParts={renderParts}
-							onBack={backToOverview}
-							prev={data.weeks[data.weeks.findIndex((w) => w.n === week.n) - 1]}
-							next={data.weeks[data.weeks.findIndex((w) => w.n === week.n) + 1]}
-							onGo={goWeek}
-						/>
-					) : (
-						<Overview
-							data={data}
-							pct={pct}
-							doneTotal={doneTotal}
-							renderParts={renderParts}
-							doneOf={doneOf}
-							onOpen={goWeek}
-						/>
-					)}
-				</article>
+						{week ? (
+							<WeekView
+								week={week}
+								progress={progress}
+								onToggle={toggleStep}
+								renderParts={renderParts}
+								prev={data.weeks[data.weeks.findIndex((w) => w.n === week.n) - 1]}
+								next={data.weeks[data.weeks.findIndex((w) => w.n === week.n) + 1]}
+								onGo={goWeek}
+							/>
+						) : (
+							<Overview data={data} pct={pct} doneTotal={doneTotal} renderParts={renderParts} doneOf={doneOf} onOpen={goWeek} />
+						)}
+					</article>
+				</div>
 
 				{/* 长文档滚到任何位置都能一键回概览：正文顶部的按钮会滚出视口 */}
 				{week && (
@@ -298,21 +295,19 @@ function Overview({
 
 	return (
 		<>
-			<div className="study-overview-progress">
-				<div className="study-bar">
+			<div className="study-overview-top">
+				<div className="study-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
 					<div className="study-bar-fill" style={{ width: `${pct}%` }} />
 				</div>
+				<span className="study-overview-pct">
+					{doneTotal}/{data.totalSteps} 步
+				</span>
 			</div>
 
-			<div className="max-w-[860px]">{renderParts(data.intro, "intro")}</div>
+			<div className="study-flow">{renderParts(data.intro, "intro")}</div>
 
-			<div id="weeks" className="study-weeks">
-				<div className="study-section-title">
-					全部周次
-					<span className="study-progress-text ml-2">
-						{doneTotal}/{data.totalSteps}
-					</span>
-				</div>
+			<section id="weeks">
+				<h2 className="study-section-title">全部周次</h2>
 				{groups.map((g) => (
 					<div key={g.stage || "all"} className="study-stage">
 						<div className="study-stage-name">{g.stage || "主线"}</div>
@@ -321,18 +316,22 @@ function Overview({
 								const done = doneOf(w)
 								return (
 									<button key={w.n} type="button" className="study-week-row" onClick={() => onOpen(w.n)}>
-										<span className="study-week-no">第 {w.n} 周</span>
+										<span className={`study-week-no${done === w.steps.length && done > 0 ? " is-done" : ""}`}>
+											{String(w.n).padStart(2, "0")}
+										</span>
 										<span className="study-week-main">
 											<span className="study-week-title">{w.title}</span>
 											{w.goal && <span className="study-week-goal">{w.goal}</span>}
 										</span>
-										<span className="study-week-meta">
-											{done > 0 && (
-												<span className="study-week-done">
+										<span className="study-week-side">
+											{done > 0 ? (
+												<span className="study-week-count is-done">
 													{done}/{w.steps.length}
 												</span>
+											) : (
+												<span className="study-week-count">{w.steps.length} 步</span>
 											)}
-											<span>{w.steps.length} 步</span>
+											<span className="study-week-arrow">→</span>
 										</span>
 									</button>
 								)
@@ -340,9 +339,9 @@ function Overview({
 						</div>
 					</div>
 				))}
-			</div>
+			</section>
 
-			<div className="max-w-[860px]">{renderParts(data.appendix, "appendix")}</div>
+			<div className="study-flow">{renderParts(data.appendix, "appendix")}</div>
 		</>
 	)
 }
@@ -354,7 +353,6 @@ function WeekView({
 	progress,
 	onToggle,
 	renderParts,
-	onBack,
 	prev,
 	next,
 	onGo,
@@ -363,7 +361,6 @@ function WeekView({
 	progress: Record<string, boolean>
 	onToggle: (id: string) => void
 	renderParts: (parts: StudyPart[], scope: string) => ReactNode
-	onBack: () => void
 	prev?: StudyWeek
 	next?: StudyWeek
 	onGo: (n: number | null) => void
@@ -371,17 +368,18 @@ function WeekView({
 	const done = week.steps.filter((s) => progress[s.id]).length
 
 	return (
-		<>
-			<div className="mb-3 flex items-center gap-3">
-				<Button size="small" onClick={onBack}>
-					← 全部周次
-				</Button>
-				<span className="study-progress-text">
-					本周 {done}/{week.steps.length} 步
+		<div className="study-week">
+			<div className="study-week-head">
+				<p className="study-week-goal">
+					<span className="study-week-goal-label">本周目标</span>
+					{week.goal || "按步骤完成本周任务，最后过一遍验收清单。"}
+				</p>
+				<span className="study-week-count">
+					{done}/{week.steps.length} 步
 				</span>
 			</div>
 
-			<div className="max-w-[860px]">{renderParts(week.parts, `w${week.n}`)}</div>
+			{week.parts.length > 0 && <div className="study-flow">{renderParts(week.parts, `w${week.n}`)}</div>}
 
 			<div className="study-steps">
 				{week.steps.map((s) => {
@@ -389,9 +387,11 @@ function WeekView({
 					return (
 						<section key={s.id} id={`step-${s.id}`} className={`study-step${isDone ? " is-done" : ""}`}>
 							<div className="study-step-head">
-								<Checkbox checked={isDone} onChange={() => onToggle(s.id)} aria-label={`标记${s.label}完成`} />
-								<span className="study-step-label">{s.label}</span>
+								<span className="study-step-no">{s.label.replace(/^步骤\s*/, "")}</span>
 								<h4 className="study-step-title">{s.title}</h4>
+								<Checkbox className="study-step-check" checked={isDone} onChange={() => onToggle(s.id)}>
+									{isDone ? "已完成" : "完成"}
+								</Checkbox>
 							</div>
 							<div className="study-step-body">{renderParts(s.parts, `s${s.id}`)}</div>
 						</section>
@@ -399,25 +399,31 @@ function WeekView({
 				})}
 			</div>
 
-			<div className="max-w-[860px]">{renderParts(week.outro, `o${week.n}`)}</div>
+			{week.outro.length > 0 && <div className="study-flow study-week-outro">{renderParts(week.outro, `o${week.n}`)}</div>}
 
 			<nav className="study-pager">
 				{prev ? (
-					<Button onClick={() => onGo(prev.n)}>
-						← 第 {prev.n} 周 · {prev.title}
-					</Button>
+					<button type="button" className="study-pager-btn" onClick={() => onGo(prev.n)}>
+						<span className="study-pager-dir">上一周</span>
+						<span className="study-pager-title">
+							第 {prev.n} 周 · {prev.title}
+						</span>
+					</button>
 				) : (
 					<span />
 				)}
 				{next ? (
-					<Button type="primary" onClick={() => onGo(next.n)}>
-						第 {next.n} 周 · {next.title} →
-					</Button>
+					<button type="button" className="study-pager-btn is-next" onClick={() => onGo(next.n)}>
+						<span className="study-pager-dir">下一周</span>
+						<span className="study-pager-title">
+							第 {next.n} 周 · {next.title}
+						</span>
+					</button>
 				) : (
 					<span />
 				)}
 			</nav>
-		</>
+		</div>
 	)
 }
 
@@ -426,81 +432,144 @@ function WeekView({
 /**
  * 阅读区样式（只作用于 `.study-doc`，不动全局 MD_BODY_CSS）。
  *
- * 三块：正文排版 / 折叠块 / 步骤与周列表；末尾是 highlight.js 的 token 配色
- * （不引它的主题 CSS：主题文件是全局 `.hljs` 选择器，会污染笔记页，而且深浅色要各引一份）。
+ * 结构上只留一层盒子：卡片（步骤 / 周行）之外不再套边框；折叠区是卡片内的分隔行。
+ * 颜色一律 currentColor + 半透明灰，`--card` 是唯一需要区分深浅色的变量。
  */
 const STUDY_CSS = `
-.study-doc{--line:rgba(128,128,128,.22);--soft:rgba(128,128,128,.08);--code:rgba(128,128,128,.1);--accent:#1677ff}
+.study-doc{
+  --line:rgba(128,128,128,.18);
+  --line-strong:rgba(128,128,128,.3);
+  --soft:rgba(128,128,128,.06);
+  --code:rgba(128,128,128,.09);
+  --card:#ffffff;
+  --accent:#1677ff;
+  --ok:#237804;
+}
+.dark .study-doc{
+  --line:rgba(255,255,255,.12);
+  --line-strong:rgba(255,255,255,.22);
+  --soft:rgba(255,255,255,.06);
+  --code:rgba(255,255,255,.07);
+  --card:#1f1f1f;
+  --ok:#95de64;
+}
+
+/* ---- 布局 ---- */
+.study-layout{display:flex;align-items:flex-start;gap:34px}
+.study-toc{position:sticky;top:16px;flex:none;width:236px;max-height:calc(100vh - 7rem);overflow-y:auto;padding-right:18px;border-right:1px solid var(--line)}
+.study-toc-title{font-size:11px;font-weight:600;letter-spacing:.09em;color:rgba(128,128,128,.9);padding:0 10px;margin-bottom:10px}
+.study-toc-list{display:flex;flex-direction:column;gap:1px}
+.study-toc-link{display:flex;align-items:baseline;gap:8px;padding:7px 10px;border-radius:8px;border-left:2px solid transparent;color:inherit;opacity:.68;text-decoration:none;font-size:13px;line-height:1.5;transition:background .12s,opacity .12s,color .12s}
+.study-toc-link:hover{background:var(--soft);opacity:1}
+.study-toc-link.is-active{opacity:1;color:var(--accent);background:rgba(22,119,255,.08);border-left-color:var(--accent)}
+.study-toc-no{flex:none;min-width:24px;font-size:11px;font-variant-numeric:tabular-nums;opacity:.65}
+.study-toc-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.study-content{min-width:0;flex:1}
+.study-mobile-toc{display:none;margin-bottom:18px;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.study-mobile-toc summary{cursor:pointer;font-size:13px;opacity:.75}
+.study-mobile-toc-body{padding-top:10px}
+@media(max-width:1279px){
+  .study-toc{display:none}
+  .study-mobile-toc{display:block}
+}
+
+/* ---- 标题区 ---- */
+.study-title{display:inline-flex;align-items:center;gap:10px}
+.study-title-icon{font-size:1.1em}
+.study-actions{display:inline-flex;align-items:center;gap:10px}
+.study-progress-chip{font-size:12px;color:rgba(128,128,128,1);background:var(--soft);border-radius:999px;padding:3px 10px;white-space:nowrap}
+
+/* ---- 正文排版 ---- */
 .study-doc .md-body{font-size:15.5px;line-height:1.85;letter-spacing:.005em;max-width:860px}
-.study-doc .md-body h2{font-size:1.5em;font-weight:650;letter-spacing:-.01em;margin:2.4em 0 .8em;padding-bottom:.35em;border-bottom:1px solid var(--line)}
-.study-doc .md-body h2:first-child{margin-top:.4em}
-.study-doc .md-body h3{font-size:1.16em;font-weight:650;margin:1.9em 0 .55em}
-.study-doc .md-body h4{font-size:1em;font-weight:650;margin:1.5em 0 .45em}
+.study-doc .md-body h2{font-size:1.42em;font-weight:650;letter-spacing:-.01em;margin:2.2em 0 .7em;padding-bottom:.3em;border-bottom:1px solid var(--line)}
+.study-doc .md-body h2:first-child{margin-top:.3em}
+.study-doc .md-body h3{font-size:1.14em;font-weight:650;margin:1.8em 0 .5em}
+.study-doc .md-body h4{font-size:1em;font-weight:650;margin:1.4em 0 .4em}
 .study-doc .md-body p{margin:.7em 0}
-.study-doc .md-body ul,.study-doc .md-body ol{padding-left:1.5em;margin:.6em 0}
-.study-doc .md-body li{margin:.32em 0}
+.study-doc .md-body ul,.study-doc .md-body ol{padding-left:1.45em;margin:.55em 0}
+.study-doc .md-body li{margin:.3em 0}
 .study-doc .md-body li>p{margin:.2em 0}
 .study-doc .md-body strong{font-weight:650}
-.study-doc .md-body code{background:var(--code);padding:.18em .42em;border-radius:5px;font-size:.875em;font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+.study-doc .md-body code{background:var(--code);padding:.16em .4em;border-radius:5px;font-size:.875em;font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
 .study-doc .md-body pre{background:var(--code);border:1px solid var(--line);padding:14px 16px;border-radius:10px;overflow:auto;margin:.9em 0;line-height:1.62}
 .study-doc .md-body pre code{background:none;padding:0;font-size:.86em}
-.study-doc .md-body blockquote{margin:1em 0;padding:.6em 1em;border-left:3px solid rgba(128,128,128,.5);background:var(--soft);border-radius:0 8px 8px 0}
-.study-doc .md-body blockquote p{margin:.2em 0}
-.study-doc .md-body table{width:100%;border-collapse:collapse;margin:1em 0;font-size:.94em}
-.study-doc .md-body th,.study-doc .md-body td{border:1px solid var(--line);padding:.5em .8em;text-align:left;vertical-align:top}
+.study-doc .md-body blockquote{margin:1.1em 0;padding:12px 16px;border-left:3px solid rgba(22,119,255,.45);background:rgba(22,119,255,.05);border-radius:0 10px 10px 0}
+.study-doc .md-body blockquote p{margin:.25em 0}
+.study-doc .md-body table{width:100%;border-collapse:collapse;margin:1em 0;font-size:.93em}
+.study-doc .md-body th,.study-doc .md-body td{border:1px solid var(--line);padding:.5em .78em;text-align:left;vertical-align:top}
 .study-doc .md-body thead th{background:var(--soft);font-weight:600;white-space:nowrap}
-.study-doc .md-body tbody tr:nth-child(2n){background:rgba(128,128,128,.045)}
-.study-doc .md-body hr{border:none;border-top:1px solid var(--line);margin:2.2em 0}
+.study-doc .md-body tbody tr:nth-child(2n){background:rgba(128,128,128,.04)}
+.study-doc .md-body hr{border:none;border-top:1px solid var(--line);margin:2em 0}
 .study-doc .md-body a{color:var(--accent);text-decoration:none}
 .study-doc .md-body a:hover{text-decoration:underline}
 .study-doc .md-body img{max-width:100%;border-radius:8px}
 .study-doc .md-body h2,.study-doc .md-body h3{scroll-margin-top:76px}
 
-/* ---- 折叠块 ---- */
-.study-fold{margin:1em 0;border:1px solid var(--line);border-radius:10px;background:rgba(128,128,128,.035);overflow:hidden}
-.study-fold-head{display:flex;align-items:center;gap:.6em;width:100%;padding:.7em .9em;background:none;border:0;cursor:pointer;text-align:left;color:inherit;font-size:14px;line-height:1.5}
-.study-fold-head:hover{background:rgba(128,128,128,.06)}
-.study-fold-tag{flex:none;border-radius:999px;padding:.1em .6em;font-size:12px;font-weight:600;border:1px solid transparent}
-.study-fold-hint .study-fold-tag{color:#0958d9;background:rgba(22,119,255,.1);border-color:rgba(22,119,255,.25)}
-.study-fold-solution .study-fold-tag{color:#237804;background:rgba(82,196,26,.12);border-color:rgba(82,196,26,.28)}
-.study-fold-error .study-fold-tag{color:#ad4e00;background:rgba(250,140,22,.12);border-color:rgba(250,140,22,.3)}
-.study-fold-title{flex:1;min-width:0;color:rgba(128,128,128,1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.study-fold-arrow{flex:none;font-size:12px;color:var(--accent)}
-.study-fold-body{padding:.2em 1em 1em;border-top:1px dashed var(--line);margin-top:.1em}
-.study-fold-body>*:first-child{margin-top:.8em}
+/* ---- 折叠行（卡片内分隔行，不再套盒子） ---- */
+.study-fold{margin:0;padding:0;border:0;background:none}
+.study-fold-head{display:flex;align-items:center;gap:10px;width:100%;padding:11px 0;border:0;border-top:1px solid var(--line);background:none;cursor:pointer;text-align:left;color:inherit;font-size:13.5px;line-height:1.5}
+.study-fold:first-child .study-fold-head{border-top:0}
+.study-fold-head:hover .study-fold-title{opacity:1;color:var(--accent)}
+.study-fold-tag{flex:none;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:600;border:1px solid transparent;letter-spacing:.02em}
+.study-fold-hint .study-fold-tag{color:#0958d9;background:rgba(22,119,255,.1);border-color:rgba(22,119,255,.22)}
+.study-fold-solution .study-fold-tag{color:#237804;background:rgba(82,196,26,.12);border-color:rgba(82,196,26,.26)}
+.study-fold-error .study-fold-tag{color:#ad4e00;background:rgba(250,140,22,.12);border-color:rgba(250,140,22,.28)}
+.study-fold-title{flex:1;min-width:0;opacity:.72;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .12s,opacity .12s}
+.study-fold-arrow{flex:none;font-size:12px;color:var(--accent);opacity:.85}
+.study-fold-body{padding:2px 0 12px}
 
 /* ---- 概览 ---- */
-.study-overview-progress{display:flex;align-items:center;gap:.75em;margin:.4em 0 1.4em;max-width:860px}
-.study-bar{flex:1;height:6px;border-radius:999px;background:rgba(128,128,128,.18);overflow:hidden}
+.study-overview-top{display:flex;align-items:center;gap:14px;max-width:900px;margin:0 0 26px}
+.study-bar{flex:1;height:6px;border-radius:999px;background:rgba(128,128,128,.16);overflow:hidden}
 .study-bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#1677ff,#52c41a);transition:width .3s}
-.study-progress-text{font-size:12px;color:rgba(128,128,128,1);white-space:nowrap}
-.study-weeks{margin:2.4em 0 2em;max-width:860px}
-.study-section-title{font-size:1.15em;font-weight:650;margin-bottom:.8em}
-.study-stage{margin-bottom:1.4em}
-.study-stage-name{font-size:12px;font-weight:600;letter-spacing:.04em;color:rgba(128,128,128,1);margin:.2em 0 .6em;padding-left:.2em}
-.study-week-list{display:flex;flex-direction:column;gap:.5em}
-.study-week-row{display:flex;align-items:center;gap:.9em;width:100%;text-align:left;padding:.75em .9em;border:1px solid var(--line);border-radius:10px;background:rgba(128,128,128,.03);cursor:pointer;color:inherit;transition:border-color .15s,background .15s}
-.study-week-row:hover{border-color:rgba(22,119,255,.45);background:rgba(22,119,255,.06)}
-.study-week-no{flex:none;font-size:12px;font-weight:600;color:var(--accent);min-width:4.2em}
-.study-week-main{display:flex;flex-direction:column;gap:.15em;min-width:0;flex:1}
-.study-week-title{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.study-week-goal{font-size:12px;color:rgba(128,128,128,1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.study-week-meta{flex:none;display:inline-flex;gap:.6em;align-items:center;font-size:12px;color:rgba(128,128,128,1)}
-.study-week-done{color:#237804;background:rgba(82,196,26,.14);border-radius:999px;padding:.05em .5em}
+.study-overview-pct{font-size:12px;color:rgba(128,128,128,1);white-space:nowrap}
+.study-flow{max-width:860px}
+.study-section-title{display:flex;align-items:center;gap:12px;font-size:15px;font-weight:600;margin:40px 0 18px;scroll-margin-top:76px}
+.study-section-title::after{content:"";flex:1;height:1px;background:var(--line)}
+.study-stage{margin-bottom:26px}
+.study-stage-name{display:flex;align-items:center;gap:12px;font-size:11.5px;font-weight:600;letter-spacing:.08em;color:rgba(128,128,128,.95);margin:0 0 10px}
+.study-stage-name::after{content:"";flex:1;height:1px;background:var(--line)}
+.study-week-list{display:flex;flex-direction:column;gap:10px;max-width:900px}
+.study-week-row{display:flex;align-items:center;gap:14px;width:100%;padding:13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--card);cursor:pointer;text-align:left;color:inherit;transition:border-color .16s,box-shadow .16s,transform .16s}
+.study-week-row:hover{border-color:rgba(22,119,255,.45);box-shadow:0 6px 18px rgba(0,0,0,.07);transform:translateY(-1px)}
+.dark .study-week-row:hover{box-shadow:none}
+.study-week-no{flex:none;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:11px;background:var(--soft);color:var(--accent);font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
+.study-week-no.is-done{background:rgba(82,196,26,.14);color:var(--ok)}
+.study-week-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.study-week-title{font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.study-week-goal{font-size:12.5px;opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.study-week-side{flex:none;display:flex;align-items:center;gap:10px;font-size:12px;color:rgba(128,128,128,1)}
+.study-week-count.is-done{color:var(--ok);background:rgba(82,196,26,.14);border-radius:999px;padding:1px 8px}
+.study-week-arrow{color:var(--accent);opacity:0;transform:translateX(-4px);transition:.16s;font-size:14px}
+.study-week-row:hover .study-week-arrow{opacity:1;transform:none}
 
-/* ---- 步骤 ---- */
-.study-steps{display:flex;flex-direction:column;gap:1.6em;margin-top:1.6em;max-width:900px}
-.study-step{border:1px solid var(--line);border-left:3px solid rgba(128,128,128,.35);border-radius:10px;padding:1em 1.2em 1.2em;scroll-margin-top:76px;transition:border-color .2s}
-.study-step.is-done{border-left-color:#52c41a;background:rgba(82,196,26,.045)}
-.study-step-head{display:flex;align-items:center;gap:.6em}
-.study-step-label{font-size:12px;font-weight:600;color:var(--accent);white-space:nowrap}
-.study-step-title{margin:0;font-size:1.05em;font-weight:650;line-height:1.5}
-.study-step.is-done .study-step-title{color:rgba(128,128,128,1)}
-.study-step-body{margin-top:.2em}
-.study-pager{display:flex;justify-content:space-between;gap:1em;margin:2.6em 0 1em;max-width:900px}
+/* ---- 单周 ---- */
+.study-week-head{display:flex;align-items:flex-start;gap:16px;max-width:900px;padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:22px}
+.study-week-goal{flex:1;margin:0;font-size:14px;line-height:1.75;opacity:.92}
+.study-week-goal-label{display:inline-block;margin-right:8px;padding:1px 7px;border-radius:6px;background:rgba(22,119,255,.1);color:var(--accent);font-size:11px;font-weight:600;letter-spacing:.04em;vertical-align:1px}
+.study-week-head .study-week-count{flex:none;font-size:12px;color:rgba(128,128,128,1);padding-top:3px;white-space:nowrap}
+.study-steps{display:flex;flex-direction:column;gap:18px;max-width:900px;margin-top:22px}
+.study-step{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.04);scroll-margin-top:76px;transition:border-color .18s}
+.dark .study-step{box-shadow:none}
+.study-step:hover{border-color:var(--line-strong)}
+.study-step.is-done{border-color:rgba(82,196,26,.45)}
+.study-step-head{display:flex;align-items:center;gap:10px;padding:14px 18px 0}
+.study-step-no{flex:none;display:inline-flex;align-items:center;justify-content:center;height:24px;min-width:40px;padding:0 8px;border-radius:7px;background:rgba(22,119,255,.1);color:var(--accent);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.study-step-title{flex:1;margin:0;font-size:15.5px;font-weight:600;line-height:1.5}
+.study-step-check{flex:none;font-size:12px;opacity:.8}
+.study-step-check .ant-checkbox-wrapper,.study-step-check.ant-checkbox-wrapper{font-size:12px}
+.study-step-body{padding:6px 18px 14px}
+.study-step-body .md-body{font-size:14.5px;line-height:1.8}
+.study-week-outro{margin-top:26px}
+.study-pager{display:flex;justify-content:space-between;gap:14px;max-width:900px;margin:34px 0 8px}
+.study-pager-btn{display:flex;flex-direction:column;gap:2px;align-items:flex-start;max-width:46%;padding:11px 16px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:inherit;cursor:pointer;text-align:left;transition:border-color .16s}
+.study-pager-btn:hover{border-color:rgba(22,119,255,.45)}
+.study-pager-btn.is-next{align-items:flex-end;text-align:right;margin-left:auto}
+.study-pager-dir{font-size:11px;letter-spacing:.06em;color:rgba(128,128,128,1)}
+.study-pager-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 
 /* ---- 返回入口（头部按钮 + 悬浮球） ---- */
-.study-back-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;border:1px solid var(--line);background:rgba(128,128,128,.06);color:inherit;font-size:15px;line-height:1;cursor:pointer;transition:border-color .15s,color .15s}
+.study-back-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:inherit;font-size:15px;line-height:1;cursor:pointer;transition:border-color .15s,color .15s}
 .study-back-btn:hover{border-color:rgba(22,119,255,.5);color:var(--accent)}
 .study-fab{position:fixed;right:24px;bottom:24px;z-index:30;display:inline-flex;align-items:center;gap:.35em;padding:.55em 1em;border-radius:999px;border:1px solid rgba(22,119,255,.4);background:#1677ff;color:#fff;font-size:13px;line-height:1.4;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.2)}
 .study-fab:hover{background:#0958d9}
