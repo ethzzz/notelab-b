@@ -7,7 +7,7 @@
 // 视觉原则（2026-10-18 重排）：**只允许一层盒子**。
 //   步骤卡片 = 唯一的容器；思路/代码/报错 = 卡片内的分隔行（不是又一个盒子）；
 //   代码块自带边框，所以它外面的折叠区必须保持无边框，否则就是三层嵌套。
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button, Checkbox } from "antd"
@@ -154,6 +154,8 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 	}, [week, data])
 
 	const [active, setActive] = useState("")
+	const tocRef = useRef<HTMLElement | null>(null)
+
 	useEffect(() => {
 		const els = toc.map((t) => document.getElementById(t.id)).filter((el): el is HTMLElement => el !== null)
 		if (!els.length) return
@@ -169,6 +171,19 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 		els.forEach((el) => io.observe(el))
 		return () => io.disconnect()
 	}, [toc])
+
+	// 高亮项如果滚出目录可视区，把目录自己滚过去（不带动页面；页面上长文档一滚，目录就会「跟丢」）
+	useEffect(() => {
+		if (!active) return
+		const box = tocRef.current
+		if (!box) return
+		const link = box.querySelector<HTMLElement>(`.study-toc-link[href="#${CSS.escape(active)}"]`)
+		if (!link) return
+		const r = link.getBoundingClientRect()
+		const c = box.getBoundingClientRect()
+		if (r.top < c.top + 4) box.scrollTop -= c.top + 4 - r.top
+		else if (r.bottom > c.bottom - 4) box.scrollTop += r.bottom - c.bottom + 4
+	}, [active])
 
 	const nav = (
 		<>
@@ -231,7 +246,7 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 			<style>{STUDY_CSS}</style>
 			<div className="study-doc">
 				<div className="study-layout">
-					<aside className="study-toc">{nav}</aside>
+					<aside className="study-toc" ref={tocRef}>{nav}</aside>
 					<article className="study-content">
 						<details className="study-mobile-toc">
 							<summary>{week ? "本周步骤" : "目录"}</summary>
@@ -471,7 +486,8 @@ const STUDY_CSS = `
 
 /* ---- 布局 ---- */
 .study-layout{display:flex;align-items:flex-start;gap:34px}
-.study-toc{position:sticky;top:16px;flex:none;width:236px;max-height:calc(100vh - 7rem);overflow-y:auto;padding-right:18px;border-right:1px solid var(--line)}
+/* sticky 的 top 必须让开 56px 的固定 Header，否则滚动后目录上半截会被 Header 盖住 */
+.study-toc{position:sticky;top:72px;flex:none;width:236px;max-height:calc(100vh - 88px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding-right:18px;border-right:1px solid var(--line)}
 .study-toc-title{font-size:11px;font-weight:600;letter-spacing:.09em;color:var(--toc-sub);padding:0 10px;margin-bottom:10px}
 .study-toc-list{display:flex;flex-direction:column;gap:1px}
 .study-toc-link{display:flex;align-items:baseline;gap:8px;padding:7px 10px;border-radius:8px;border-left:2px solid transparent;color:var(--toc-text);text-decoration:none;font-size:13px;line-height:1.5;transition:background .12s,color .12s}
