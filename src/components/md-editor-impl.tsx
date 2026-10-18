@@ -196,6 +196,26 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 	 *    真正防回环靠的是两条同步里的「目标已到位就跳过」短路，锁只防同一帧的自激。
 	 */
 	const syncLockRef = useRef(false)
+	/**
+	 * 当前由**谁**主导滚动（"cm" = 用户正在滚编辑器，"pv" = 正在滚预览）。
+	 *
+	 * ⚠️ 这是双向同步最关键的一件事，只靠「防回环锁」不够：
+	 *    用户滚预览 → 我们程序化地滚编辑器 → 编辑器的 scroll 事件又反过来推预览 →
+	 *    两边互相拽，实测预览从 459 一路被拉回 120，编辑器从 720 掉到 52。
+	 *    所以必须区分「用户主动滚的」和「被程序带动的」：主导方的 scroll 才发起同步，
+	 *    被带动方的 scroll 事件在主导期内**直接忽略**。
+	 *    250ms 是「人停顿一下」的量级：用户换手滚另一边时，新的一侧会立刻接管。
+	 */
+	const activeSideRef = useRef<"cm" | "pv" | null>(null)
+	const activeTimerRef = useRef<number | null>(null)
+	const markActive = (side: "cm" | "pv") => {
+		activeSideRef.current = side
+		if (activeTimerRef.current) window.clearTimeout(activeTimerRef.current)
+		activeTimerRef.current = window.setTimeout(() => {
+			activeSideRef.current = null
+			activeTimerRef.current = null
+		}, 250)
+	}
 	const lockSync = () => {
 		syncLockRef.current = true
 		requestAnimationFrame(() => {
@@ -328,6 +348,7 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 			if (syncLockRef.current) return
 			const view = viewRef.current
 			if (!view) return
+			markActive("pv") // 用户正在滚预览：这一侧主导
 			// 「顶部已越过视口顶端」的最后一个块，就是当前正在看的块
 			const boxTop = box.getBoundingClientRect().top
 			let line: number | null = null
@@ -356,6 +377,9 @@ export default function MdEditor({ value, onChange, minHeight = 480, height, onU
 		if (!syncEnabled || !view || !box) return
 		const onScroll = () => {
 			if (syncLockRef.current) return
+			// 预览在主导（用户正在滚它）→ 这次编辑器滚动是被程序带动的，不要再反推回去
+			if (activeSideRef.current === "pv") return
+			markActive("cm")
 			// 顶部可见行。
 			// ⚠️ 别用 `lineBlockAtHeight(0)`：它的 height 是**相对文档顶部**的
 			//    （@codemirror/view 的 d.ts 原文：「interpreted relative to the top of the document」），
