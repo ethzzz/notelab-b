@@ -4,6 +4,7 @@ route: react
 direction: 实时
 level: L3
 weeks: 8-9
+hours: 6-8
 tags: SSE, 乐观更新, 重连, 去重
 summary: 前端接 SSE 不难，难的是断线补偿、重复消息去重、以及乐观更新失败后的回滚。
 ---

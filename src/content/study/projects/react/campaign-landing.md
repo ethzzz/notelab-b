@@ -4,6 +4,7 @@ route: react
 direction: 增长
 level: L2
 weeks: 3-4
+hours: 4-6
 tags: LCP, CLS, 图片, 埋点
 summary: 一次投放的成败在首屏两秒内决定；图片、字体、统计脚本任何一个没管好，转化就没了。
 ---

@@ -885,6 +885,14 @@ C 端的「熟练」体现在**能在匿名、弱网、手机、搜索引擎这�
 
 **统一交付标准**：375px 可用、LCP 有数据、失败有兜底、`curl` 能看到 title、发布后可回滚。
 
+**相关项目**（点开即可看完整需求与参考实现）：
+[内容列表与筛选](/admin/study/projects?p=react/content-list) ·
+[详情页与分享](/admin/study/projects?p=react/detail-share) ·
+[活动落地页](/admin/study/projects?p=react/campaign-landing) ·
+[A/B 实验与埋点](/admin/study/projects?p=react/ab-experiment) ·
+[实时评论与在线列表](/admin/study/projects?p=react/realtime-comments) ·
+[下单流程前端](/admin/study/projects?p=react/checkout-flow)
+
 ## 毕业评估（L3 rubric）
 
 | 维度 | 不合格 | 合格（L2） | 熟练（L3） | 优秀（L4） |

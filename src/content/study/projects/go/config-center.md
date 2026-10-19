@@ -4,6 +4,7 @@ route: go
 direction: 基础设施
 level: L3
 weeks: 8-9
+hours: 6-8
 tags: 热更新, 版本, 灰度, 兜底
 summary: 让配置改了立刻生效、能回滚、配置中心挂了业务还能跑——这是「基础设施」的入门题。
 ---

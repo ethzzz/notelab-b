@@ -4,6 +4,7 @@ route: java
 direction: 交易
 level: L3
 weeks: 11-13
+hours: 8-10
 tags: 预占, 超时, 幂等, 定时任务
 summary: 下单先占库存、15 分钟未支付自动释放；难点不是占，而是「释放得准、重复调用不出错」。
 ---

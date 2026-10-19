@@ -4,6 +4,7 @@ route: go
 direction: 异步
 level: L3
 weeks: 5-6
+hours: 6-8
 tags: 重试, 退避, 幂等, 死信
 summary: 一条消息至少投递一次，所以你的处理必须幂等；失败要有退避与死信，不能无限重试。
 ---

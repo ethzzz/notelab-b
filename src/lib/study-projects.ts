@@ -34,6 +34,8 @@ export type StudyProject = {
 	direction: string
 	level: string
 	weeks: string
+	/** 预计工时，如 "6-8"（小时）；空串表示未标注 */
+	hours: string
 	tags: string[]
 	summary: string
 	parts: StudyPart[]
@@ -80,6 +82,7 @@ export async function loadProjects(): Promise<StudyProject[]> {
 				direction: meta.direction || "未分类",
 				level: meta.level || "L3",
 				weeks: meta.weeks || "",
+				hours: meta.hours || "",
 				tags: (meta.tags || "")
 					.split(/[,，]/)
 					.map((s) => s.trim())

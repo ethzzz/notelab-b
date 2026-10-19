@@ -4,6 +4,7 @@ route: go
 direction: 异步
 level: L3
 weeks: 7-9
+hours: 6-8
 tags: 定时, 最小堆, 幂等, 重启恢复
 summary: 订单 30 分钟未支付要关单、券到期要提醒——「到点执行一次，且只执行一次」比想象中难。
 ---

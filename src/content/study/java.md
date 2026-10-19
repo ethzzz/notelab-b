@@ -1500,6 +1500,15 @@ throw new IllegalStateException("订单 " + id + " 当前状态 " + status + "�
 
 **已展开的场景**：#2 订单与库存 → 见下方「场景详解（模板）」，其余场景按同一格式展开（用户故事 / 契约 / 数据模型 / 验收脚本 / 参考实现）。
 
+**相关项目**（点开即可看完整需求与参考实现）：
+[订单与库存](/admin/study/projects?p=java/order-inventory) ·
+[库存预占与超时释放](/admin/study/projects?p=java/stock-reservation) ·
+[支付回调与日终对账](/admin/study/projects?p=java/payment-reconcile) ·
+[退款与分账对账](/admin/study/projects?p=java/refund-settlement) ·
+[多租户数据隔离](/admin/study/projects?p=java/multi-tenant-isolation) ·
+[审批流引擎](/admin/study/projects?p=java/approval-workflow) ·
+[百万行报表导出](/admin/study/projects?p=java/report-export)
+
 ## 场景详解（模板）：订单与库存
 
 > 这是场景库 #2 的**完整需求文档**，也是其余场景的展开模板。五段式：

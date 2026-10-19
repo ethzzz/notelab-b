@@ -4,6 +4,7 @@ route: go
 direction: 基础设施
 level: L3
 weeks: 5-8
+hours: 8-10
 tags: 鉴权, 限流, 超时, 灰度
 summary: 把「谁可以调、能调多快、超时怎么办」从业务代码里抽出来，变成一层可复用的中间件。
 ---

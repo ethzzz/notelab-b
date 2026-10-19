@@ -85,6 +85,7 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 						<Tag color="blue">{current.routeLabel}</Tag>
 						<Tag>{current.direction}</Tag>
 						<Tag color="green">{current.level}</Tag>
+						{current.hours && <Tag color="gold">约 {current.hours} 小时</Tag>}
 						{current.weeks && <span className="text-xs">对应第 {current.weeks} 周</span>}
 					</span>
 				}
@@ -198,6 +199,12 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 										<span>{p.direction}</span>
 										<span>·</span>
 										<span>{p.level}</span>
+										{p.hours && (
+											<>
+												<span>·</span>
+												<span>约 {p.hours} 小时</span>
+											</>
+										)}
 										{p.weeks && (
 											<>
 												<span>·</span>

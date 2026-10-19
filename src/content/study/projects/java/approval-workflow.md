@@ -4,6 +4,7 @@ route: java
 direction: 平台
 level: L3
 weeks: 14-16
+hours: 8-10
 tags: 状态机, 会签, 超时, 幂等
 summary: 多级审批 + 会签 + 撤回 + 超时提醒，本质是一个不能乱序、不能重复的状态机。
 ---

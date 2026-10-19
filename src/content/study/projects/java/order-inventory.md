@@ -4,6 +4,7 @@ route: java
 direction: 交易
 level: L3
 weeks: 9-12
+hours: 6-8
 tags: 事务, 幂等, 并发, 超卖
 summary: 用一条条件更新 SQL + 唯一索引，把「超卖」和「重复下单」两个经典事故堵死。
 ---

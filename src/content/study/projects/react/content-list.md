@@ -4,6 +4,7 @@ route: react
 direction: 内容
 level: L2
 weeks: 5-6
+hours: 4-6
 tags: URL 状态, 分页, 空态, 弱网
 summary: 一个「看起来最简单」的列表页，考的是 URL 即状态、三态齐全、弱网可用。
 ---

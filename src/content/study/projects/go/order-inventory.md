@@ -4,6 +4,7 @@ route: go
 direction: 交易
 level: L3
 weeks: 6-8
+hours: 6-8
 tags: 事务, 幂等, 并发, 对比 Java
 summary: 同一个业务，用 Go 再写一遍：没有注解和 AOP，事务边界与错误处理都得自己显式写出来。
 ---

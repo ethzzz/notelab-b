@@ -1054,6 +1054,15 @@ Go 的「熟练」体现在**能把并发和部署形态变成优势**。下面�
 
 **统一交付标准**：有测试（含 `-race`）、有 README、有压测或基准数据、能一键构建出 Linux 二进制。
 
+**相关项目**（点开即可看完整需求与参考实现）：
+[任务队列消费者](/admin/study/projects?p=go/task-consumer) ·
+[延迟任务与超时调度](/admin/study/projects?p=go/delay-scheduler) ·
+[开放 API 网关](/admin/study/projects?p=go/api-gateway) ·
+[配置中心](/admin/study/projects?p=go/config-center) ·
+[指标采集与聚合](/admin/study/projects?p=go/metrics-aggregation) ·
+[SSE 推送与在线状态](/admin/study/projects?p=go/sse-push) ·
+[订单与库存（Go 版）](/admin/study/projects?p=go/order-inventory)
+
 ## 毕业评估（L3 rubric）
 
 | 维度 | 不合格 | 合格（L2） | 熟练（L3） | 优秀（L4） |
