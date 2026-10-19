@@ -1498,6 +1498,132 @@ throw new IllegalStateException("订单 " + id + " 当前状态 " + status + "�
 
 **怎么用**：不必按顺序全做。学完哪个阶段，就挑「建议阶段」匹配的那一个；一个做完再换。**一个场景只考察 1–2 个点**，不要做成大杂烩。
 
+**已展开的场景**：#2 订单与库存 → 见下方「场景详解（模板）」，其余场景按同一格式展开（用户故事 / 契约 / 数据模型 / 验收脚本 / 参考实现）。
+
+## 场景详解（模板）：订单与库存
+
+> 这是场景库 #2 的**完整需求文档**，也是其余场景的展开模板。五段式：
+> **用户故事 → 接口契约 → 数据模型 → 验收脚本 → 参考实现**。
+> 判断一份场景文档合不合格：别人只看这一篇，能不能直接开工。
+
+### 一、用户故事
+
+- 作为买家，我提交订单后能拿到订单号；**网络重试不会让我被扣两次**。
+- 作为买家，库存不足时我要看到明确原因，而不是「系统错误」。
+- 作为运营，我能用一条命令验出「20 个人同时抢 10 件，最后只卖出 10 件」。
+
+### 二、接口契约
+
+| 方法 | 路径 | 入参 | 成功 | 失败 |
+|---|---|---|---|---|
+| POST | `/api/orders` | `{sku, qty, requestId}` | 201 `{orderId, status}` | 400 参数非法 / 409 库存不足 / 409 重复提交（返回原 orderId） |
+| GET | `/api/orders/{id}` | — | 200 `{id, sku, qty, status, createdAt}` | 404 |
+| GET | `/api/stock/{sku}` | — | 200 `{sku, qty}` | 404 |
+
+**契约先行的三条规矩**：
+
+1. 错误体统一 `{error: string}`，前端只认这个字段；
+2. 幂等键由**客户端生成**（`requestId`），服务端只负责去重；
+3. `409` 有两种语义（库存不足 / 重复提交），用 `error` 文案区分，不用状态码硬凑。
+
+### 三、数据模型
+
+```sql
+CREATE TABLE stock (
+  sku  VARCHAR(32) PRIMARY KEY,
+  qty  INT NOT NULL,
+  version INT NOT NULL DEFAULT 0      -- 乐观锁备用；本场景用条件更新即可
+);
+
+CREATE TABLE orders (
+  id         BIGINT PRIMARY KEY AUTO_INCREMENT,
+  request_id VARCHAR(64) NOT NULL,
+  sku        VARCHAR(32) NOT NULL,
+  qty        INT NOT NULL,
+  status     VARCHAR(16) NOT NULL,     -- CREATED / CANCELLED
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_request_id (request_id),   -- 幂等的唯一保险
+  KEY idx_sku (sku)
+);
+```
+
+**为什么幂等靠唯一索引而不是「先查再插」**：并发下两个请求会同时查到「不存在」，然后都插入。唯一索引 + 捕获 `DuplicateKeyException` 是唯一可靠的做法。
+
+### 四、验收脚本
+
+```bash
+BASE=http://127.0.0.1:8080
+
+# 1) 幂等：同一 requestId 打两次，必须返回同一个 orderId
+curl -s -X POST $BASE/api/orders -H 'Content-Type: application/json' \
+  -d '{"sku":"A","qty":1,"requestId":"r-1"}'
+curl -s -X POST $BASE/api/orders -H 'Content-Type: application/json' \
+  -d '{"sku":"A","qty":1,"requestId":"r-1"}'      # 期望：同一 orderId
+
+# 2) 超卖：20 并发抢 10 件，成功数必须等于库存
+seq 20 | xargs -P20 -I{} curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST $BASE/api/orders -H 'Content-Type: application/json' \
+  -d '{"sku":"A","qty":1,"requestId":"r-{}"}' | sort | uniq -c
+# 期望：10 个 201，10 个 409
+
+# 3) 库存不足
+curl -s -X POST $BASE/api/orders -H 'Content-Type: application/json' \
+  -d '{"sku":"A","qty":999,"requestId":"r-999"}'   # 期望 409 + 库存不足
+```
+
+### 五、参考实现（先自己写，写完再展开）
+
+:::solution 扣库存 + 幂等 + 事务
+```java
+// 条件更新：把「扣减」和「够不够」合成一条 SQL，天然防超卖
+@Update("UPDATE stock SET qty = qty - #{qty} WHERE sku = #{sku} AND qty >= #{qty}")
+int deduct(@Param("sku") String sku, @Param("qty") int qty);
+```
+```java
+@Transactional(rollbackFor = Exception.class)
+public Order create(String sku, int qty, String requestId) {
+    if (stockMapper.deduct(sku, qty) == 0) {
+        throw new InsufficientStockException();   // 影响行数 0 = 库存不够
+    }
+    Order o = new Order(null, requestId, sku, qty, "CREATED", null);
+    orderMapper.insert(o);                        // uk_request_id 兜底幂等
+    return o;
+}
+```
+```java
+@PostMapping("/api/orders")
+public ResponseEntity<?> create(@RequestBody @Valid CreateOrderReq req) {
+    try {
+        Order o = orderService.create(req.sku(), req.qty(), req.requestId());
+        return ResponseEntity.status(201).body(Map.of("orderId", o.getId(), "status", o.getStatus()));
+    } catch (DuplicateKeyException e) {
+        // 已经下过单：返回原订单，而不是报错
+        Order old = orderMapper.findByRequestId(req.requestId());
+        return ResponseEntity.ok(Map.of("orderId", old.getId(), "status", old.getStatus()));
+    } catch (InsufficientStockException e) {
+        return ResponseEntity.status(409).body(Map.of("error", "库存不足"));
+    }
+}
+```
+:::
+
+:::hint 三个决策点，写完必须能答上来
+1. 为什么用「条件更新」而不是「先查库存再扣」？（后者在并发下必超卖）
+2. 为什么幂等靠唯一索引，而不是先 `select` 再 `insert`？
+3. 事务里如果先插订单再扣库存，失败时会发生什么？（顺序反过来更安全：先扣库存，失败就回滚）
+:::
+
+### 六、评分点（自己给自己打分）
+
+| 项 | 合格 | 熟练 |
+|---|---|---|
+| 幂等 | 同一 requestId 两次不重复扣 | 并发下也不重复（有唯一索引 + 捕获异常） |
+| 超卖 | 能跑通串行场景 | 20 并发下成功数 = 库存 |
+| 可观测 | 有日志 | 能按 requestId 串起一次下单 |
+| 测试 | 正常路径 | 覆盖并发、库存不足、重复提交 |
+
+---
+
 ## 毕业评估（L3 rubric）
 
 不看你「学完了没有」，看你能不能**在不看教程的情况下**做到：
