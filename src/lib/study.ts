@@ -22,24 +22,24 @@ export type StudyDoc = {
 export const STUDY_DOCS: Record<string, StudyDoc> = {
 	java: {
 		lang: "java",
-		title: "Java · 从零到独立开发",
-		subtitle: "16 周，从语法到上线：每周有步骤、有思路、有代码、有报错对照",
+		title: "Java · 熟练路线",
+		subtitle: "17 周：语言内核 → 工程与数据 → 框架与服务 → 交付 → JVM 诊断",
 		icon: "☕",
 		track: "java",
 		trackLabel: "Java 课程（带随堂测试）",
 	},
 	go: {
 		lang: "go",
-		title: "Go · 8 周路线",
-		subtitle: "Java 之后的第二语言：切片/接口/并发/服务/部署，每步都有代码",
+		title: "Go · 熟练路线",
+		subtitle: "9 周：切片/接口/并发/服务/交付，外加 GMP 调度与 GC 观察",
 		icon: "🐹",
 		track: "go",
 		trackLabel: "Go 课程",
 	},
 	react: {
 		lang: "react",
-		title: "React · 8 周（C 端）",
-		subtitle: "面向 notelab-c：匿名访问、首屏预算、URL 即状态、SEO 与上线",
+		title: "React · 熟练路线（C 端）",
+		subtitle: "9 周：渲染策略、首屏预算、URL 状态、SEO 与并发渲染",
 		icon: "⚛️",
 		track: "typescript",
 		trackLabel: "TypeScript 课程（打底）",
@@ -88,6 +88,8 @@ export type StudyData = {
 	intro: StudyPart[]
 	weeks: StudyWeek[]
 	appendix: StudyPart[]
+	/** 阶段说明（key = 阶段标题）：写在 `## 阶段X` 与第一个 `### 第 N 周` 之间的内容 */
+	stageIntros: Record<string, StudyPart[]>
 	tocIntro: TocItem[]
 	tocAppendix: TocItem[]
 	totalSteps: number

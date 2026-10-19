@@ -111,7 +111,7 @@ const STEP_RE = /^####\s+步骤\s*([0-9]+(?:\.[0-9]+)*)?\s*(.+?)\s*$/
 const FOLD_RE = /^:::(hint|solution|error)\s*(.*)$/
 const HEADING_RE = /^#{2,3}\s+/
 
-type Mode = "intro" | "week" | "appendix"
+type Mode = "intro" | "stage" | "week" | "appendix"
 
 export function parseStudy(markdown: string): StudyData {
 	const used = new Set<string>()
@@ -121,6 +121,7 @@ export function parseStudy(markdown: string): StudyData {
 	const intro: StudyPart[] = []
 	const weeks: StudyWeek[] = []
 	const appendix: StudyPart[] = []
+	const stageIntros: Record<string, StudyPart[]> = {}
 	const tocIntro: TocItem[] = []
 	const tocAppendix: TocItem[] = []
 
@@ -128,13 +129,24 @@ export function parseStudy(markdown: string): StudyData {
 	let week: StudyWeek | null = null
 	let step: StudyStep | null = null
 	let stage = ""
+	let stageBuf: StudyPart[] = []
 	let buf: string[] = []
 	let seq = 0
 	/** 是否已经在「验收」之后：之后的段落归 week.outro，渲染在步骤下方 */
 	let inOutro = false
 
-	const target = (): StudyPart[] =>
-		step ? step.parts : week ? (inOutro ? week.outro : week.parts) : mode === "intro" ? intro : appendix
+	const target = (): StudyPart[] => {
+		if (step) return step.parts
+		if (mode === "stage") return stageBuf
+		if (week) return inOutro ? week.outro : week.parts
+		return mode === "intro" ? intro : appendix
+	}
+
+	/** 把当前阶段说明收进 map（换阶段/进入周/结束时都要调） */
+	const commitStage = () => {
+		if (stage && stageBuf.length) stageIntros[stage] = stageBuf
+		stageBuf = []
+	}
 
 	const flush = () => {
 		const text = buf.join("\n")
@@ -150,6 +162,7 @@ export function parseStudy(markdown: string): StudyData {
 		const weekMatch = line.match(WEEK_RE)
 		if (weekMatch) {
 			flush()
+			commitStage()
 			step = null
 			inOutro = false
 			const n = Number(weekMatch[1])
@@ -208,13 +221,17 @@ export function parseStudy(markdown: string): StudyData {
 			// 用命名约定判断而不是看下一个标题，是为了让「第一个阶段」也能被识别（它前面没有周）。
 			if (/^阶段/.test(text)) {
 				flush()
+				commitStage()
 				step = null
+				week = null
 				stage = text
+				mode = "stage"
 				continue
 			}
-			if (mode === "week") {
+			if (mode === "week" || mode === "stage") {
 				// 周走完之后再出现的标题 = 附录开始
 				flush()
+				commitStage()
 				step = null
 				week = null
 				mode = "appendix"
@@ -232,9 +249,10 @@ export function parseStudy(markdown: string): StudyData {
 		buf.push(line)
 	}
 	flush()
+	commitStage()
 
 	const totalSteps = weeks.reduce((sum, w) => sum + w.steps.length, 0)
-	return { intro, weeks, appendix, tocIntro, tocAppendix, totalSteps }
+	return { intro, weeks, appendix, stageIntros, tocIntro, tocAppendix, totalSteps }
 }
 
 /**

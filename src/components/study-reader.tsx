@@ -125,6 +125,7 @@ export default function StudyReader({ doc, data }: { doc: StudyDoc; data: StudyD
 		} else {
 			collect(data.intro, "intro")
 			collect(data.appendix, "appendix")
+			Object.entries(data.stageIntros).forEach(([name, parts]) => collect(parts, `st:${name}`))
 		}
 		return keys
 	}, [week, data])
@@ -348,6 +349,9 @@ function Overview({
 				{groups.map((g) => (
 					<div key={g.stage || "all"} className="study-stage">
 						<div className="study-stage-name">{g.stage || "主线"}</div>
+						{data.stageIntros[g.stage] && (
+							<div className="study-stage-intro">{renderParts(data.stageIntros[g.stage], `st:${g.stage}`)}</div>
+						)}
 						<div className="study-week-list">
 							{g.weeks.map((w) => {
 								const done = doneOf(w)
@@ -581,6 +585,12 @@ const STUDY_CSS = `
 .study-section-title{display:flex;align-items:center;gap:12px;font-size:15px;font-weight:600;margin:40px 0 18px;scroll-margin-top:76px}
 .study-section-title::after{content:"";flex:1;height:1px;background:var(--line)}
 .study-stage{margin-bottom:26px}
+.study-stage-intro{max-width:900px;margin:0 0 14px;padding:2px 0 2px 12px;border-left:2px solid var(--line-strong)}
+.study-stage-intro .md-body{font-size:13.5px;line-height:1.7;color:var(--muted)}
+.study-stage-intro .md-body p{margin:.45em 0}
+.study-stage-intro .md-body table{font-size:12.5px;margin:.5em 0}
+.study-stage-intro .md-body th,.study-stage-intro .md-body td{padding:.35em .6em}
+.study-stage-intro .md-body strong{color:inherit}
 .study-stage-name{display:flex;align-items:center;gap:12px;font-size:11.5px;font-weight:600;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
 .study-stage-name::after{content:"";flex:1;height:1px;background:var(--line)}
 .study-week-list{display:flex;flex-direction:column;gap:10px;max-width:900px}
