@@ -5,6 +5,7 @@ direction: 交易
 level: L2
 weeks: 3-4
 hours: 4-6
+requires: react:3-4
 tags: 幂等, 防重复提交, 库存展示, 错误映射
 summary: 用户手抖点两下、网络超时重试、返回再提交——前端要保证「一单就是一单」。
 ---

@@ -5,6 +5,7 @@ direction: 数据
 level: L3
 weeks: 8-9
 hours: 6-8
+requires: go:5-6
 tags: 去重, 预聚合, 批量写, 查询
 summary: 客户端埋点量大、会重复、还会补报；服务端要在写入时就聚合好，查询才能便宜。
 ---

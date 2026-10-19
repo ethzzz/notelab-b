@@ -5,6 +5,7 @@ direction: 内容
 level: L2
 weeks: 2-3
 hours: 4-6
+requires: react:1-2
 tags: SEO, OG, 404, 首屏
 summary: 每篇内容一个链接，要被搜到、分享出去有卡片、打开不白屏——这是 C 端内容的门面。
 ---

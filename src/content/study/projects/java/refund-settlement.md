@@ -5,6 +5,7 @@ direction: 资金
 level: L3
 weeks: 16-17
 hours: 8-10
+requires: java:9-12
 tags: 退款, 分账, 金额精度, 状态机
 summary: 一笔订单可能分多次退款、给多个商户分账；金额一旦用错类型，差一分钱都是事故。
 ---

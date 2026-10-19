@@ -93,6 +93,17 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 				<style>{MD_BODY_CSS}</style>
 				<style>{PROJECT_CSS}</style>
 				<div className="proj-detail">
+					{current.requires.length > 0 && (
+						<div className="proj-prereq">
+							<span className="proj-prereq-label">先修</span>
+							{current.requires.map((r) => (
+								<a key={`${r.route}-${r.from}`} className="proj-chip" href={`/admin/study/${r.route}?week=${r.from}`}>
+									{r.routeLabel} 第 {r.from}
+									{r.to !== r.from ? `–${r.to}` : ""} 周
+								</a>
+							))}
+						</div>
+					)}
 					{current.tags.length > 0 && (
 						<div className="proj-tags">
 							{current.tags.map((t) => (
@@ -274,6 +285,9 @@ const PROJECT_CSS = `
 .proj-detail{max-width:860px}
 .proj-detail .md-body{font-size:15px;line-height:1.8}
 .proj-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.proj-prereq{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+.proj-prereq-label{font-size:12px;color:#71717a}
+.dark .proj-prereq-label{color:#a1a1aa}
 .proj-fold{margin:12px 0;border:1px solid rgba(128,128,128,.22);border-radius:10px;padding:0 14px;background:rgba(128,128,128,.04)}
 .proj-fold>summary{cursor:pointer;padding:10px 0;font-size:13px;display:flex;align-items:center;gap:8px;list-style:none}
 .proj-fold>summary::-webkit-details-marker{display:none}

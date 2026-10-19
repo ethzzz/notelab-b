@@ -24,6 +24,9 @@ import type { StudyPart } from "@/lib/study"
 
 export type ProjectRoute = "java" | "go" | "react"
 
+/** 先修：指向某条路线的某一周区间，详情页渲成可点的深链 */
+export type Prereq = { route: string; routeLabel: string; from: number; to: number }
+
 export type StudyProject = {
 	/** 稳定 id：`route/slug`，用于 ?p= 深链 */
 	id: string
@@ -36,6 +39,8 @@ export type StudyProject = {
 	weeks: string
 	/** 预计工时，如 "6-8"（小时）；空串表示未标注 */
 	hours: string
+	/** 先修周次，来自 front-matter 的 `requires: java:9-12, java:5-8` */
+	requires: Prereq[]
 	tags: string[]
 	summary: string
 	parts: StudyPart[]
@@ -44,6 +49,22 @@ export type StudyProject = {
 const ROOT = path.join(process.cwd(), "src", "content", "study", "projects")
 const ROUTE_LABEL: Record<string, string> = { java: "Java", go: "Go", react: "React" }
 const ROUTE_ORDER: Record<string, number> = { java: 0, go: 1, react: 2 }
+
+/** `java:9-12, go:5-6` → [{route:java,from:9,to:12}, …]；格式不对的项忽略（不阻塞加载） */
+function parseRequires(raw: string): Prereq[] {
+	if (!raw) return []
+	const out: Prereq[] = []
+	for (const part of raw.split(/[,，]/)) {
+		const m = part.trim().match(/^([a-z]+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$/i)
+		if (!m) continue
+		const route = m[1].toLowerCase()
+		const from = Number(m[2])
+		const to = Number(m[3] ?? m[2])
+		if (!ROUTE_LABEL[route] || Number.isNaN(from) || Number.isNaN(to)) continue
+		out.push({ route, routeLabel: ROUTE_LABEL[route], from: Math.min(from, to), to: Math.max(from, to) })
+	}
+	return out
+}
 
 function parseFrontMatter(raw: string): { meta: Record<string, string>; body: string } {
 	const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
@@ -83,6 +104,7 @@ export async function loadProjects(): Promise<StudyProject[]> {
 				level: meta.level || "L3",
 				weeks: meta.weeks || "",
 				hours: meta.hours || "",
+				requires: parseRequires(meta.requires || ""),
 				tags: (meta.tags || "")
 					.split(/[,，]/)
 					.map((s) => s.trim())

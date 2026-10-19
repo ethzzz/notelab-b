@@ -5,6 +5,7 @@ direction: 增长
 level: L3
 weeks: 8-9
 hours: 4-6
+requires: react:7-8
 tags: 分桶, 埋点, 不阻塞, 去重
 summary: 两版页面分流、曝光与点击可分析；最怕的是「埋点拖慢页面」和「同一个人来回换组」。
 ---

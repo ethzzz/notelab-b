@@ -5,6 +5,7 @@ direction: 数据
 level: L3
 weeks: 15-16
 hours: 6-8
+requires: java:5-8
 tags: 流式, 游标, 内存, 异步任务
 summary: 运营一句「导出全部订单」，就能把服务打出 OOM；正确做法是异步 + 分批 + 流式写。
 ---

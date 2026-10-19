@@ -5,6 +5,7 @@ direction: 资金
 level: L3
 weeks: 10-14
 hours: 8-10
+requires: java:9-12, java:13-14
 tags: 幂等, 验签, 状态机, 对账
 summary: 第三方会重复回调、乱序回调、甚至伪造回调；钱的事一步错就是事故。
 ---

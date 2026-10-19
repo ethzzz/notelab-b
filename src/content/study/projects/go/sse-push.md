@@ -5,6 +5,7 @@ direction: 实时
 level: L3
 weeks: 8-9
 hours: 6-8
+requires: go:3-4
 tags: SSE, 连接管理, 心跳, 背压
 summary: 几千条长连接同时在线，难点不是推消息，而是「慢客户端不能拖垮服务、断线要能补齐」。
 ---

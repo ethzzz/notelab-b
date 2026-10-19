@@ -5,6 +5,7 @@ direction: 平台
 level: L3
 weeks: 12-14
 hours: 6-8
+requires: java:9-12
 tags: 租户, 数据隔离, 越权, 拦截器
 summary: 一套库服务多个客户，任何一条漏了 tenant_id 的 SQL 都是数据泄漏。
 ---
