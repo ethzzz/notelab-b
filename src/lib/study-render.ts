@@ -256,11 +256,39 @@ export function parseStudy(markdown: string): StudyData {
 }
 
 /**
- * 内容完整性自检：每个步骤都应该有「思路」和「代码 / 答案」。
+ * 把一段独立 Markdown（可含 `:::hint` / `:::solution` / `:::error` 折叠）渲染成 parts。
  *
- * 为什么放在解析层而不是写个脚本：文档只在服务端解析一次（且有缓存），
- * 这里点名比等到读者点开发现是空的要早得多 —— 部署日志里就能看到。
+ * 供「实践项目」页复用：项目文档与路线文档用的是同一套折叠语法，
+ * 但项目没有「周 / 步骤」结构，所以只需要「段落 + 折叠」这一层。
  */
+export function renderDoc(markdown: string): StudyPart[] {
+	const used = new Set<string>()
+	const lines = markdown.split(/\r?\n/)
+	const parts: StudyPart[] = []
+	let buf: string[] = []
+
+	const flush = () => {
+		const text = buf.join("\n")
+		buf = []
+		if (text.trim()) parts.push({ type: "md", html: renderMd(text, used) })
+	}
+
+	for (let i = 0; i < lines.length; i++) {
+		const open = lines[i].match(FOLD_RE)
+		if (!open) {
+			buf.push(lines[i])
+			continue
+		}
+		flush()
+		const body: string[] = []
+		for (i++; i < lines.length && !/^:::\s*$/.test(lines[i]); i++) body.push(lines[i])
+		parts.push({ type: "fold", kind: open[1] as FoldKind, title: open[2].trim(), html: renderMd(body.join("\n"), used) })
+	}
+	flush()
+	return parts
+}
+
+/** 内容完整性自检：每个步骤都应该有「思路」和「代码 / 答案」。缺了在服务端日志点名。 */
 export function studyWarnings(data: StudyData): string[] {
 	const out: string[] = []
 	for (const w of data.weeks) {
