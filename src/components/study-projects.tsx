@@ -28,6 +28,8 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 	const [route, setRoute] = useState<string>("all")
 	const [direction, setDirection] = useState<string>("all")
 	const [q, setQ] = useState("")
+	/** 分组方式：默认按「业务方向」（这是读者找项目的入口），可切到按语言 */
+	const [groupBy, setGroupBy] = useState<"direction" | "route">("direction")
 
 	const directions = useMemo(
 		() => Array.from(new Set(projects.map((p) => p.direction))).sort((a, b) => a.localeCompare(b, "zh")),
@@ -45,6 +47,19 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 	}, [projects, route, direction, q])
 
 	const open = (id: string) => router.push(`/study/projects?p=${encodeURIComponent(id)}`)
+
+	/** 分组：默认按业务方向（读者先想「练什么方向」），也可切到按语言 */
+	const groups = useMemo(() => {
+		const map = new Map<string, StudyProject[]>()
+		for (const p of list) {
+			const key = groupBy === "direction" ? p.direction : p.routeLabel
+			const arr = map.get(key)
+			if (arr) arr.push(p)
+			else map.set(key, [p])
+		}
+		return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b, "zh"))
+	}, [list, groupBy])
+
 	const back = () => {
 		router.push("/study/projects")
 		window.setTimeout(() => {
@@ -152,40 +167,57 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 					<span className="proj-filter-label">搜索</span>
 					<Input allowClear placeholder="标题 / 标签" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 260 }} />
 				</div>
+				<div className="proj-filter-row">
+					<span className="proj-filter-label">分组</span>
+					<button type="button" className={`proj-chip${groupBy === "direction" ? " is-active" : ""}`} onClick={() => setGroupBy("direction")}>
+						按方向
+					</button>
+					<button type="button" className={`proj-chip${groupBy === "route" ? " is-active" : ""}`} onClick={() => setGroupBy("route")}>
+						按语言
+					</button>
+				</div>
 			</div>
 
 			{list.length === 0 ? (
 				<p className="proj-empty">没有匹配的项目。</p>
 			) : (
-				<div className="proj-grid">
-					{list.map((p) => (
-						<button key={p.id} type="button" className="proj-card" onClick={() => open(p.id)}>
-							<div className="proj-card-head">
-								<span className="proj-card-title">{p.title}</span>
-								<span className={`proj-route proj-route-${p.route}`}>{p.routeLabel}</span>
-							</div>
-							<div className="proj-card-meta">
-								<span>{p.direction}</span>
-								<span>·</span>
-								<span>{p.level}</span>
-								{p.weeks && (
-									<>
+				groups.map(([name, items]) => (
+					<section key={name} className="proj-group">
+						<h3 className="proj-group-title">
+							{name}
+							<span className="proj-group-count">{items.length}</span>
+						</h3>
+						<div className="proj-grid">
+							{items.map((p) => (
+								<button key={p.id} type="button" className="proj-card" onClick={() => open(p.id)}>
+									<div className="proj-card-head">
+										<span className="proj-card-title">{p.title}</span>
+										<span className={`proj-route proj-route-${p.route}`}>{p.routeLabel}</span>
+									</div>
+									<div className="proj-card-meta">
+										<span>{p.direction}</span>
 										<span>·</span>
-										<span>第 {p.weeks} 周</span>
-									</>
-								)}
-							</div>
-							<p className="proj-card-summary">{p.summary}</p>
-							<div className="proj-card-tags">
-								{p.tags.slice(0, 4).map((t) => (
-									<span key={t} className="proj-mini-tag">
-										{t}
-									</span>
-								))}
-							</div>
-						</button>
-					))}
-				</div>
+										<span>{p.level}</span>
+										{p.weeks && (
+											<>
+												<span>·</span>
+												<span>第 {p.weeks} 周</span>
+											</>
+										)}
+									</div>
+									<p className="proj-card-summary">{p.summary}</p>
+									<div className="proj-card-tags">
+										{p.tags.slice(0, 4).map((t) => (
+											<span key={t} className="proj-mini-tag">
+												{t}
+											</span>
+										))}
+									</div>
+								</button>
+							))}
+						</div>
+					</section>
+				))
 			)}
 
 			<p className="proj-hint">
@@ -207,6 +239,11 @@ const PROJECT_CSS = `
 .proj-chip.is-active{background:rgba(22,119,255,.1);border-color:rgba(22,119,255,.45);color:#0958d9}
 .dark .proj-chip.is-active{color:#69b1ff}
 .proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.proj-group{margin-bottom:26px}
+.proj-group-title{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:650;margin:0 0 10px}
+.proj-group-title::after{content:"";flex:1;height:1px;background:rgba(128,128,128,.18)}
+.proj-group-count{font-size:11px;font-weight:500;color:#71717a}
+.dark .proj-group-count{color:#a1a1aa}
 .proj-card{display:flex;flex-direction:column;gap:6px;text-align:left;padding:14px 16px;border:1px solid rgba(128,128,128,.2);border-radius:12px;background:var(--card,#fff);cursor:pointer;color:inherit;transition:border-color .16s,box-shadow .16s,transform .16s}
 .dark .proj-card{background:#1f1f1f}
 .proj-card:hover{border-color:rgba(22,119,255,.45);box-shadow:0 6px 18px rgba(0,0,0,.07);transform:translateY(-1px)}
