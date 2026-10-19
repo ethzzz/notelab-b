@@ -21,7 +21,7 @@ export default function UserAccountsPage() {
   const [users, setUsers] = useState<User[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(50)
   const [q, setQ] = useState("")
   const [roleFilter, setRoleFilter] = useState("")
   const [loading, setLoading] = useState(false)
