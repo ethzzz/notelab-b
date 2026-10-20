@@ -545,6 +545,10 @@ const STUDY_CSS = `
 .study-doc .md-body h4{font-size:1em;font-weight:650;margin:1.4em 0 .4em}
 .study-doc .md-body p{margin:.7em 0}
 .study-doc .md-body ul,.study-doc .md-body ol{padding-left:1.45em;margin:.55em 0}
+.study-doc .md-body ul{list-style:disc}
+.study-doc .md-body ol{list-style:decimal}
+.study-doc .md-body ul ul{list-style:circle}
+.study-doc .md-body li::marker{color:rgba(128,128,128,.85)}
 .study-doc .md-body li{margin:.3em 0}
 .study-doc .md-body li>p{margin:.2em 0}
 .study-doc .md-body strong{font-weight:650}

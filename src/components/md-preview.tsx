@@ -66,7 +66,12 @@ export const MD_BODY_CSS = `
 .md-body h4,.md-body h5,.md-body h6{font-weight:600;margin:.6em 0 .3em}
 .md-body p{margin:.5em 0}
 .md-body ul,.md-body ol{padding-left:1.6em;margin:.4em 0}
+/* Tailwind 的 preflight 把 list-style 重置成 none 了 —— 不显式恢复，列表会变成一坨缩进文字 */
+.md-body ul{list-style:disc}
+.md-body ol{list-style:decimal}
+.md-body ul ul{list-style:circle}
 .md-body li{margin:.2em 0}
+.md-body li::marker{color:rgba(128,128,128,.85)}
 .md-body blockquote{border-left:3px solid rgba(128,128,128,.45);padding:.25em .9em;margin:.5em 0;color:rgba(128,128,128,.95);background:rgba(128,128,128,.07);border-radius:0 6px 6px 0}
 .md-body code{background:rgba(128,128,128,.16);padding:.15em .4em;border-radius:4px;font-size:.9em;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .md-body pre{background:rgba(128,128,128,.12);padding:.8em 1em;border-radius:8px;overflow:auto;margin:.6em 0}

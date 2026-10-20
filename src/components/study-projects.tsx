@@ -7,7 +7,7 @@
 import { useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Button, Input, Tag } from "antd"
+import { Input } from "antd"
 import { AdminPage } from "@/components/admin"
 import { MD_BODY_CSS } from "@/components/md-preview"
 import type { StudyProject } from "@/lib/study-projects"
@@ -74,7 +74,7 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 		return (
 			<AdminPage
 				title={
-					<span className="inline-flex items-center gap-2">
+					<span className="proj-title-row">
 						<button type="button" className="study-back-btn" onClick={back} title="返回项目列表" aria-label="返回项目列表">
 							←
 						</button>
@@ -82,50 +82,70 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 					</span>
 				}
 				description={
-					<span className="inline-flex flex-wrap items-center gap-2">
-						<Tag color="blue">{current.routeLabel}</Tag>
-						<Tag>{current.direction}</Tag>
-						<Tag color="green">{current.level}</Tag>
-						{current.hours && <Tag color="gold">约 {current.hours} 小时</Tag>}
-						{current.weeks && <span className="text-xs">对应第 {current.weeks} 周</span>}
+					<span className="proj-meta-line">
+						<span className={`proj-route proj-route-${current.route}`}>{current.routeLabel}</span>
+						<span className="proj-meta-sep">·</span>
+						<span>{current.direction}</span>
+						<span className="proj-meta-sep">·</span>
+						<span>{current.level}</span>
+						{current.hours && (
+							<>
+								<span className="proj-meta-sep">·</span>
+								<span>约 {current.hours} 小时</span>
+							</>
+						)}
+						{current.weeks && (
+							<>
+								<span className="proj-meta-sep">·</span>
+								<span>对应第 {current.weeks} 周</span>
+							</>
+						)}
 					</span>
 				}
 			>
 				<style>{MD_BODY_CSS}</style>
 				<style>{PROJECT_CSS}</style>
 				<div className="proj-detail">
+					{/* 摘要：整篇文档的「一句话导读」，与正文分开 */}
+					{current.summary && <p className="proj-lead">{current.summary}</p>}
+
 					{current.requires.length > 0 && (
 						<div className="proj-prereq">
 							<span className="proj-prereq-label">先修</span>
 							{current.requires.map((r) => (
-								<a key={`${r.route}-${r.from}`} className="proj-chip" href={`/admin/study/${r.route}?week=${r.from}`}>
+								<a key={`${r.route}-${r.from}`} className="proj-prereq-link" href={`/admin/study/${r.route}?week=${r.from}`}>
 									{r.routeLabel} 第 {r.from}
 									{r.to !== r.from ? `–${r.to}` : ""} 周
 								</a>
 							))}
 						</div>
 					)}
+
+					<div className="proj-body">
+						{current.parts.map((p, i) =>
+							p.type === "md" ? (
+								<div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
+							) : (
+								<details key={i} className="proj-fold">
+									<summary>
+										<span className={`proj-tag proj-tag-${p.kind}`}>{FOLD_LABEL[p.kind] || "说明"}</span>
+										{p.title}
+									</summary>
+									<div className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
+								</details>
+							),
+						)}
+					</div>
+
 					{current.tags.length > 0 && (
-						<div className="proj-tags">
+						<div className="proj-footer">
+							<span className="proj-footer-label">标签</span>
 							{current.tags.map((t) => (
-								<Tag key={t} bordered={false}>
+								<span key={t} className="proj-mini-tag">
 									{t}
-								</Tag>
+								</span>
 							))}
 						</div>
-					)}
-					{current.parts.map((p, i) =>
-						p.type === "md" ? (
-							<div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
-						) : (
-							<details key={i} className="proj-fold">
-								<summary>
-									<span className={`proj-tag proj-tag-${p.kind}`}>{FOLD_LABEL[p.kind] || "说明"}</span>
-									{p.title}
-								</summary>
-								<div className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
-							</details>
-						),
 					)}
 				</div>
 			</AdminPage>
@@ -285,12 +305,31 @@ const PROJECT_CSS = `
 .proj-empty{padding:40px 0;text-align:center;font-size:13px;color:#71717a}
 .proj-hint{margin-top:26px;font-size:12px;line-height:1.8;color:#71717a}
 .dark .proj-hint{color:#a1a1aa}
-.proj-detail{max-width:860px}
-.proj-detail .md-body{font-size:15px;line-height:1.8}
-.proj-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-.proj-prereq{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}
-.proj-prereq-label{font-size:12px;color:#71717a}
+.proj-title-row{display:inline-flex;align-items:center;gap:10px}
+.proj-meta-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;color:#71717a}
+.dark .proj-meta-line{color:#a1a1aa}
+.proj-meta-line .proj-route{font-size:11px}
+.proj-meta-sep{opacity:.5}
+.proj-detail{max-width:820px}
+.proj-lead{font-size:15px;line-height:1.85;color:#3f3f46;margin:4px 0 18px;padding-left:12px;border-left:3px solid rgba(22,119,255,.35)}
+.dark .proj-lead{color:#d4d4d8}
+.proj-prereq{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 22px;font-size:12px}
+.proj-prereq-label{font-size:11px;font-weight:600;letter-spacing:.06em;color:#71717a}
 .dark .proj-prereq-label{color:#a1a1aa}
+.proj-prereq-link{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid rgba(128,128,128,.25);color:inherit;text-decoration:none;transition:border-color .15s,color .15s}
+.proj-prereq-link:hover{border-color:rgba(22,119,255,.5);color:#0958d9}
+.dark .proj-prereq-link:hover{color:#69b1ff}
+.proj-body{padding-top:20px;border-top:1px solid rgba(128,128,128,.18)}
+.proj-body .md-body{font-size:14.8px;line-height:1.85}
+.proj-body .md-body h2{font-size:1.22em;margin:2em 0 .6em;padding-bottom:.35em;border-bottom:1px solid rgba(128,128,128,.16)}
+.proj-body .md-body h2:first-child{margin-top:.4em}
+.proj-body .md-body h3{font-size:1.05em;margin:1.6em 0 .4em}
+.proj-body .md-body p{margin:.7em 0}
+.proj-body .md-body ul,.proj-body .md-body ol{padding-left:1.4em;margin:.5em 0}
+.proj-body .md-body table{font-size:.94em}
+.proj-footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:26px;padding-top:14px;border-top:1px solid rgba(128,128,128,.18)}
+.proj-footer-label{font-size:11px;color:#71717a}
+.dark .proj-footer-label{color:#a1a1aa}
 .proj-fold{margin:12px 0;border:1px solid rgba(128,128,128,.22);border-radius:10px;padding:0 14px;background:rgba(128,128,128,.04)}
 .proj-fold>summary{cursor:pointer;padding:10px 0;font-size:13px;display:flex;align-items:center;gap:8px;list-style:none}
 .proj-fold>summary::-webkit-details-marker{display:none}
