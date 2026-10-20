@@ -388,6 +388,11 @@ const PROJECT_CSS = `
 .proj-body .md-body h3{font-size:1.08em;margin:1.8em 0 .45em}
 .proj-body .md-body p{margin:.75em 0}
 .proj-body .md-body ul,.proj-body .md-body ol{padding-left:1.5em;margin:.6em 0}
+/* 混合排版：表格/代码块通栏（信息密度高），正文段落限宽到 ~860px（约 70 字符，回行不串行） */
+.proj-body .md-body p,
+.proj-body .md-body ul,
+.proj-body .md-body ol,
+.proj-body .md-body blockquote{max-width:860px}
 .proj-body .md-body table{font-size:.95em}
 .proj-body .md-body pre{margin:1em 0}
 .proj-body .md-body hr{margin:2.4em 0}
