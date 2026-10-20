@@ -4,7 +4,7 @@
 // 子路由要逐条登记权限；本项目对二级页的既有约定就是 ?id= / ?p=。
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Input } from "antd"
@@ -70,12 +70,40 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 
 	const current = pid ? projects.find((p) => p.id === pid) : undefined
 
+	// 正文目录高亮：按滚动位置现算（和路线页同样的做法，不缓存 DOM 引用）
+	const [activeSection, setActiveSection] = useState("")
+	useEffect(() => {
+		const toc = current?.toc
+		if (!toc || toc.length < 2) return
+		let raf = 0
+		const compute = () => {
+			raf = 0
+			const els = toc.map((t) => document.getElementById(t.id)).filter((el): el is HTMLElement => el !== null)
+			if (!els.length) return
+			let cur = els[0].id
+			for (const el of els) {
+				if (el.getBoundingClientRect().top <= 96) cur = el.id
+				else break
+			}
+			setActiveSection(cur)
+		}
+		const onScroll = () => {
+			if (!raf) raf = requestAnimationFrame(compute)
+		}
+		compute()
+		window.addEventListener("scroll", onScroll, { passive: true })
+		return () => {
+			window.removeEventListener("scroll", onScroll)
+			if (raf) cancelAnimationFrame(raf)
+		}
+	}, [pid, current?.toc])
+
 	if (current) {
 		return (
 			<AdminPage
 				title={
 					<span className="proj-title-row">
-						<button type="button" className="study-back-btn" onClick={back} title="返回项目列表" aria-label="返回项目列表">
+						<button type="button" className="proj-back" onClick={back} title="返回项目列表" aria-label="返回项目列表">
 							←
 						</button>
 						<span>{current.title}</span>
@@ -105,37 +133,38 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 			>
 				<style>{MD_BODY_CSS}</style>
 				<style>{PROJECT_CSS}</style>
-				<div className="proj-detail">
-					{/* 摘要：整篇文档的「一句话导读」，与正文分开 */}
-					{current.summary && <p className="proj-lead">{current.summary}</p>}
+				<div className="proj-layout">
+					<div className="proj-detail">
+						{/* 摘要：整篇文档的「一句话导读」，与正文分开 */}
+						{current.summary && <p className="proj-lead">{current.summary}</p>}
 
-					{current.requires.length > 0 && (
-						<div className="proj-prereq">
-							<span className="proj-prereq-label">先修</span>
-							{current.requires.map((r) => (
-								<a key={`${r.route}-${r.from}`} className="proj-prereq-link" href={`/admin/study/${r.route}?week=${r.from}`}>
-									{r.routeLabel} 第 {r.from}
-									{r.to !== r.from ? `–${r.to}` : ""} 周
-								</a>
-							))}
-						</div>
-					)}
-
-					<div className="proj-body">
-						{current.parts.map((p, i) =>
-							p.type === "md" ? (
-								<div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
-							) : (
-								<details key={i} className="proj-fold">
-									<summary>
-										<span className={`proj-tag proj-tag-${p.kind}`}>{FOLD_LABEL[p.kind] || "说明"}</span>
-										{p.title}
-									</summary>
-									<div className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
-								</details>
-							),
+						{current.requires.length > 0 && (
+							<div className="proj-prereq">
+								<span className="proj-prereq-label">先修</span>
+								{current.requires.map((r) => (
+									<a key={`${r.route}-${r.from}`} className="proj-prereq-link" href={`/admin/study/${r.route}?week=${r.from}`}>
+										{r.routeLabel} 第 {r.from}
+										{r.to !== r.from ? `–${r.to}` : ""} 周
+									</a>
+								))}
+							</div>
 						)}
-					</div>
+
+						<div className="proj-body">
+							{current.parts.map((p, i) =>
+								p.type === "md" ? (
+									<div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
+								) : (
+									<details key={i} className="proj-fold">
+										<summary>
+											<span className={`proj-tag proj-tag-${p.kind}`}>{FOLD_LABEL[p.kind] || "说明"}</span>
+											{p.title}
+										</summary>
+										<div className="md-body" dangerouslySetInnerHTML={{ __html: p.html }} />
+									</details>
+								),
+							)}
+						</div>
 
 					{current.tags.length > 0 && (
 						<div className="proj-footer">
@@ -146,6 +175,23 @@ export default function ProjectsView({ projects }: { projects: StudyProject[] })
 								</span>
 							))}
 						</div>
+					)}
+					</div>
+
+					{current.toc.length > 1 && (
+						<aside className="proj-toc">
+							<div className="proj-toc-title">本页目录</div>
+							{current.toc.map((t) => (
+								<a
+									key={t.id}
+									href={`#${t.id}`}
+									onClick={() => setActiveSection(t.id)}
+									className={`proj-toc-link${activeSection === t.id ? " is-active" : ""}`}
+								>
+									{t.text}
+								</a>
+							))}
+						</aside>
 					)}
 				</div>
 			</AdminPage>
@@ -305,12 +351,24 @@ const PROJECT_CSS = `
 .proj-empty{padding:40px 0;text-align:center;font-size:13px;color:#71717a}
 .proj-hint{margin-top:26px;font-size:12px;line-height:1.8;color:#71717a}
 .dark .proj-hint{color:#a1a1aa}
-.proj-title-row{display:inline-flex;align-items:center;gap:10px}
-.proj-meta-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;color:#71717a}
+.proj-title-row{display:inline-flex;align-items:center;gap:18px}
+.proj-back{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:9px;border:1px solid rgba(128,128,128,.25);background:rgba(128,128,128,.05);color:inherit;font-size:15px;line-height:1;cursor:pointer;transition:border-color .15s,color .15s}
+.proj-back:hover{border-color:rgba(22,119,255,.5);color:#1677ff}
+.proj-meta-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;color:#71717a;margin-top:6px}
 .dark .proj-meta-line{color:#a1a1aa}
 .proj-meta-line .proj-route{font-size:11px}
 .proj-meta-sep{opacity:.5}
-.proj-detail{max-width:820px}
+.proj-layout{display:flex;align-items:flex-start;gap:40px}
+.proj-detail{flex:1;min-width:0;max-width:820px}
+.proj-toc{position:sticky;top:72px;flex:none;width:176px;max-height:calc(100vh - 88px);overflow-y:auto;scrollbar-width:thin;padding-left:16px;border-left:1px solid rgba(128,128,128,.18)}
+.proj-toc-title{font-size:11px;font-weight:600;letter-spacing:.06em;color:#71717a;margin-bottom:8px}
+.dark .proj-toc-title{color:#a1a1aa}
+.proj-toc-link{display:block;font-size:12.5px;line-height:1.5;padding:4px 8px;margin:1px 0;border-radius:6px;border-left:2px solid transparent;color:#52525b;text-decoration:none;transition:background .12s,color .12s}
+.dark .proj-toc-link{color:#a1a1aa}
+.proj-toc-link:hover{background:rgba(128,128,128,.08)}
+.proj-toc-link.is-active{color:#0958d9;background:rgba(22,119,255,.08);border-left-color:#1677ff}
+.dark .proj-toc-link.is-active{color:#69b1ff;background:rgba(22,119,255,.16)}
+@media(max-width:1279px){.proj-toc{display:none}}
 .proj-lead{font-size:15px;line-height:1.85;color:#3f3f46;margin:4px 0 18px;padding-left:12px;border-left:3px solid rgba(22,119,255,.35)}
 .dark .proj-lead{color:#d4d4d8}
 .proj-prereq{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 22px;font-size:12px}
@@ -321,7 +379,7 @@ const PROJECT_CSS = `
 .dark .proj-prereq-link:hover{color:#69b1ff}
 .proj-body{padding-top:20px;border-top:1px solid rgba(128,128,128,.18)}
 .proj-body .md-body{font-size:14.8px;line-height:1.85}
-.proj-body .md-body h2{font-size:1.22em;margin:2em 0 .6em;padding-bottom:.35em;border-bottom:1px solid rgba(128,128,128,.16)}
+.proj-body .md-body h2{font-size:1.22em;margin:2em 0 .6em;padding-bottom:.35em;border-bottom:1px solid rgba(128,128,128,.16);scroll-margin-top:88px}
 .proj-body .md-body h2:first-child{margin-top:.4em}
 .proj-body .md-body h3{font-size:1.05em;margin:1.6em 0 .4em}
 .proj-body .md-body p{margin:.7em 0}

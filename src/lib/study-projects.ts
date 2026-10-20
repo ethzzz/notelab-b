@@ -43,6 +43,8 @@ export type StudyProject = {
 	requires: Prereq[]
 	tags: string[]
 	summary: string
+	/** 正文 h2 目录（id 由 renderMd 注入），用于详情页右侧悬浮导航 */
+	toc: { id: string; text: string }[]
 	parts: StudyPart[]
 }
 
@@ -77,6 +79,21 @@ function parseFrontMatter(raw: string): { meta: Record<string, string>; body: st
 	return { meta, body: raw.slice(m[0].length) }
 }
 
+/** 从渲染后的 HTML 里抽 h2（renderMd 已经给每个 h2 注入了 id），给详情页做右侧目录 */
+function tocOf(parts: StudyPart[]): { id: string; text: string }[] {
+	const out: { id: string; text: string }[] = []
+	for (const p of parts) {
+		if (p.type !== "md") continue
+		const re = /<h2 id="([^"]+)">([\s\S]*?)<\/h2>/g
+		let m: RegExpExecArray | null
+		while ((m = re.exec(p.html))) {
+			const text = m[2].replace(/<[^>]+>/g, "").trim()
+			if (text) out.push({ id: m[1], text })
+		}
+	}
+	return out
+}
+
 export async function loadProjects(): Promise<StudyProject[]> {
 	let routes: string[] = []
 	try {
@@ -95,6 +112,7 @@ export async function loadProjects(): Promise<StudyProject[]> {
 			const slug = file.replace(/\.md$/, "")
 			const missing = ["title", "direction", "summary"].filter((k) => !meta[k])
 			if (missing.length) console.warn(`[projects] ${route}/${file} 缺字段：${missing.join(", ")}`)
+			const parts = renderDoc(body)
 			out.push({
 				id: `${route}/${slug}`,
 				route: route as ProjectRoute,
@@ -110,7 +128,8 @@ export async function loadProjects(): Promise<StudyProject[]> {
 					.map((s) => s.trim())
 					.filter(Boolean),
 				summary: meta.summary || "",
-				parts: renderDoc(body),
+				parts,
+				toc: tocOf(parts),
 			})
 		}
 	}
