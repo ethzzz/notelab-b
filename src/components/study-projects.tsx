@@ -70,6 +70,16 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 
 	// 正文目录高亮：按滚动位置现算（和路线页同样的做法，不缓存 DOM 引用）
 	const [activeSection, setActiveSection] = useState("")
+	const [copied, setCopied] = useState(false)
+	const copyLink = async () => {
+		try {
+			await navigator.clipboard.writeText(window.location.href)
+			setCopied(true)
+			window.setTimeout(() => setCopied(false), 1500)
+		} catch {
+			/* 无剪贴板权限时静默失败，不影响阅读 */
+		}
+	}
 	useEffect(() => {
 		const toc = current?.toc
 		if (!toc || toc.length < 2) return
@@ -128,11 +138,16 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 						)}
 					</span>
 				}
+				extra={
+					<button type="button" className="proj-copy" onClick={copyLink}>
+						{copied ? "已复制" : "复制链接"}
+					</button>
+				}
 			>
 				<style>{MD_BODY_CSS}</style>
 				<style>{PROJECT_CSS}</style>
 				<div className="proj-layout">
-					<div className="proj-detail">
+					<article className="proj-detail proj-sheet">
 						{/* 摘要：整篇文档的「一句话导读」，与正文分开 */}
 						{current.summary && <p className="proj-lead">{current.summary}</p>}
 
@@ -174,7 +189,7 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 							))}
 						</div>
 					)}
-					</div>
+					</article>
 
 					{current.toc.length > 1 && (
 						<aside className="proj-toc">
@@ -358,17 +373,22 @@ const PROJECT_CSS = `
 .proj-meta-sep{opacity:.5}
 .proj-layout{display:flex;align-items:flex-start;gap:56px}
 .proj-detail{flex:1;min-width:0;max-width:none}
+/* 正文纸张：把文档从页面底色里「抬起来」，这是最影响观感的一层 */
+.proj-sheet{background:#fff;border:1px solid rgba(17,24,39,.06);border-radius:16px;padding:30px 36px 34px;box-shadow:0 1px 2px rgba(16,24,40,.04),0 12px 28px -18px rgba(16,24,40,.18)}
+.dark .proj-sheet{background:#1f1f1f;border-color:rgba(255,255,255,.08);box-shadow:none}
+.proj-copy{border:1px solid rgba(128,128,128,.25);background:transparent;color:inherit;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;transition:border-color .15s,color .15s}
+.proj-copy:hover{border-color:var(--app-accent,#6366f1);color:var(--app-accent,#6366f1)}
 .proj-toc{position:sticky;top:72px;flex:none;width:196px;max-height:calc(100vh - 88px);overflow-y:auto;scrollbar-width:thin;padding-left:16px;border-left:1px solid rgba(128,128,128,.18)}
-.proj-toc-title{font-size:11px;font-weight:600;letter-spacing:.06em;color:#71717a;margin-bottom:8px}
+.proj-toc-title{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#71717a;margin-bottom:8px}
 .dark .proj-toc-title{color:#a1a1aa}
 .proj-toc-link{display:block;font-size:12.5px;line-height:1.5;padding:4px 8px;margin:1px 0;border-radius:6px;border-left:2px solid transparent;color:#52525b;text-decoration:none;transition:background .12s,color .12s}
 .dark .proj-toc-link{color:#a1a1aa}
 .proj-toc-link:hover{background:rgba(128,128,128,.08)}
-.proj-toc-link.is-active{color:var(--app-accent,#4f46e5);background:color-mix(in srgb,var(--app-accent,#6366f1) 8%,transparent);border-left-color:var(--app-accent,#6366f1)}
+.proj-toc-link.is-active{color:var(--app-accent,#4f46e5);background:color-mix(in srgb,var(--app-accent,#6366f1) 8%,transparent);border-left-color:var(--app-accent,#6366f1);font-weight:600}
 .dark .proj-toc-link.is-active{color:var(--app-accent,#818cf8);background:color-mix(in srgb,var(--app-accent,#6366f1) 16%,transparent)}
 @media(max-width:1279px){.proj-toc{display:none}}
-.proj-lead{font-size:15px;line-height:1.85;color:#3f3f46;margin:4px 0 18px;padding-left:12px;border-left:3px solid color-mix(in srgb,var(--app-accent,#6366f1) 35%,transparent)}
-.dark .proj-lead{color:#d4d4d8}
+.proj-lead{font-size:14.5px;line-height:1.85;color:var(--doc-text,#3f3f46);margin:0 0 20px;padding:12px 16px;border-left:3px solid var(--app-accent,#6366f1);background:color-mix(in srgb,var(--app-accent,#6366f1) 5%,transparent);border-radius:0 10px 10px 0}
+.dark .proj-lead{color:#d4d4d8;background:color-mix(in srgb,var(--app-accent,#818cf8) 10%,transparent)}
 .proj-prereq{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 22px;font-size:12px}
 .proj-prereq-label{font-size:11px;font-weight:600;letter-spacing:.06em;color:#71717a}
 .dark .proj-prereq-label{color:#a1a1aa}
@@ -393,7 +413,11 @@ const PROJECT_CSS = `
 .proj-body .md-body ul,
 .proj-body .md-body ol,
 .proj-body .md-body blockquote{max-width:860px}
-.proj-body .md-body table{font-size:.95em}
+.proj-body .md-body table{font-size:.95em;border-collapse:separate;border-spacing:0;border:1px solid var(--doc-line);border-radius:12px;overflow:hidden}
+.proj-body .md-body th,.proj-body .md-body td{border:0;border-bottom:1px solid var(--doc-line);padding:.55em .9em}
+.proj-body .md-body th:not(:last-child),.proj-body .md-body td:not(:last-child){border-right:1px solid var(--doc-line)}
+.proj-body .md-body tbody tr:last-child td{border-bottom:0}
+.proj-body .md-body tbody tr:hover{background:color-mix(in srgb,var(--app-accent,#6366f1) 4%,transparent)}
 .proj-body .md-body pre{margin:1em 0}
 .proj-body .md-body hr{margin:2.4em 0}
 .proj-footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:26px;padding-top:14px;border-top:1px solid rgba(128,128,128,.18)}
@@ -413,7 +437,7 @@ const PROJECT_CSS = `
 .proj-body .md-body a:hover{text-decoration:underline}
 .proj-body .md-body code{background:var(--doc-code-bg);color:var(--app-accent,#6366f1)}
 .dark .proj-body .md-body code{color:var(--app-accent,#a5b4fc)}
-.proj-body .md-body pre{background:var(--doc-code-bg);border:1px solid var(--doc-line)}
+.proj-body .md-body pre{background:var(--doc-code-bg);border:1px solid var(--doc-line);border-radius:12px}
 .proj-body .md-body pre code{color:inherit;background:none}
 .proj-body .md-body blockquote{border-left-color:var(--doc-accent);color:var(--doc-muted);background:color-mix(in srgb,var(--app-accent,#6366f1) 6%,transparent)}
 .dark .proj-body .md-body blockquote{background:color-mix(in srgb,var(--app-accent,#818cf8) 10%,transparent)}
