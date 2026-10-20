@@ -399,6 +399,29 @@ const PROJECT_CSS = `
 .proj-footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:26px;padding-top:14px;border-top:1px solid rgba(128,128,128,.18)}
 .proj-footer-label{font-size:11px;color:#71717a}
 .dark .proj-footer-label{color:#a1a1aa}
+
+/* ---- 文档配色：避免通篇黑白，用「正文柔黑 + 标题深色 + 强调色」拉出层次 ---- */
+.proj-detail{--doc-text:#3f3f46;--doc-head:#111827;--doc-muted:#6b7280;--doc-accent:#2563eb;--doc-line:rgba(17,24,39,.10);--doc-code-bg:#f5f7fa}
+.dark .proj-detail{--doc-text:#d4d4d8;--doc-head:#f4f4f5;--doc-muted:#a1a1aa;--doc-accent:#7dd3fc;--doc-line:rgba(255,255,255,.12);--doc-code-bg:rgba(255,255,255,.06)}
+.proj-body .md-body{color:var(--doc-text)}
+.proj-body .md-body h2{color:var(--doc-head);border-top-color:var(--doc-line)}
+.proj-body .md-body h2::before{content:"";display:inline-block;width:3px;height:.8em;margin-right:.55em;border-radius:2px;background:var(--doc-accent);vertical-align:.02em}
+.proj-body .md-body h3{color:var(--doc-head)}
+.proj-body .md-body h4{color:var(--doc-head)}
+.proj-body .md-body strong{color:var(--doc-head);font-weight:650}
+.proj-body .md-body a{color:var(--doc-accent);text-decoration:none}
+.proj-body .md-body a:hover{text-decoration:underline}
+.proj-body .md-body code{background:var(--doc-code-bg);color:#1d4ed8}
+.dark .proj-body .md-body code{color:#93c5fd}
+.proj-body .md-body pre{background:var(--doc-code-bg);border:1px solid var(--doc-line)}
+.proj-body .md-body pre code{color:inherit;background:none}
+.proj-body .md-body blockquote{border-left-color:var(--doc-accent);color:var(--doc-muted);background:rgba(37,99,235,.05)}
+.dark .proj-body .md-body blockquote{background:rgba(125,211,252,.08)}
+.proj-body .md-body th{background:rgba(17,24,39,.04);color:var(--doc-head)}
+.dark .proj-body .md-body th{background:rgba(255,255,255,.05)}
+.proj-body .md-body th,.proj-body .md-body td{border-color:var(--doc-line)}
+.proj-body .md-body li::marker{color:var(--doc-accent);opacity:.75}
+.proj-body .md-body hr{border-top-color:var(--doc-line)}
 .proj-fold{margin:12px 0;border:1px solid rgba(128,128,128,.22);border-radius:10px;padding:0 14px;background:rgba(128,128,128,.04)}
 .proj-fold>summary{cursor:pointer;padding:10px 0;font-size:13px;display:flex;align-items:center;gap:8px;list-style:none}
 .proj-fold>summary::-webkit-details-marker{display:none}

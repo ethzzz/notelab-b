@@ -567,6 +567,17 @@ const STUDY_CSS = `
 .study-doc .md-body img{max-width:100%;border-radius:8px}
 .study-doc .md-body h2,.study-doc .md-body h3{scroll-margin-top:76px}
 
+/* 文档配色：正文柔黑、标题深色、行内代码与列表符号用强调色（与项目详情页同一套） */
+.study-doc{--doc-text:#3f3f46;--doc-head:#111827;--doc-code:#1d4ed8}
+.dark .study-doc{--doc-text:#d4d4d8;--doc-head:#f4f4f5;--doc-code:#93c5fd}
+.study-doc .md-body{color:var(--doc-text)}
+.study-doc .md-body h2,.study-doc .md-body h3,.study-doc .md-body h4{color:var(--doc-head)}
+.study-doc .md-body strong{color:var(--doc-head)}
+.study-doc .md-body code{color:var(--doc-code)}
+.study-doc .md-body pre code{color:inherit}
+.study-doc .md-body blockquote{border-left-color:var(--accent)}
+.study-doc .md-body li::marker{color:var(--accent);opacity:.75}
+
 /* ---- 折叠行（卡片内分隔行，不再套盒子） ---- */
 .study-fold{margin:0;padding:0;border:0;background:none}
 .study-fold-head{display:flex;align-items:center;gap:10px;width:100%;padding:11px 0;border:0;border-top:1px solid var(--line);background:none;cursor:pointer;text-align:left;color:inherit;font-size:13.5px;line-height:1.5}
