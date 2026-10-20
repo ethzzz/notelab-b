@@ -272,17 +272,46 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 			</div>
 
 			{list.length === 0 ? (
-				<p className="proj-empty">没有匹配的项目。</p>
+				<div className="proj-empty-state">
+					<svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true" className="proj-empty-art">
+						<rect x="10" y="14" width="44" height="36" rx="8" fill="none" stroke="currentColor" strokeWidth="2" opacity=".28" />
+						<path d="M20 26h24M20 34h16" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" opacity=".45" />
+						<circle cx="44" cy="44" r="9" fill="none" stroke="currentColor" strokeWidth="2.4" opacity=".55" />
+						<path d="m50.5 50.5 4.5 4.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" opacity=".55" />
+					</svg>
+					<p className="proj-empty-title">没有匹配的项目</p>
+					<p className="proj-empty-desc">
+						换个关键词试试，或者清除筛选，看看全部 {projects.length} 个项目。
+					</p>
+					<button
+						type="button"
+						className="proj-empty-btn"
+						onClick={() => {
+							setRoute("all")
+							setDirection("all")
+							setQ("")
+						}}
+					>
+						清除筛选
+					</button>
+				</div>
 			) : (
-				groups.map(([name, items]) => (
-					<section key={name} className="proj-group">
-						<h3 className="proj-group-title">
-							{name}
-							<span className="proj-group-count">{items.length}</span>
-						</h3>
-						<div className="proj-grid">
-							{items.map((p) => (
-								<button key={p.id} type="button" className={`proj-card proj-card-${p.route}`} onClick={() => open(p.id)}>
+				<div key={`${groupBy}|${route}|${direction}|${q}`} className="proj-groups">
+					{groups.map(([name, items]) => (
+						<section key={name} className="proj-group">
+							<h3 className="proj-group-title">
+								{name}
+								<span className="proj-group-count">{items.length}</span>
+							</h3>
+							<div className="proj-grid">
+								{items.map((p, i) => (
+									<button
+										key={p.id}
+										type="button"
+										className={`proj-card proj-card-${p.route}`}
+										style={{ animationDelay: `${Math.min(i, 8) * 35}ms` }}
+										onClick={() => open(p.id)}
+									>
 									<div className="proj-card-head">
 										<span className="proj-card-title">{p.title}</span>
 										<span className={`proj-route proj-route-${p.route}`}>{p.routeLabel}</span>
@@ -316,7 +345,8 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 							))}
 						</div>
 					</section>
-				))
+				))}
+				</div>
 			)}
 
 			<p className="proj-hint">
@@ -368,6 +398,19 @@ const PROJECT_CSS = `
 .proj-mini-tag{font-size:11px;padding:1px 6px;border-radius:5px;background:rgba(128,128,128,.1);color:#71717a}
 .dark .proj-mini-tag{color:#a1a1aa}
 .proj-empty{padding:40px 0;text-align:center;font-size:13px;color:#71717a}
+/* 空状态：虚线卡片 + 主题色图标 + 一键清除筛选 */
+.proj-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:56px 20px 60px;text-align:center;border:1px dashed rgba(128,128,128,.28);border-radius:16px;background:rgba(128,128,128,.03)}
+.proj-empty-art{color:var(--app-accent,#6366f1);margin-bottom:6px}
+.proj-empty-title{margin:0;font-size:15px;font-weight:600}
+.proj-empty-desc{margin:0;font-size:13px;line-height:1.7;color:#71717a;max-width:360px}
+.dark .proj-empty-desc{color:#a1a1aa}
+.proj-empty-btn{margin-top:10px;border:1px solid color-mix(in srgb,var(--app-accent,#6366f1) 45%,transparent);background:color-mix(in srgb,var(--app-accent,#6366f1) 8%,transparent);color:var(--app-accent,#4f46e5);border-radius:8px;padding:6px 14px;font-size:12.5px;cursor:pointer;transition:background .15s}
+.proj-empty-btn:hover{background:color-mix(in srgb,var(--app-accent,#6366f1) 14%,transparent)}
+.dark .proj-empty-btn{color:var(--app-accent,#818cf8)}
+/* 卡片入场：按顺序轻微上浮，筛选变化时整组重新播放（容器 key 变了） */
+@keyframes proj-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.proj-card{animation:proj-in .3s ease both}
+@media (prefers-reduced-motion:reduce){.proj-card{animation:none}}
 .proj-hint{margin-top:26px;font-size:12px;line-height:1.8;color:#71717a}
 .dark .proj-hint{color:#a1a1aa}
 .proj-title-row{display:inline-flex;align-items:center;gap:18px}
