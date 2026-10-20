@@ -18,6 +18,7 @@ const ROUTES = [
 	{ id: "java", label: "Java" },
 	{ id: "go", label: "Go" },
 	{ id: "react", label: "React" },
+	{ id: "nextjs", label: "Next.js" },
 ] as const
 
 export default function ProjectsView({ projects }: { projects: StudyProject[] }) {
@@ -272,6 +273,8 @@ const PROJECT_CSS = `
 .proj-route-java{color:#b45309}
 .proj-route-go{color:#0891b2}
 .proj-route-react{color:#7c3aed}
+.proj-route-nextjs{color:#0f172a}
+.dark .proj-route-nextjs{color:#e5e7eb}
 .proj-card-meta{font-size:12px;color:#71717a;display:flex;gap:6px;flex-wrap:wrap}
 .dark .proj-card-meta{color:#a1a1aa}
 .proj-card-summary{margin:2px 0 0;font-size:13px;line-height:1.6;color:#52525b}

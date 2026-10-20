@@ -22,7 +22,7 @@ import path from "node:path"
 import { renderDoc } from "@/lib/study-render"
 import type { StudyPart } from "@/lib/study"
 
-export type ProjectRoute = "java" | "go" | "react"
+export type ProjectRoute = "java" | "go" | "react" | "nextjs"
 
 /** 先修：指向某条路线的某一周区间，详情页渲成可点的深链 */
 export type Prereq = { route: string; routeLabel: string; from: number; to: number }
@@ -47,8 +47,8 @@ export type StudyProject = {
 }
 
 const ROOT = path.join(process.cwd(), "src", "content", "study", "projects")
-const ROUTE_LABEL: Record<string, string> = { java: "Java", go: "Go", react: "React" }
-const ROUTE_ORDER: Record<string, number> = { java: 0, go: 1, react: 2 }
+const ROUTE_LABEL: Record<string, string> = { java: "Java", go: "Go", react: "React", nextjs: "Next.js" }
+const ROUTE_ORDER: Record<string, number> = { java: 0, go: 1, react: 2, nextjs: 3 }
 
 /** `java:9-12, go:5-6` → [{route:java,from:9,to:12}, …]；格式不对的项忽略（不阻塞加载） */
 function parseRequires(raw: string): Prereq[] {

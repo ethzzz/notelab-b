@@ -46,6 +46,14 @@ export const STUDY_DOCS: Record<string, StudyDoc> = {
 		// 2026-10-19 大纲从「B 端语境」重写为「C 端语境」，步骤含义整体变了 → 进度作废重来
 		rev: "2",
 	},
+	nextjs: {
+		lang: "nextjs",
+		title: "Next.js · 高级路线",
+		subtitle: "12 周：RSC 边界、缓存四层、Server Action、多租户、性能预算与交付",
+		icon: "▲",
+		track: "typescript",
+		trackLabel: "TypeScript 课程（打底）",
+	},
 }
 
 export const STUDY_LANGS = Object.keys(STUDY_DOCS)
