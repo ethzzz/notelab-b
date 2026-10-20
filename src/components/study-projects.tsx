@@ -108,46 +108,43 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 
 	if (current) {
 		return (
-			<AdminPage
-				title={
-					<span className="proj-title-row">
-						<button type="button" className="proj-back" onClick={back} title="返回项目列表" aria-label="返回项目列表">
-							←
-						</button>
-						<span>{current.title}</span>
-					</span>
-				}
-				description={
-					<span className="proj-meta-line">
-						<span className={`proj-route proj-route-${current.route}`}>{current.routeLabel}</span>
-						<span className="proj-meta-sep">·</span>
-						<span>{current.direction}</span>
-						<span className="proj-meta-sep">·</span>
-						<span>{current.level}</span>
-						{current.hours && (
-							<>
-								<span className="proj-meta-sep">·</span>
-								<span>约 {current.hours} 小时</span>
-							</>
-						)}
-						{current.weeks && (
-							<>
-								<span className="proj-meta-sep">·</span>
-								<span>对应第 {current.weeks} 周</span>
-							</>
-						)}
-					</span>
-				}
-				extra={
-					<button type="button" className="proj-copy" onClick={copyLink}>
-						{copied ? "已复制" : "复制链接"}
-					</button>
-				}
-			>
+			<div className="proj-page">
 				<style>{MD_BODY_CSS}</style>
 				<style>{PROJECT_CSS}</style>
 				<div className="proj-layout">
 					<article className="proj-detail proj-sheet">
+						{/* 封面：标题 + 元信息 + 操作，并进卡片顶部，不再是「页面标题 + 正文」两张皮 */}
+						<header className="proj-cover">
+							<div className="proj-cover-row">
+								<button type="button" className="proj-back" onClick={back} title="返回项目列表" aria-label="返回项目列表">
+									←
+								</button>
+								<h1 className="proj-cover-title">{current.title}</h1>
+								<button type="button" className="proj-copy" onClick={copyLink}>
+									{copied ? "已复制" : "复制链接"}
+								</button>
+							</div>
+							<div className="proj-meta-line">
+								<span className={`proj-route proj-route-${current.route}`}>{current.routeLabel}</span>
+								<span className="proj-meta-sep">·</span>
+								<span>{current.direction}</span>
+								<span className="proj-meta-sep">·</span>
+								<span>{current.level}</span>
+								{current.hours && (
+									<>
+										<span className="proj-meta-sep">·</span>
+										<span>约 {current.hours} 小时</span>
+									</>
+								)}
+								{current.weeks && (
+									<>
+										<span className="proj-meta-sep">·</span>
+										<span>对应第 {current.weeks} 周</span>
+									</>
+								)}
+							</div>
+						</header>
+
 						{/* 摘要：整篇文档的「一句话导读」，与正文分开 */}
 						{current.summary && <p className="proj-lead">{current.summary}</p>}
 
@@ -179,16 +176,16 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 							)}
 						</div>
 
-					{current.tags.length > 0 && (
-						<div className="proj-footer">
-							<span className="proj-footer-label">标签</span>
-							{current.tags.map((t) => (
-								<span key={t} className="proj-mini-tag">
-									{t}
-								</span>
-							))}
-						</div>
-					)}
+						{current.tags.length > 0 && (
+							<div className="proj-footer">
+								<span className="proj-footer-label">标签</span>
+								{current.tags.map((t) => (
+									<span key={t} className="proj-mini-tag">
+										{t}
+									</span>
+								))}
+							</div>
+						)}
 					</article>
 
 					{current.toc.length > 1 && (
@@ -207,7 +204,7 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 						</aside>
 					)}
 				</div>
-			</AdminPage>
+			</div>
 		)
 	}
 
@@ -215,7 +212,11 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 		<AdminPage
 			title="实践项目"
 			description="按企业真实业务组织，每个项目都是一份可直接开工的需求：目标、契约、验收、参考实现。"
-			extra={<span className="study-progress-chip">{projects.length} 个项目</span>}
+			extra={
+				<span className="study-progress-chip">
+					{projects.length} 个项目 · {directions.length} 个方向
+				</span>
+			}
 		>
 			<style>{PROJECT_CSS}</style>
 
@@ -281,7 +282,7 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 						</h3>
 						<div className="proj-grid">
 							{items.map((p) => (
-								<button key={p.id} type="button" className="proj-card" onClick={() => open(p.id)}>
+								<button key={p.id} type="button" className={`proj-card proj-card-${p.route}`} onClick={() => open(p.id)}>
 									<div className="proj-card-head">
 										<span className="proj-card-title">{p.title}</span>
 										<span className={`proj-route proj-route-${p.route}`}>{p.routeLabel}</span>
@@ -342,8 +343,13 @@ const PROJECT_CSS = `
 .proj-group-title::after{content:"";flex:1;height:1px;background:rgba(128,128,128,.18)}
 .proj-group-count{font-size:11px;font-weight:500;color:#71717a}
 .dark .proj-group-count{color:#a1a1aa}
-.proj-card{display:flex;flex-direction:column;gap:6px;text-align:left;padding:14px 16px;border:1px solid rgba(128,128,128,.2);border-radius:12px;background:var(--card,#fff);cursor:pointer;color:inherit;transition:border-color .16s,box-shadow .16s,transform .16s}
-.dark .proj-card{background:#1f1f1f}
+.proj-card{display:flex;flex-direction:column;gap:6px;text-align:left;padding:14px 16px;border:1px solid rgba(128,128,128,.2);border-left:3px solid var(--card-accent,rgba(128,128,128,.3));border-radius:12px;background:var(--card,#fff);cursor:pointer;color:inherit;transition:border-color .16s,box-shadow .16s,transform .16s}
+.proj-card-java{--card-accent:#f59e0b}
+.proj-card-go{--card-accent:#06b6d4}
+.proj-card-react{--card-accent:#8b5cf6}
+.proj-card-nextjs{--card-accent:#334155}
+.dark .proj-card-nextjs{--card-accent:#cbd5e1}
+.dark .proj-card{background:#232323}
 .proj-card:hover{border-color:color-mix(in srgb,var(--app-accent,#6366f1) 45%,transparent);box-shadow:0 6px 18px rgba(0,0,0,.07);transform:translateY(-1px)}
 .dark .proj-card:hover{box-shadow:none}
 .proj-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
@@ -375,7 +381,13 @@ const PROJECT_CSS = `
 .proj-detail{flex:1;min-width:0;max-width:none}
 /* 正文纸张：把文档从页面底色里「抬起来」，这是最影响观感的一层 */
 .proj-sheet{background:#fff;border:1px solid rgba(17,24,39,.06);border-radius:16px;padding:30px 36px 34px;box-shadow:0 1px 2px rgba(16,24,40,.04),0 12px 28px -18px rgba(16,24,40,.18)}
-.dark .proj-sheet{background:#1f1f1f;border-color:rgba(255,255,255,.08);box-shadow:none}
+.dark .proj-sheet{background:#232323;border-color:rgba(255,255,255,.09);box-shadow:none}
+/* 封面：标题/元信息/操作并进卡片顶部，用一层很淡的主题色渐变把它和正文分开 */
+.proj-cover{margin:-30px -36px 24px;padding:26px 36px 20px;border-radius:16px 16px 0 0;background:linear-gradient(180deg,color-mix(in srgb,var(--app-accent,#6366f1) 7%,transparent),transparent 88%)}
+.dark .proj-cover{background:linear-gradient(180deg,color-mix(in srgb,var(--app-accent,#818cf8) 14%,transparent),transparent 88%)}
+.proj-cover-row{display:flex;align-items:center;gap:16px}
+.proj-cover-title{flex:1;min-width:0;margin:0;font-size:26px;line-height:1.3;font-weight:700;letter-spacing:-.02em;color:var(--doc-head,#111827)}
+.proj-cover .proj-meta-line{margin-top:8px}
 .proj-copy{border:1px solid rgba(128,128,128,.25);background:transparent;color:inherit;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;transition:border-color .15s,color .15s}
 .proj-copy:hover{border-color:var(--app-accent,#6366f1);color:var(--app-accent,#6366f1)}
 .proj-toc{position:sticky;top:72px;flex:none;width:196px;max-height:calc(100vh - 88px);overflow-y:auto;scrollbar-width:thin;padding-left:16px;border-left:1px solid rgba(128,128,128,.18)}
