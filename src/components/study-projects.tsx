@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { Input } from "antd"
 import { AdminPage } from "@/components/admin"
 import { MD_BODY_CSS } from "@/components/md-preview"
@@ -21,10 +21,8 @@ const ROUTES = [
 	{ id: "nextjs", label: "Next.js" },
 ] as const
 
-export default function ProjectsView({ projects }: { projects: StudyProject[] }) {
+export default function ProjectsView({ projects, pid }: { projects: StudyProject[]; pid: string }) {
 	const router = useRouter()
-	const sp = useSearchParams()
-	const pid = sp.get("p")
 
 	const [route, setRoute] = useState<string>("all")
 	const [direction, setDirection] = useState<string>("all")
