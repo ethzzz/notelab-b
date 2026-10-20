@@ -90,6 +90,32 @@ export const getTrend = () => fetch(`${API}/stats/trend?range=30d`, { next: { re
 `loading.tsx` 是**整个路由**的兜底：它会让整页先显示骨架，等所有数据就绪才替换。而 Suspense 是**按块**的，快的先出——这才是流式。
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl，用 TTFB 证明流式）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+
+echo "== 1. 连续三次采样 TTFB 与总耗时"
+for i in 1 2 3; do
+  curl -s -o /dev/null -w 'ttfb=%{time_starttransfer}s  total=%{time_total}s\n' "$BASE/dashboard"
+done
+
+echo "== 2. 判定：TTFB 必须小于总耗时的一半（否则说明页面在顶层 await 了慢数据）"
+read -r ttfb total < <(curl -s -o /dev/null -w '%{time_starttransfer} %{time_total}' "$BASE/dashboard")
+awk -v a="$ttfb" -v b="$total" 'BEGIN { exit !(a < b * 0.5) }' \
+  && echo "PASS ttfb=${ttfb}s < total=${total}s" \
+  || { echo "FAIL ttfb=${ttfb}s 接近 total=${total}s：慢数据没有被 Suspense 下沉"; exit 1; }
+
+echo "== 3. HTML 分块到达（流式）"
+curl -sN "$BASE/dashboard" | head -c 400; echo
+
+echo "== 4. 慢块失败只影响自己：临时把 /api/stats/trend 改成 500，刷新页面看其余两块是否正常"
+```
+:::
+
 ## 延伸方向
 
 - 加「刷新」按钮：`router.refresh()` 只重取服务端数据，不整页重载。

@@ -12,7 +12,7 @@ import { AdminPage } from "@/components/admin"
 import { MD_BODY_CSS } from "@/components/md-preview"
 import type { StudyProject } from "@/lib/study-projects"
 
-const FOLD_LABEL: Record<string, string> = { hint: "思路", solution: "参考实现", error: "常见报错" }
+const FOLD_LABEL: Record<string, string> = { hint: "思路", solution: "参考实现", error: "常见报错", check: "验收脚本" }
 const ROUTES = [
 	{ id: "all", label: "全部" },
 	{ id: "java", label: "Java" },
@@ -511,6 +511,7 @@ const PROJECT_CSS = `
 .proj-tag-hint{color:var(--app-accent,#4f46e5);background:color-mix(in srgb,var(--app-accent,#6366f1) 10%,transparent);border-color:color-mix(in srgb,var(--app-accent,#6366f1) 22%,transparent)}
 .proj-tag-solution{color:#237804;background:rgba(82,196,26,.12);border-color:rgba(82,196,26,.26)}
 .proj-tag-error{color:#ad4e00;background:rgba(250,140,22,.12);border-color:rgba(250,140,22,.28)}
+.proj-tag-check{color:#0e7490;background:rgba(6,182,212,.12);border-color:rgba(6,182,212,.3)}
 .dark .proj-tag-hint{color:var(--app-accent,#818cf8)}
 .dark .proj-tag-solution{color:#95de64}
 .dark .proj-tag-error{color:#ffc069}

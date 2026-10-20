@@ -63,7 +63,7 @@ export const STUDY_LANGS = Object.keys(STUDY_DOCS)
 // 每周内部 = 周级内容（本周目标 / 验收）+ 若干步骤；步骤内部 = 普通段落 + 折叠块
 // ---------------------------------------------------------------------------
 
-export type FoldKind = "hint" | "solution" | "error"
+export type FoldKind = "hint" | "solution" | "error" | "check"
 
 export type StudyPart = { type: "md"; html: string } | { type: "fold"; kind: FoldKind; title: string; html: string }
 

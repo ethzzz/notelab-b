@@ -103,6 +103,32 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+
+echo "== 1. 建立 SSE 连接：6 秒内必须收到心跳（否则会被代理掐断）"
+timeout 6 curl -sN "$BASE/api/stream" | head -c 200; echo
+
+echo "== 2. 在线人数接口"
+curl -s "$BASE/api/online"; echo
+
+echo "== 3. 慢客户端不拖垮服务：开 50 条连接，其中 1 条故意不读"
+for i in $(seq 49); do timeout 6 curl -sN "$BASE/api/stream" >/dev/null & done
+timeout 6 curl -sN "$BASE/api/stream" | head -c 1 >/dev/null &   # 立刻停止读取的「慢客户端」
+sleep 2
+curl -s -o /dev/null -w '健康检查 status=%{http_code} time=%{time_total}s\n' "$BASE/api/online"
+wait || true
+
+echo "== 4. 断线重连补偿：带 Last-Event-ID 请求，应只补发该 id 之后的事件"
+curl -s -N -H 'Last-Event-ID: 0' --max-time 3 "$BASE/api/stream" | head -c 200; echo
+```
+:::
+
 ## 延伸方向
 
 - 事件持久化：断线补偿需要「按 id 回放」，把最近 N 条放 Redis。

@@ -102,6 +102,40 @@ proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+KEY="${KEY:-demo-key}"
+
+expect() {
+  local want=$1 desc=$2; shift 2
+  local got; got=$(curl -s -o /tmp/nl.body -w '%{http_code}' "$@")
+  if [ "$got" = "$want" ]; then printf 'PASS %s (%s)\n' "$desc" "$got"
+  else printf 'FAIL %s  want=%s got=%s\n' "$desc" "$want" "$got"; cat /tmp/nl.body; exit 1; fi
+}
+
+echo "== 1. 没有 key → 401（不是 500，也不能透传上游）"
+expect 401 "无 X-Api-Key" "$BASE/api/v1/orders"
+
+echo "== 2. 合法 key → 200，并回写 X-Request-Id"
+curl -s -D /tmp/nl.h -o /dev/null -H "X-Api-Key: $KEY" "$BASE/api/v1/orders"
+grep -qi '^x-request-id:' /tmp/nl.h && echo "PASS 回写 requestId" || { echo "FAIL 响应缺 X-Request-Id"; exit 1; }
+
+echo "== 3. 突发 200 次：应出现 429，其余 200"
+seq 200 | xargs -P 50 -I{} curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "X-Api-Key: $KEY" "$BASE/api/v1/orders" | sort | uniq -c
+echo "（人工核对：429 的数量应与配额相符；且 429 不拖垮其他 key）"
+
+echo "== 4. 慢上游：网关 800ms 超时应返回 504"
+curl -s -o /tmp/nl.body -w 'status=%{http_code} time=%{time_total}s\n' \
+  -H "X-Api-Key: $KEY" "$BASE/api/v1/slow"
+```
+:::
+
 ## 延伸方向
 
 - 熔断：连续失败 N 次后短路，半开探测恢复。

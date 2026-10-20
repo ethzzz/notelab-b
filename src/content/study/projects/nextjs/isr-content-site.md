@@ -99,6 +99,42 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
 按顺序排除：① CDN/反代是否缓存了 HTML；② 页面是不是被 `cookies()`/`searchParams` 变成了动态（那就不该走 ISR）；③ `fetch` 有没有打 tag；④ webhook 是否真的到达（看 handler 日志）；⑤ 是否调用了 `revalidateTag` 但 tag 拼错（不报错，只是没生效）。
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl + openssl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+SLUG="${SLUG:-hello}"
+SECRET="${CMS_SECRET:?先 export CMS_SECRET=<与 webhook 一致的密钥>}"
+
+echo "== 1. 详情页应是静态/ISR（能看到缓存头），而不是每次回源"
+curl -sI "$BASE/posts/$SLUG" | grep -iE '^(x-nextjs-cache|cache-control|age):' \
+  || echo "（没有缓存头：检查是否用了 cookies()/searchParams 把路由变成动态）"
+
+BODY="{\"slug\":\"$SLUG\"}"
+
+echo "== 2. 错误签名 → 401，且不触发失效"
+code=$(curl -s -o /tmp/nl.body -w '%{http_code}' -X POST "$BASE/api/revalidate" \
+  -H 'Content-Type: application/json' -H 'x-signature: bad' -d "$BODY")
+[ "$code" = "401" ] && echo "PASS 坏签名被拒绝" || { echo "FAIL 坏签名返回 $code"; cat /tmp/nl.body; exit 1; }
+
+echo "== 3. 正确签名 → 200"
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+before=$(curl -s "$BASE/posts/$SLUG" | grep -o '<title>[^<]*' | head -1)
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/revalidate" \
+  -H 'Content-Type: application/json' -H "x-signature: $SIG" -d "$BODY")
+[ "$code" = "200" ] || { echo "FAIL 正确签名返回 $code"; exit 1; }
+
+echo "== 4. 1 秒内页面应更新"
+sleep 1
+after=$(curl -s "$BASE/posts/$SLUG" | grep -o '<title>[^<]*' | head -1)
+printf '改前 %s\n改后 %s\n' "$before" "$after"
+echo "（人工核对 title 是否变成新内容；没变就按「常见报错」那五步排查）"
+```
+:::
+
 ## 延伸方向
 
 - 列表页分页也按 tag 失效（`posts:list:page:2`）。

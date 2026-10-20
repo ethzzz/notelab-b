@@ -97,6 +97,39 @@ public void releaseExpired() {
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl，重点验幂等）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+
+qty() { curl -s "$BASE/api/stock/demo" | sed -n 's/.*"available":\([0-9]*\).*/\1/p'; }
+post() { curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE$1"; }
+
+echo "== 1. 预占 → 释放两次：库存只回补一次"
+before=$(qty)
+RID=$(curl -s -X POST "$BASE/api/reservations" -H 'Content-Type: application/json' \
+  -d "{\"sku\":\"demo\",\"qty\":2,\"orderId\":$(date +%s)}" | sed -n 's/.*"reservationId":\([0-9]*\).*/\1/p')
+[ -n "$RID" ] || { echo "FAIL 预占失败"; exit 1; }
+echo "预占后 available=$(qty)（应比 $before 少 2）"
+[ "$(post "/api/reservations/$RID/release")" = "200" ] || { echo "FAIL 首次释放"; exit 1; }
+mid=$(qty)
+[ "$(post "/api/reservations/$RID/release")" = "200" ] || { echo "FAIL 重复释放应幂等返回 200"; exit 1; }
+[ "$(qty)" = "$mid" ] && echo "PASS 重复释放没有二次回补（available=$mid）" || { echo "FAIL 库存被加两次"; exit 1; }
+
+echo "== 2. 已确认的预占不能再释放"
+RID2=$(curl -s -X POST "$BASE/api/reservations" -H 'Content-Type: application/json' \
+  -d "{\"sku\":\"demo\",\"qty\":1,\"orderId\":$(date +%s)9}" | sed -n 's/.*"reservationId":\([0-9]*\).*/\1/p')
+post "/api/reservations/$RID2/confirm" >/dev/null
+post "/api/reservations/$RID2/release" >/dev/null
+echo "人工核对：该预占状态应为 CONFIRMED，available 应等于扣减后的值"
+
+echo "== 3. 超时释放：把 expire 调成 5 秒后重跑，等 10 秒看库存是否回补"
+```
+:::
+
 ## 延伸方向
 
 - 改延迟队列（Redis ZSET / MQ 延迟消息），把误差从 5 秒压到毫秒。

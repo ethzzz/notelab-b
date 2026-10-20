@@ -893,6 +893,9 @@ C 端的「熟练」体现在**能在匿名、弱网、手机、搜索引擎这�
 [实时评论与在线列表](/admin/study/projects?p=react/realtime-comments) ·
 [下单流程前端](/admin/study/projects?p=react/checkout-flow)
 
+
+每个项目末尾都有**「验收脚本」**折叠块：复制到本地，把 `BASE` 指向你的服务就能跑一遍验收。
+
 ## 毕业评估（L3 rubric）
 
 | 维度 | 不合格 | 合格（L2） | 熟练（L3） | 优秀（L4） |

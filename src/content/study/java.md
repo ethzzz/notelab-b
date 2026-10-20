@@ -1509,6 +1509,8 @@ throw new IllegalStateException("订单 " + id + " 当前状态 " + status + "�
 [审批流引擎](/admin/study/projects?p=java/approval-workflow) ·
 [百万行报表导出](/admin/study/projects?p=java/report-export)
 
+每个项目末尾都有**「验收脚本」**折叠块：复制到本地，把 `BASE` 指向你的服务就能跑一遍验收。
+
 ## 场景详解（模板）：订单与库存
 
 > 这是场景库 #2 的**完整需求文档**，也是其余场景的展开模板。五段式：

@@ -18,6 +18,7 @@ const FOLD_META = {
 	hint: { tag: "思路", hint: "想不明白再点开" },
 	solution: { tag: "代码 / 答案", hint: "参考实现" },
 	error: { tag: "常见报错", hint: "报错了对着看" },
+	check: { tag: "验收脚本", hint: "跑一遍看结果" },
 } as const
 
 type NavItem = TocItem & { no?: string }
@@ -587,6 +588,7 @@ const STUDY_CSS = `
 .study-fold-hint .study-fold-tag{color:var(--app-accent,#4f46e5);background:color-mix(in srgb,var(--app-accent,#6366f1) 10%,transparent);border-color:color-mix(in srgb,var(--app-accent,#6366f1) 22%,transparent)}
 .study-fold-solution .study-fold-tag{color:#237804;background:rgba(82,196,26,.12);border-color:rgba(82,196,26,.26)}
 .study-fold-error .study-fold-tag{color:#ad4e00;background:rgba(250,140,22,.12);border-color:rgba(250,140,22,.28)}
+.study-fold-check .study-fold-tag{color:#0e7490;background:rgba(6,182,212,.12);border-color:rgba(6,182,212,.3)}
 .study-fold-title{flex:1;min-width:0;opacity:.82;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .12s,opacity .12s}
 .study-fold-arrow{flex:none;font-size:12px;color:var(--accent);opacity:.85}
 .study-fold-body{padding:2px 0 12px}

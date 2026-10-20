@@ -750,6 +750,9 @@ await page.goto("/login"); await page.fill("#user", "u1"); ...
 [ISR 内容站](/admin/study/projects?p=nextjs/isr-content-site) ·
 [多租户 SaaS 后台](/admin/study/projects?p=nextjs/multi-tenant-saas)
 
+
+每个项目末尾都有**「验收脚本」**折叠块：复制到本地，把 `BASE` 指向你的服务就能跑一遍验收。
+
 ## 毕业评估（L3 / L4 边界）
 
 | 维度 | 合格（L2） | 高级（L3） | 资深（L4） |

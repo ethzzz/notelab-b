@@ -108,7 +108,7 @@ function renderMd(text: string, used: Set<string>, toc?: TocItem[]): string {
 
 const WEEK_RE = /^#{2,3}\s+第\s*(\d+)\s*周\s*[：:]\s*(.+?)\s*$/
 const STEP_RE = /^####\s+步骤\s*([0-9]+(?:\.[0-9]+)*)?\s*(.+?)\s*$/
-const FOLD_RE = /^:::(hint|solution|error)\s*(.*)$/
+const FOLD_RE = /^:::(hint|solution|error|check)\s*(.*)$/
 const HEADING_RE = /^#{2,3}\s+/
 
 type Mode = "intro" | "stage" | "week" | "appendix"

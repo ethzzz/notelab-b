@@ -93,6 +93,39 @@ if v, err := client.Fetch(app, env); err == nil { apply(v); saveLocal(v) }
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl，验乐观锁与推送）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+APP="${APP:-web}"
+
+ver() { curl -s "$BASE/api/config/$APP?env=prod" | sed -n 's/.*"version":\([0-9]*\).*/\1/p'; }
+put() { curl -s -o /tmp/nl.body -w '%{http_code}' -X PUT "$BASE/api/config/$APP" \
+  -H 'Content-Type: application/json' -d "{\"values\":{\"k\":\"$2\"},\"baseVersion\":$1}"; }
+
+V=$(ver); echo "当前版本 v$V"
+
+echo "== 1. 用过期 baseVersion 提交 → 409，且库里的版本不变"
+[ "$(put 0 "stale")" = "409" ] || { echo "FAIL 旧版本没有被拒绝"; exit 1; }
+[ "$(ver)" = "$V" ] && echo "PASS 版本未被改动（仍 v$V）" || { echo "FAIL 版本被写入"; exit 1; }
+
+echo "== 2. 正确 baseVersion → 版本 +1"
+[ "$(put "$V" "v-$RANDOM")" = "200" ] || { echo "FAIL 正常写入失败"; exit 1; }
+[ "$(ver)" = "$((V + 1))" ] && echo "PASS 版本递增到 v$((V + 1))" || { echo "FAIL 版本没有单调递增"; exit 1; }
+
+echo "== 3. 订阅者在 1 秒内收到新版本"
+( timeout 4 curl -sN "$BASE/api/config/$APP/watch" > /tmp/nl.sse ) & watcher=$!
+sleep 1
+put "$((V + 1))" "push-$RANDOM" > /dev/null
+wait $watcher || true
+grep -q "\"version\":$((V + 2))" /tmp/nl.sse \
+  && echo "PASS 订阅者收到 v$((V + 2))" || { echo "FAIL SSE 未收到推送"; head -c 300 /tmp/nl.sse; exit 1; }
+```
+:::
+
 ## 延伸方向
 
 - 灰度配置：按实例/用户比例下发不同值。
