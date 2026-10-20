@@ -4,6 +4,7 @@
 // - 主题模式持久化于 localStorage（notelab_b_theme），默认 light
 // - 切换时同步 <html> 的 .dark class（Tailwind dark: 变体 + globals.css 深色变量）
 // - 首帧防闪烁由根 layout 的内联脚本负责（SSR 前读 localStorage 打 .dark class）
+// - **主题 token 同步到 CSS 变量**（--app-accent 等）：文档页的强调色不再写死，跟着 colorPrimary 走
 import { createContext, useContext, useEffect, useState } from "react"
 import { ConfigProvider, theme as antdTheme } from "antd"
 import zhCN from "antd/locale/zh_CN"
@@ -28,6 +29,25 @@ function readStoredMode(): ThemeMode {
   } catch {
     return "light"
   }
+}
+
+/**
+ * 把 antd 的主题 token 写到 <html> 的 CSS 变量上。
+ *
+ * 为什么不在各处 import 一份常量：主题色是**运行时**配置（未来可能换成用户可选），
+ * 而且 darkAlgorithm 会生成一套不同的 token。读 token 再写变量，文档 CSS 只认变量名，
+ * 换主题时不用改任何页面样式。
+ */
+function ThemeTokensToCss() {
+  const { token } = antdTheme.useToken()
+  useEffect(() => {
+    const s = document.documentElement.style
+    s.setProperty("--app-accent", token.colorPrimary)
+    s.setProperty("--app-accent-bg", token.colorPrimaryBg)
+    s.setProperty("--app-accent-border", token.colorPrimaryBorder)
+    s.setProperty("--app-accent-hover", token.colorPrimaryHover)
+  }, [token])
+  return null
 }
 
 export default function AntdProvider({ children }: { children: React.ReactNode }) {
@@ -68,6 +88,7 @@ export default function AntdProvider({ children }: { children: React.ReactNode }
           token: { colorPrimary: "#6366f1", borderRadius: 8 },
         }}
       >
+        <ThemeTokensToCss />
         {children}
       </ConfigProvider>
     </ThemeContext.Provider>
