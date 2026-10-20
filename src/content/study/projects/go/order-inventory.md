@@ -92,6 +92,45 @@ if isDuplicate(err) {
 | 防超卖 | 条件更新 | 条件更新（一样） |
 | 幂等 | 唯一索引 + 捕获异常 | 唯一索引 + 判错 |
 
+## 验收脚本
+
+:::check 复制即用（bash + curl，与 Java 版同一套断言）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+SKU="${SKU:-demo}"
+
+expect() {
+  local want=$1 desc=$2; shift 2
+  local got; got=$(curl -s -o /tmp/nl.body -w '%{http_code}' "$@")
+  if [ "$got" = "$want" ]; then printf 'PASS %s (%s)\n' "$desc" "$got"
+  else printf 'FAIL %s  want=%s got=%s\n' "$desc" "$want" "$got"; cat /tmp/nl.body; exit 1; fi
+}
+
+echo "== 1. 库存不足 → 409（不是 500，也不扣库存）"
+expect 409 "qty 超库存" -X POST "$BASE/api/orders" -H 'Content-Type: application/json' \
+  -d "{\"sku\":\"$SKU\",\"qty\":999999,\"requestId\":\"r-$(date +%s%N)\"}"
+
+echo "== 2. 同 requestId 两次 → 同一个 orderId"
+RID="idem-$(date +%s%N)"
+A=$(curl -s -X POST "$BASE/api/orders" -H 'Content-Type: application/json' \
+  -d "{\"sku\":\"$SKU\",\"qty\":1,\"requestId\":\"$RID\"}" | sed -n 's/.*"orderId":"\([^"]*\)".*/\1/p')
+B=$(curl -s -X POST "$BASE/api/orders" -H 'Content-Type: application/json' \
+  -d "{\"sku\":\"$SKU\",\"qty\":1,\"requestId\":\"$RID\"}" | sed -n 's/.*"orderId":"\([^"]*\)".*/\1/p')
+[ -n "$A" ] && [ "$A" = "$B" ] && echo "PASS 幂等 $A" || { echo "FAIL $A != $B"; exit 1; }
+
+echo "== 3. 20 并发抢 10 件 → 恰好 10 个 201"
+seq 20 | xargs -P 20 -I{} curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST "$BASE/api/orders" -H 'Content-Type: application/json' \
+  -d "{\"sku\":\"$SKU-small\",\"qty\":1,\"requestId\":\"c-{}\"}" | sort | uniq -c
+echo "（人工核对：201 恰好 10；再 GET /api/stock/$SKU-small 确认 qty 不为负）"
+
+echo "== 4. 与 Java 版对照：请求相同、响应相同，才说明业务口径一致"
+echo "   # 对同一份输入分别打两个实现，diff 响应体（去掉 orderId 时间戳差异）"
+```
+:::
+
 ## 延伸方向
 
 - 把「库存扣减」抽成独立的领域服务，两个语言都能调。

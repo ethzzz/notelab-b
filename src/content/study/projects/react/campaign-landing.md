@@ -76,6 +76,41 @@ Lighthouse：LCP 4.2s，LCP 元素是「一张背景图 + 一段标题」
 **改法**：首屏主视觉改成 `<img>` 并给 `fetchPriority="high"`；装饰性背景图延后或内联为渐变。
 :::
 
+## 验收脚本
+
+:::check 可自动化部分（curl）+ 浏览器核对清单
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+PAGE="${PAGE:-/landing}"
+
+echo "== 1. 首屏 HTML 必须自带标题与主视觉（不能等 JS）"
+curl -s "$BASE$PAGE" | grep -o '<title>[^<]*' | head -1
+curl -s "$BASE$PAGE" | grep -o 'property="og:image"[^>]*' | head -1
+
+echo "== 2. 首字节与总耗时"
+for i in 1 2 3; do
+  curl -s -o /dev/null -w 'ttfb=%{time_starttransfer}s total=%{time_total}s size=%{size_download}B\n' "$BASE$PAGE"
+done
+
+echo "== 3. 关键资源：主视觉图应是 next/image 优化过的（不是原始大图）"
+curl -s "$BASE$PAGE" | grep -o '/_next/image[^"]*' | head -1 || echo "（没看到 /_next/image，检查是否直接用了 <img src>）"
+
+echo "== 4. 表单/CTA 的接口可达"
+curl -s -o /dev/null -w 'submit -> %{http_code}\n' -X POST "$BASE/api/leads" \
+  -H 'Content-Type: application/json' -d '{"phone":"13800000000","source":"landing"}'
+```
+
+**浏览器核对**
+
+- [ ] 375px 下主视觉与 CTA 都在首屏内，不横向滚动
+- [ ] 图片 `priority` 生效（Network 里首屏图不是 lazy）
+- [ ] Lighthouse 移动端 LCP < 2.5s、CLS < 0.1
+- [ ] 第三方脚本（统计）不阻塞主线程（Performance 里长任务 < 50ms）
+
+:::
+
 ## 延伸方向
 
 - A/B：两版主视觉按用户分桶，用同一套埋点对比转化。

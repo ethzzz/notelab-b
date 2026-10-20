@@ -89,6 +89,49 @@ public void export(long taskId, ExportParams p) {
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+: "${TOKEN:?export TOKEN=<管理员或运营会话 token>}"
+
+auth=(-H "Authorization: Bearer $TOKEN")
+post() { curl -s -o /tmp/nl.body -w '%{http_code}' "${auth[@]}" -X POST "$BASE/api/exports" \
+  -H 'Content-Type: application/json' -d '{"type":"orders","params":{"from":"2026-01-01","to":"2026-12-31"}}'; }
+
+echo "== 1. 提交导出 → 202，拿到 taskId（不能同步阻塞）"
+[ "$(post)" = "202" ] || { echo "FAIL 提交未返回 202"; cat /tmp/nl.body; exit 1; }
+TID=$(sed -n 's/.*"taskId":\([0-9]*\).*/\1/p' /tmp/nl.body)
+echo "taskId=$TID"
+
+echo "== 2. 轮询进度：应能看到 done 递增（每 5% 更新一次）"
+last=-1
+for i in $(seq 1 60); do
+  body=$(curl -s "${auth[@]}" "$BASE/api/exports/$TID")
+  status=$(printf '%s' "$body" | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')
+  done_rows=$(printf '%s' "$body" | sed -n 's/.*"done":\([0-9]*\).*/\1/p')
+  total=$(printf '%s' "$body" | sed -n 's/.*"total":\([0-9]*\).*/\1/p')
+  [ "$done_rows" != "$last" ] && { echo "  status=$status done=$done_rows/$total"; last=$done_rows; }
+  [ "$status" = "DONE" ] && break
+  [ "$status" = "FAILED" ] && { echo "FAIL 任务失败"; cat /tmp/nl.body; exit 1; }
+  sleep 1
+done
+[ "$status" = "DONE" ] || { echo "FAIL 超时未完成"; exit 1; }
+[ "$done_rows" = "$total" ] && echo "PASS 全部行已处理（$total）" || { echo "FAIL 行数不符 done=$done_rows total=$total"; exit 1; }
+
+echo "== 3. 文件可下载且非空"
+curl -s -o /tmp/nl.xlsx -w 'http=%{http_code} bytes=%{size_download}\n' "${auth[@]}" "$BASE/api/exports/$TID/file"
+[ "$(stat -c%s /tmp/nl.xlsx 2>/dev/null || stat -f%z /tmp/nl.xlsx)" -gt 1024 ] \
+  && echo "PASS 文件已生成" || { echo "FAIL 文件过小或为空"; exit 1; }
+
+echo "== 4. 人工核对内存：导出期间进程 RSS 峰值应 < 500MB"
+echo "   # while true; do ps -o rss= -p \$(pgrep -f your-app) ; sleep 1; done | sort -n | tail -1"
+```
+:::
+
 ## 延伸方向
 
 - 导出模板化：不同业务共用一套「筛选 → 明细 → 文件」流程。

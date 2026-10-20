@@ -96,6 +96,45 @@ func (w *Worker) run(ctx context.Context) {
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+JOB="job-$(date +%s%N)"
+
+enqueue() { curl -s -o /tmp/nl.body -w '%{http_code}' -X POST "$BASE/api/jobs" \
+  -H 'Content-Type: application/json' -d "{\"jobId\":\"$JOB\",\"type\":\"send-mail\",\"payload\":{\"to\":\"a@b.c\"}}"; }
+state() { curl -s "$BASE/api/jobs/$JOB" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
+
+echo "== 1. 投递任务 → 201；同 jobId 再投 → 200 且不产生第二条"
+[ "$(enqueue)" = "201" ] || { echo "FAIL 投递失败"; cat /tmp/nl.body; exit 1; }
+[ "$(enqueue)" = "200" ] && echo "PASS 重复投递幂等" || { echo "FAIL 重复 jobId 返回非 200"; exit 1; }
+
+echo "== 2. 10 秒内应被消费完成"
+for i in $(seq 1 20); do
+  s=$(state)
+  [ "$s" = "DONE" ] && break
+  sleep 0.5
+done
+[ "$s" = "DONE" ] && echo "PASS 已消费（attempts 应为 1）" || { echo "FAIL 状态=$s"; exit 1; }
+curl -s "$BASE/api/jobs/$JOB"; echo
+
+echo "== 3. 失败重试：投一个必然失败的 type，attempts 应增长到上限后转 FAILED"
+curl -s -X POST "$BASE/api/jobs" -H 'Content-Type: application/json' \
+  -d "{\"jobId\":\"poison-$(date +%s)\",\"type\":\"always-fail\",\"payload\":{}}" >/dev/null
+echo "（等 30 秒后查该 job：status=FAILED、attempts=3、且进入死信表）"
+
+echo "== 4. 重复消费防护：同一 jobId 手工重投，业务副作用只发生一次"
+echo "（核对业务日志：send-mail 只打印一次）"
+
+echo "== 5. 崩溃恢复：消费到一半 kill -9 worker，重启后该任务应被重新投递"
+echo "   # 手动：kill -9 <pid> → 重启 → 查 status 是否最终 DONE"
+```
+:::
+
 ## 延伸方向
 
 - 延迟队列：用「可见时间」字段实现，避免 sleep 占住 worker。

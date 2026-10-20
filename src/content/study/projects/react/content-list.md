@@ -96,6 +96,39 @@ return <List items={state.data.items} />
 ```
 :::
 
+## 验收脚本
+
+:::check 可自动化部分（curl）+ 浏览器核对清单
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+
+echo "== 1. URL 是唯一状态源：每个地址都要能直接分享"
+for u in '/posts' '/posts?cat=tool' '/posts?cat=tool&page=2' '/posts?q=react'; do
+  code=$(curl -s -o /tmp/nl.html -w '%{http_code}' "$BASE$u")
+  [ "$code" = "200" ] || { echo "FAIL $u -> $code"; exit 1; }
+  grep -q '<title>' /tmp/nl.html && echo "PASS $u（含 title）" || { echo "FAIL $u 没渲染出内容"; exit 1; }
+done
+
+echo "== 2. 首屏内容必须在 HTML 里（不能是纯客户端空壳）"
+n=$(curl -s "$BASE/posts?cat=tool" | grep -c 'class="post-item"' || true)
+[ "$n" -gt 0 ] && echo "PASS SSR 出 $n 条" || echo "FAIL 首屏无内容：应改为服务端取数"
+
+echo "== 3. 翻页越界不应 500"
+curl -s -o /dev/null -w 'page=9999 -> %{http_code}\n' "$BASE/posts?page=9999"
+```
+
+**浏览器核对（脚本覆盖不到的）**
+
+- [ ] 改筛选 / 翻页后**刷新页面**，视图不丢
+- [ ] 浏览器**后退**，回到上一组筛选（不是空列表）
+- [ ] 复制地址发给同事，对方打开看到同一批数据
+- [ ] 筛出 0 条时有空状态与「清除筛选」
+- [ ] 375px 宽下不出现横向滚动
+
+:::
+
 ## 延伸方向
 
 - 无限滚动：用 `IntersectionObserver` 触底加载，同时保证 URL 仍可分享。

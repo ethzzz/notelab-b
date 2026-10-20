@@ -88,6 +88,46 @@ async function submit() {
 ```
 :::
 
+## 验收脚本
+
+:::check 后端用 curl 验幂等，前端用清单验交互
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+RID="req-$(date +%s%N)"
+
+post() { # post <requestId> <sku> <qty>
+  curl -s -o /tmp/nl.body -w '%{http_code}' -X POST "$BASE/api/orders" \
+    -H 'Content-Type: application/json' \
+    -d "{\"sku\":\"$2\",\"qty\":$3,\"requestId\":\"$1\"}"
+}
+oid() { sed -n 's/.*"orderId":"\([^"]*\)".*/\1/p' /tmp/nl.body; }
+
+echo "== 1. 同一 requestId 连提两次 → 只产生一单（第二次 200 返回原单）"
+[ "$(post "$RID" demo 1)" = "201" ] || { echo "FAIL 首单失败"; cat /tmp/nl.body; exit 1; }
+A=$(oid)
+[ "$(post "$RID" demo 1)" = "200" ] || { echo "FAIL 重复提交未按幂等返回"; exit 1; }
+B=$(oid)
+[ "$A" = "$B" ] && echo "PASS 幂等：$A" || { echo "FAIL 产生了第二单 $A != $B"; exit 1; }
+
+echo "== 2. 库存不足 → 409（前端应映射成「已售罄/库存不足」，不是系统错误）"
+[ "$(post "over-$(date +%s%N)" demo 999999)" = "409" ] && echo "PASS 409" || { echo "FAIL"; exit 1; }
+
+echo "== 3. 不同 requestId 是不同单（别把幂等做成永久缓存）"
+[ "$(post "new-$(date +%s%N)" demo 1)" = "201" ] && echo "PASS 新请求产生新单" || { echo "FAIL 新请求被去重"; exit 1; }
+```
+
+**浏览器核对**
+
+- [ ] 连点 5 次「提交订单」：Network 只有一次请求（或多次同 requestId），最终只有一单
+- [ ] 提交超时后点「重试」：仍是同一个 requestId
+- [ ] 下单成功后**刷新**再提交：生成新 requestId（不是复用上一单的）
+- [ ] 库存 0 时按钮禁用且文案为「已售罄」
+- [ ] 409 提示「库存不足」，网络错误提示「检查网络」
+
+:::
+
 ## 延伸方向
 
 - 支付超时回跳：回到订单页时识别「已支付」，避免二次下单。

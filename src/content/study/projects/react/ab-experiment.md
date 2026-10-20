@@ -83,6 +83,50 @@ useEffect(() => { track("exposure", { experimentId: "landing-v2", variant }) }, 
 ```
 :::
 
+## 验收脚本
+
+:::check 分桶用 Node 验（纯函数），埋点用 curl 验
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+
+echo "== 1. 分桶稳定性与均匀性"
+node -e '
+const bucket = (uid, exp) => {
+  let h = 2166136261
+  for (const ch of `${uid}:${exp}`) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) }
+  return (h >>> 0) % 100 < 50 ? "A" : "B"
+}
+const once = bucket("u1", "landing-v2")
+const same = Array.from({ length: 100 }, () => bucket("u1", "landing-v2"))
+if (new Set(same).size !== 1) { console.error("FAIL 同一用户来回换组"); process.exit(1) }
+console.log(`PASS 同一用户稳定在 ${once} 组`)
+let a = 0
+for (let i = 0; i < 1000; i++) if (bucket("u" + i, "landing-v2") === "A") a++
+const dev = Math.abs(a - 500) / 500
+console.log(`A=${a} B=${1000 - a} 偏差=${(dev * 100).toFixed(1)}%`)
+if (dev > 0.05) { console.error("FAIL 分桶不均匀（>5%）"); process.exit(1) }
+'
+
+echo "== 2. 埋点接口可达（失败也不能影响页面，这条只看服务端收不收）"
+curl -s -o /dev/null -w 'track -> %{http_code}\n' -X POST "$BASE/api/track" \
+  -H 'Content-Type: application/json' \
+  -d '{"event":"exposure","props":{"experimentId":"landing-v2","variant":"A"},"ts":0}'
+
+echo "== 3. 断网时页面仍渲染（人工）"
+echo "   DevTools → Network → Offline → 刷新：页面应正常显示，控制台无未捕获异常"
+```
+
+**浏览器核对**
+
+- [ ] 同一用户刷新 10 次，看到的版本不变
+- [ ] 曝光同一会话只上报一次（Network 里只有一条 exposure）
+- [ ] 埋点请求失败（拦截 `/api/track`）时页面无报错
+- [ ] 聚合面板能按 `experimentId + variant` 出曝光与点击
+
+:::
+
 ## 延伸方向
 
 - 多实验互斥：同一页面同时跑两个实验时，避免叠加影响结论。

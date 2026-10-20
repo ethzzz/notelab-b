@@ -87,6 +87,40 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
 ```
 ::: 
 
+## 验收脚本
+
+:::check 可自动化部分（curl）+ 浏览器核对清单
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+SLUG="${SLUG:-hello}"
+
+echo "== 1. 服务端直出的 meta（爬虫与分享卡片靠它）"
+curl -s "$BASE/posts/$SLUG" | grep -o '<title>[^<]*' | head -1
+curl -s "$BASE/posts/$SLUG" | grep -o 'property="og:title"[^>]*' | head -1
+curl -s "$BASE/posts/$SLUG" | grep -o 'property="og:image"[^>]*' | head -1
+
+echo "== 2. 不存在的 slug 必须是 404（返回 200 的错误页会被搜索引擎收录）"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/posts/no-such-slug-$(date +%s)")
+[ "$code" = "404" ] && echo "PASS 404" || { echo "FAIL 返回 $code"; exit 1; }
+
+echo "== 3. 正文在 HTML 里（不是水合后才出现）"
+curl -s "$BASE/posts/$SLUG" | grep -c '<article' || echo "（没看到 article，检查是否把内容渲染放到了客户端）"
+
+echo "== 4. 首屏体积粗看"
+curl -s -o /dev/null -w 'html=%{size_download}B  ttfb=%{time_starttransfer}s\n' "$BASE/posts/$SLUG"
+```
+
+**浏览器核对**
+
+- [ ] 链接发到微信/Telegram，预览卡片有标题与封面
+- [ ] 4G 节流下首屏 LCP < 2.5s
+- [ ] 图片有固定宽高（加载时不跳版，CLS < 0.1）
+- [ ] 404 页面有「返回列表」入口
+
+:::
+
 ## 延伸方向
 
 - 相关推荐：详情页底部按标签推荐 3 篇，提高留存。

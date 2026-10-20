@@ -97,6 +97,51 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ orgId
 **改法**：把数据获取放回服务端组件（`params` 变化会重新渲染），客户端只保留交互；必要时 `router.refresh()`。
 :::
 
+## 验收脚本
+
+:::check 可自动化部分（curl，需要两个组织的会话）+ 浏览器核对
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+: "${ORG_A:?export ORG_A=acme}"
+: "${ORG_B:?export ORG_B=globex}"
+: "${COOKIE_A:?export COOKIE_A='<组织A成员会话>'}"
+: "${COOKIE_B:?export COOKIE_B='<组织B成员会话>'}"
+
+code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+
+echo "== 1. 未登录访问组织页 → 重定向到 /login 且带 next"
+loc=$(curl -s -o /dev/null -w '%{redirect_url}' "$BASE/org/$ORG_A/orders")
+echo "Location: ${loc:-（无）}"
+case "$loc" in *"/login"*"next="*) echo "PASS 跳登录并保留回跳地址" ;; *) echo "FAIL 未按预期重定向"; exit 1 ;; esac
+
+echo "== 2. 非成员访问 → 404（不能是 403/200，别泄露组织存在性）"
+c=$(code -H "Cookie: $COOKIE_A" "$BASE/org/$ORG_B/orders")
+[ "$c" = "404" ] && echo "PASS 跨组织被挡" || { echo "FAIL 返回 $c —— 越权"; exit 1; }
+
+echo "== 3. 本组织成员 → 200"
+c=$(code -H "Cookie: $COOKIE_A" "$BASE/org/$ORG_A/orders")
+[ "$c" = "200" ] && echo "PASS 本组织正常" || { echo "FAIL 返回 $c"; exit 1; }
+
+echo "== 4. 接口层也要挡（绕过 UI 直接调）"
+c=$(code -H "Cookie: $COOKIE_A" "$BASE/api/orgs/$ORG_B/orders")
+[ "$c" = "403" ] || [ "$c" = "404" ] && echo "PASS 接口拒绝非成员（$c）" || { echo "FAIL 接口放行 $c"; exit 1; }
+
+echo "== 5. 切换组织：设置 cookie 后首页数据跟着变"
+curl -s -i -X POST "$BASE/api/orgs/switch" -H "Cookie: $COOKIE_A" \
+  -H 'Content-Type: application/json' -d "{\"orgId\":\"$ORG_A\"}" | grep -i '^set-cookie' || true
+```
+
+**浏览器核对**
+
+- [ ] 登录后回到原地址（`?next=` 生效），不是首页
+- [ ] 切换组织后侧边栏与列表同时更新（不刷新页面也不残留旧数据）
+- [ ] 直接改 URL 里的 orgId 打不开别人的组织
+- [ ] owner/admin 能删数据，member 看不到删除按钮**且接口也拒绝**
+
+:::
+
 ## 延伸方向
 
 - 子域名方案：`org.example.com` + 通配证书，注意 cookie 的 `Domain`。

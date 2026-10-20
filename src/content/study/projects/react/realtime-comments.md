@@ -82,6 +82,42 @@ async function send(content: string) {
 ```
 :::
 
+## 验收脚本
+
+:::check 用 curl 同时扮演「订阅者」和「发布者」
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:3000}"
+POST_ID="${POST_ID:-1}"
+TEXT="验收-$(date +%s%N)"
+
+echo "== 1. 先订阅 SSE，再发一条评论，应收到推送"
+( timeout 8 curl -sN "$BASE/api/stream?postId=$POST_ID" > /tmp/nl.sse ) & sub=$!
+sleep 1
+curl -s -o /dev/null -X POST "$BASE/api/comments" -H 'Content-Type: application/json' \
+  -d "{\"postId\":$POST_ID,\"content\":\"$TEXT\"}"
+wait $sub || true
+
+if grep -q "$TEXT" /tmp/nl.sse; then echo "PASS 1 秒内收到该条（$TEXT）"
+else echo "FAIL 未收到推送"; head -c 300 /tmp/nl.sse; exit 1; fi
+
+echo "== 2. 断线重连补偿：带 Last-Event-ID 重连，应补发缺口消息"
+curl -sN -H 'Last-Event-ID: 0' --max-time 3 "$BASE/api/stream?postId=$POST_ID" | head -c 300; echo
+
+echo "== 3. 重复投递不应重复渲染（前端按 id 去重）——人工"
+echo "   DevTools 里对同一条 event 重放两次，列表仍只有一条"
+```
+
+**浏览器核对**
+
+- [ ] 两个窗口互发评论，1 秒内互相可见
+- [ ] Network 面板断网 10 秒再恢复，缺口消息被补齐且不重复
+- [ ] 乐观发送失败时，临时消息被移除并出现错误提示
+- [ ] 375px 下输入框与列表都不横向滚动
+
+:::
+
 ## 延伸方向
 
 - 房间/帖子维度：切帖子时重建连接。
