@@ -31,11 +31,26 @@ export default function ChatPage() {
     }
   }
 
+  /**
+   * 会话里存的模型可能**已经失效**（换过 provider、模型下线、账号没权限）：
+   * 那种情况下不能直接拿它去发请求 —— 会稳定 400（例如切到 DeepSeek 后老会话还存着 qwen3.8-max）。
+   * 规则：存的值在当前清单里就用它，否则回落到清单第一个。
+   */
+  function pickModel(stored?: string): string {
+    if (stored && models.includes(stored)) return stored
+    return models[0] || stored || ""
+  }
+
   async function selectConv(id: number, list?: Conv[]) {
     setCurrentId(id)
     const src = list || convs
     const c = src.find((x) => x.id === id)
-    if (c?.model) setModel(c.model)
+    const next = pickModel(c?.model)
+    if (next) setModel(next)
+    // 存的是失效模型 → 顺手把会话改存成回落值，别让下次进来再踩一次
+    if (c?.model && next && c.model !== next) {
+      void postJson(`/api/conversations/${id}/model`, { model: next }).catch(() => {})
+    }
     try {
       const j = await apiJson(`/api/conversations/${id}/messages`)
       setMessages(j.messages || [])
@@ -87,6 +102,16 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
+
+  // 兜底：模型清单到达后，若选中的模型不在清单里（通常是老会话带来的旧模型名），
+  // 回落到第一个并把它写回会话 —— 与 selectConv 里的 pickModel() 是同一条规则的两次落点：
+  // 那次防「点会话时」、这次防「清单比会话晚到」的竞态。
+  useEffect(() => {
+    if (!models.length || !model || models.includes(model)) return
+    const fallback = models[0]
+    setModel(fallback)
+    if (currentId) void postJson(`/api/conversations/${currentId}/model`, { model: fallback }).catch(() => {})
+  }, [models, model, currentId])
 
   function patchLast(content: string) {
     setMessages((prev) => { const c = [...prev]; c[c.length - 1] = { role: "assistant", content }; return c })
