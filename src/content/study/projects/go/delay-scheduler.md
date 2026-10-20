@@ -108,6 +108,40 @@ func (s *Scheduler) run(ctx context.Context) {
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+ID="job-$(date +%s%N)"
+FIRE=$(date -u -d '+3 seconds' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+3S +%Y-%m-%dT%H:%M:%SZ)
+
+create() {
+  curl -s -o /tmp/nl.body -w '%{http_code}' -X POST "$BASE/internal/schedules" \
+    -H 'Content-Type: application/json' \
+    -d "{\"id\":\"$ID\",\"fireAt\":\"$FIRE\",\"type\":\"close-order\",\"payload\":{\"orderId\":1}}"
+}
+
+echo "== 1. 建一个 3 秒后到期的任务 → 201"
+[ "$(create)" = "201" ] || { echo "FAIL 创建失败"; cat /tmp/nl.body; exit 1; }
+echo "id=$ID fireAt=$FIRE"
+
+echo "== 2. 同一 id 再提交 → 200（幂等，不产生第二条任务）"
+[ "$(create)" = "200" ] && echo "PASS 重复提交幂等" || { echo "FAIL 重复 id 返回非 200"; exit 1; }
+
+echo "== 3. 等 5 秒，任务应已执行且只执行一次"
+sleep 5
+curl -s "$BASE/internal/schedules/$ID" | tee /tmp/nl.job; echo
+grep -q '"status":"DONE"' /tmp/nl.job && echo "PASS 已执行" || { echo "FAIL 未执行或状态不对"; exit 1; }
+echo "（执行次数应在业务日志里核对：同一 id 只处理了一次）"
+
+echo "== 4. 重启恢复：kill -9 后重启服务，重建一个 10 秒后的任务，确认仍会触发"
+echo "   # 手动步骤：建任务 → kill -9 → start → sleep 12 → 查状态"
+```
+:::
+
 ## 延伸方向
 
 - 时间轮替代最小堆，适合海量短期定时任务。

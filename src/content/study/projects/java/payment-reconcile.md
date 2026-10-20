@@ -98,6 +98,46 @@ remote.stream().filter(id -> !local.contains(id))
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+CHANNEL="${CHANNEL:-alipay}"
+SECRET="${PAY_SECRET:?先 export PAY_SECRET=<渠道验签密钥>}"
+TX="tx-$(date +%s%N)"
+
+sign() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //'; }
+status() { curl -s "$BASE/api/payments/$TX" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
+
+BODY="{\"transactionId\":\"$TX\",\"orderId\":1,\"amount\":\"10.00\",\"status\":\"SUCCESS\"}"
+
+echo "== 1. 错误签名 → 401，且订单状态不变"
+code=$(curl -s -o /tmp/nl.body -w '%{http_code}' -X POST "$BASE/api/pay/callback/$CHANNEL" \
+  -H 'Content-Type: application/json' -H 'x-signature: bad' -d "$BODY")
+[ "$code" = "401" ] && echo "PASS 验签失败被拒" || { echo "FAIL 返回 $code"; cat /tmp/nl.body; exit 1; }
+echo "当前状态：$(status)"
+
+echo "== 2. 正确签名 → 200，状态变 PAID"
+SIG=$(sign "$BODY")
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/pay/callback/$CHANNEL" \
+  -H 'Content-Type: application/json' -H "x-signature: $SIG" -d "$BODY")
+[ "$code" = "200" ] || { echo "FAIL 正常回调返回 $code"; exit 1; }
+[ "$(status)" = "PAID" ] && echo "PASS 状态 PAID" || { echo "FAIL 状态=$(status)"; exit 1; }
+
+echo "== 3. 渠道重试：同一笔再回调一次 → 200 且状态不变、不重复入账"
+curl -s -o /dev/null -X POST "$BASE/api/pay/callback/$CHANNEL" \
+  -H 'Content-Type: application/json' -H "x-signature: $SIG" -d "$BODY"
+[ "$(status)" = "PAID" ] && echo "PASS 重复回调幂等" || { echo "FAIL 状态被改坏"; exit 1; }
+
+echo "== 4. 对账：触发一次，差异清单应为空"
+curl -s -X POST "$BASE/api/admin/reconcile" -H "Authorization: Bearer ${ADMIN_TOKEN:?}" | tee /tmp/nl.rec
+grep -q '"diff":\[\]' /tmp/nl.rec && echo "PASS 无差异" || { echo "FAIL 有差异，检查渠道流水与本地记录"; exit 1; }
+```
+:::
+
 ## 延伸方向
 
 - 退款与部分退款：金额维度拆成 `payment_item`，退款要能对应到具体条目。

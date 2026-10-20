@@ -101,6 +101,46 @@ func (s *Store) Ingest(ctx context.Context, events []Event) (accepted, dup int, 
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+EID="ev-$(date +%s%N)"
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+send() { # send <eventId>
+  curl -s -X POST "$BASE/api/metrics/batch" -H 'Content-Type: application/json' \
+    -d "{\"events\":[{\"eventId\":\"$1\",\"name\":\"click\",\"uid\":\"u1\",\"ts\":\"$TS\"}]}"
+}
+
+echo "== 1. 首次上报 → accepted=1, duplicated=0"
+echo "$(send "$EID")"
+
+echo "== 2. 同一 eventId 再报 3 次 → 全部 duplicated，不重复计数"
+for _ in 1 2 3; do send "$EID"; echo; done
+
+echo "== 3. 聚合数只加 1：按分钟查该事件"
+curl -s "$BASE/api/metrics?name=click&from=$TS&to=$TS&granularity=minute"; echo
+echo "（人工核对：改前计数 +1，而不是 +4）"
+
+echo "== 4. 批量与并发：一次推 1000 条不同 eventId，应全部 accepted 且无 5xx"
+{
+  printf '{"events":['
+  for i in $(seq 1 1000); do
+    [ "$i" -gt 1 ] && printf ','
+    printf '{"eventId":"bulk-%s-%d","name":"click","uid":"u%d","ts":"%s"}' "$EID" "$i" "$i" "$TS"
+  done
+  printf ']}'
+} > /tmp/nl.batch
+curl -s -o /tmp/nl.out -w 'status=%{http_code}\n' -X POST "$BASE/api/metrics/batch" \
+  -H 'Content-Type: application/json' --data-binary @/tmp/nl.batch
+head -c 200 /tmp/nl.out; echo
+```
+:::
+
 ## 延伸方向
 
 - 多维度：按渠道/版本拆 rollup 的键。

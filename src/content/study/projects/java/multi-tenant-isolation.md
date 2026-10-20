@@ -84,6 +84,37 @@ List<Order> list = orderMapper.selectList(
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl，需要两个租户会话）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+: "${COOKIE_A:?export COOKIE_A='<租户A的会话 Cookie>'}"
+: "${COOKIE_B:?export COOKIE_B='<租户B的会话 Cookie>'}"
+
+get() { curl -s -o /tmp/nl.body -w '%{http_code}' -H "Cookie: $1" "$BASE$2"; }
+
+echo "== 1. 借 B 的 id 用 A 的会话访问 → 必须 404（不是 403，别暴露存在性）"
+BID=$(curl -s -H "Cookie: $COOKIE_B" "$BASE/api/orders" \
+  | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+[ -n "$BID" ] || { echo "FAIL B 租户没有数据，先造一条再跑"; exit 1; }
+code=$(get "$COOKIE_A" "/api/orders/$BID")
+[ "$code" = "404" ] && echo "PASS 跨租户访问被挡（id=$BID）" || { echo "FAIL 返回 $code —— 越权了"; cat /tmp/nl.body; exit 1; }
+
+echo "== 2. A 访问自己的列表 → 200"
+[ "$(get "$COOKIE_A" "/api/orders")" = "200" ] && echo "PASS 本租户正常" || { echo "FAIL 本租户也被挡"; exit 1; }
+
+echo "== 3. 超管跨租户查询必须显式开视图"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: ${ADMIN_COOKIE:?}" -H 'X-Admin-View: 1' "$BASE/api/orders?all=1")
+[ "$code" = "200" ] && echo "PASS 超管跨租户可用" || echo "注意：超管视图返回 $code"
+
+echo "== 4. 人工核对：应用 SQL 日志里每条业务查询都应带 tenant_id"
+echo "   ssh <host> \"grep -c 'FROM orders' app.log\"; 再看每条是否都有 tenant_id = ?"
+```
+:::
+
 ## 延伸方向
 
 - 分库分表：租户数超过单库容量后按 tenant_id 取模。

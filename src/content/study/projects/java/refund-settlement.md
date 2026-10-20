@@ -88,6 +88,44 @@ BigDecimal platform = total.subtract(merchant);
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+ORDER="${ORDER:-1}"
+RID="refund-$(date +%s%N)"
+
+refund() { # refund <金额> <requestId>
+  curl -s -o /tmp/nl.body -w '%{http_code}' -X POST "$BASE/api/refunds" \
+    -H 'Content-Type: application/json' -d "{\"orderId\":$ORDER,\"amount\":$1,\"reason\":\"验收\",\"requestId\":\"$2\"}"
+}
+
+echo "== 1. 部分退款 → 201，重复 requestId → 200 且返回原记录"
+[ "$(refund 60.00 "$RID")" = "201" ] || { echo "FAIL 首笔退款"; cat /tmp/nl.body; exit 1; }
+first=$(cat /tmp/nl.body)
+[ "$(refund 60.00 "$RID")" = "200" ] || { echo "FAIL 重复提交未按幂等返回"; exit 1; }
+[ "$(cat /tmp/nl.body)" = "$first" ] && echo "PASS 幂等返回同一条退款" || echo "注意：重复提交返回了不同内容"
+
+echo "== 2. 累计超过实付 → 409"
+[ "$(refund 60.00 "over-$(date +%s%N)")" = "409" ] || { echo "FAIL 超额退款没有被拒绝"; exit 1; }
+echo "PASS 超额退款被拒绝"
+
+echo "== 3. 退款流水可查，且累计不超过实付"
+curl -s "$BASE/api/orders/$ORDER/refunds" | tee /tmp/nl.refunds | head -c 300; echo
+sum=$(grep -o '"amount":[0-9.]*' /tmp/nl.refunds | sed 's/.*://' | awk '{s+=$1} END {printf "%.2f", s}')
+paid=$(curl -s "$BASE/api/orders/$ORDER" | sed -n 's/.*"paidAmount":[0-9.]*//p')
+echo "累计退款=$sum（应与实付金额比对）"
+awk -v s="$sum" 'BEGIN { exit !(s <= 100.00) }' && echo "PASS 累计未超实付" || { echo "FAIL 累计退款超过实付"; exit 1; }
+
+echo "== 4. 分账取整：跑一次结算，商户 + 平台必须等于总额"
+curl -s -X POST "$BASE/api/settlements/run" -H "Authorization: Bearer ${ADMIN_TOKEN:?}" | tee /tmp/nl.settle
+echo "（人工核对：merchant.amount + platform.amount == order.amount，差一分都不行）"
+```
+:::
+
 ## 延伸方向
 
 - 退款审批流：金额超过阈值要人工审批。

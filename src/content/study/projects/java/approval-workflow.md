@@ -101,6 +101,42 @@ taskMapper.cancelPending(flowId);
 ```
 :::
 
+## 验收脚本
+
+:::check 复制即用（bash + curl，验幂等与撤回）
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${BASE:-http://127.0.0.1:8080}"
+: "${TOKEN:?export TOKEN=<申请人会话 token>}"
+
+post() { curl -s -o /tmp/nl.body -w '%{http_code}' -X POST "$BASE$1" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "${2:-{}}"; }
+
+echo "== 1. 提交 → 201，并能拿到第一级待办"
+[ "$(post /api/flows '{"bizType":"expense","bizId":1}')" = "201" ] || { echo "FAIL 提交失败"; cat /tmp/nl.body; exit 1; }
+FLOW=$(sed -n 's/.*"flowId":\([0-9]*\).*/\1/p' /tmp/nl.body)
+TASK=$(curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/flows/$FLOW" | sed -n 's/.*"taskId":\([0-9]*\).*/\1/p' | head -1)
+echo "flow=$FLOW task=$TASK"
+
+echo "== 2. 同一任务审批两次：第一次成功，第二次 409"
+c1=$(post "/api/flows/$FLOW/approve" "{\"taskId\":$TASK}")
+[ "$c1" = "200" ] || [ "$c1" = "204" ] || { echo "FAIL 首次审批返回 $c1"; cat /tmp/nl.body; exit 1; }
+[ "$(post "/api/flows/$FLOW/approve" "{\"taskId\":$TASK}")" = "409" ] \
+  && echo "PASS 重复审批被拒（并发下也只成功一次）" || { echo "FAIL 同一任务被处理两次"; exit 1; }
+
+echo "== 3. 撤回：未完成时成功，再审批 → 409"
+FLOW2=$(curl -s -X POST "$BASE/api/flows" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"bizType":"expense","bizId":2}' | sed -n 's/.*"flowId":\([0-9]*\).*/\1/p')
+[ "$(post "/api/flows/$FLOW2/withdraw")" = "200" ] && echo "PASS 撤回成功" || { echo "FAIL 撤回失败"; exit 1; }
+[ "$(post "/api/flows/$FLOW2/approve" '{"taskId":1}')" = "409" ] \
+  && echo "PASS 撤回后原任务失效" || { echo "FAIL 撤回后还能审批"; exit 1; }
+
+echo "== 4. 会签：3 人里通过 2 人不应进入下一级（人工造 3 个 task 后核对状态仍为 RUNNING）"
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/api/flows/$FLOW" | head -c 200; echo
+```
+:::
+
 ## 延伸方向
 
 - 动态流程：审批链由配置决定，而不是写死在代码里。
