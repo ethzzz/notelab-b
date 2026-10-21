@@ -21,34 +21,34 @@
             {
               "q": "表 `t` 的 `v` 列依次是 `'a'`、`NULL`、`'b'`。下面这条语句返回什么？\n\n```sql\nSELECT COUNT(*) FROM t WHERE v <> 'a';\n```",
               "options": [
-                "`0`，因为 NULL 行让整条 WHERE 恒为 UNKNOWN",
-                "`1`，NULL 行得到 UNKNOWN 被过滤，只剩 `'b'` 这一行",
+                "`3`，`COUNT(*)` 数的是行，WHERE 不影响它",
                 "`2`，NULL 不等于 `'a'`，应该和 `'b'` 一起算进来",
-                "`3`，`COUNT(*)` 数的是行，WHERE 不影响它"
+                "`1`，NULL 行得到 UNKNOWN 被过滤，只剩 `'b'` 这一行",
+                "`0`，因为 NULL 行让整条 WHERE 恒为 UNKNOWN"
               ],
-              "answer": 1,
-              "explain": "`v <> 'a'` 对 `'b'` 为 TRUE，对 NULL 为 UNKNOWN，WHERE 只放行 TRUE，所以只剩 1 行。选 0 是误以为一行 UNKNOWN 会让整个结果失效；选 2 是把 NULL 当成普通的「不等于」；选 3 忘了 WHERE 在 COUNT 之前筛行，三行里有一行被过滤掉。"
+              "answer": 2,
+              "explain": "`v <> 'a'` 对 `'b'` 为 TRUE，对 NULL 为 UNKNOWN，WHERE 只放行 TRUE，所以只剩 1 行。答 `0`（以为一行 UNKNOWN 会让整个结果失效）是误判——UNKNOWN 只让那一行被过滤，不会连累其他行；答 `2` 是把 NULL 当成普通的「不等于」；答 `3` 忘了 WHERE 在 COUNT 之前筛行，三行里有一行被过滤掉。"
             },
             {
               "q": "要统计 2026 年 3 月整月的订单，`created_at` 是 `'YYYY-MM-DD HH:MM:SS'` 文本。下面写法漏掉了 3 月 31 日晚上的订单，最小且正确的修法是？\n\n```sql\nSELECT COUNT(*) FROM orders\nWHERE created_at BETWEEN '2026-03-01' AND '2026-03-31';\n```",
               "options": [
-                "把上界改成 `'2026-03-31 23:59:59'`，当天所有时间就都覆盖到了",
                 "改成 `created_at >= '2026-03-01' AND created_at < '2026-04-01'`",
                 "把 `BETWEEN` 换成 `IN ('2026-03-01', '2026-03-31')`",
-                "给 `created_at` 建索引，让范围查询走索引就不漏了"
+                "给 `created_at` 建索引，让范围查询走索引就不漏了",
+                "把上界改成 `'2026-03-31 23:59:59'`，当天所有时间就都覆盖到了"
               ],
-              "answer": 1,
+              "answer": 0,
               "explain": "半开区间把「下界含、上界不含」写死，不依赖时间的精度。改成 `23:59:59` 遇到带毫秒的值仍会漏，而且把「一天的最后一秒」写进 SQL 本身就是易错做法；`IN` 只匹配两个精确值，中间日期全丢；索引只影响查找速度，不会改变比较结果。"
             },
             {
               "q": "标准 SQL 里，下面这条语句在 MySQL 和 PostgreSQL 会报 Unknown column，而 SQLite 能跑。根本原因是？\n\n```sql\nSELECT amount / 100.0 AS yuan FROM orders WHERE yuan > 10;\n```",
               "options": [
-                "WHERE 在 SELECT 之前执行，别名 `yuan` 那时还不存在",
                 "`yuan` 是保留字，必须用双引号包起来",
                 "SQLite 会把别名物化成临时列，其他库不支持临时列",
-                "MySQL 和 PostgreSQL 不支持给 SELECT 里的表达式起别名"
+                "MySQL 和 PostgreSQL 不支持给 SELECT 里的表达式起别名",
+                "WHERE 在 SELECT 之前执行，别名 `yuan` 那时还不存在"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "逻辑执行顺序是 FROM → WHERE → SELECT → ORDER BY，WHERE 阶段 SELECT 的别名还没产生。`yuan` 不是保留字；没有哪个库为了 WHERE 去物化临时列；给表达式起别名是标准语法，ORDER BY 里就能用，所以不是「不支持别名」。"
             },
             {
@@ -75,23 +75,23 @@
             {
               "q": "`items.price` 依次是 `100`、`NULL`、`201`。下面语句输出什么？\n\n```sql\nSELECT COUNT(*), COUNT(price), SUM(price) / COUNT(*) FROM items;\n```",
               "options": [
-                "`3, 2, 100`",
                 "`3, 2, 150.5`",
                 "`3, 3, 100.33`",
-                "`2, 2, 150.5`"
+                "`2, 2, 150.5`",
+                "`3, 2, 100`"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "COUNT(*) 数到 3 行，COUNT(price) 因为 NULL 不计只数到 2，SUM 是 301；301 除以 3 两边都是整数，SQLite 直接截断成 100。`150.5` 是按非空行求的平均（301 除以 2）；`100.33` 既保留了小数又把 COUNT 当成 3；`2, 2` 连 COUNT(*) 都数错了。"
             },
             {
               "q": "下面查询想找出商品数超过 2 的店铺，执行时报 `misuse of aggregate`。正确的修法是？\n\n```sql\nSELECT shop, COUNT(*) FROM items\nWHERE COUNT(*) > 2\nGROUP BY shop;\n```",
               "options": [
-                "把 `WHERE COUNT(*) > 2` 改成 `HAVING COUNT(*) > 2`",
                 "把 `COUNT(*)` 改成 `COUNT(1)`，聚合函数不能带星号",
+                "把 `WHERE COUNT(*) > 2` 改成 `HAVING COUNT(*) > 2`",
                 "把 `GROUP BY shop` 提到 `WHERE` 前面",
                 "给 `shop` 建索引，让分组先于过滤执行"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "WHERE 在分组之前执行，那时还没有 COUNT 结果，所以行级条件用 WHERE、组级条件用 HAVING。`COUNT(1)` 与 `COUNT(*)` 等价，改了也不解决执行阶段问题；GROUP BY 的书写位置不能改变执行顺序；索引只影响访问路径，不会让聚合提前发生。"
             },
             {
@@ -109,11 +109,11 @@
               "q": "数据量上千万、业务允许 1% 误差时，替代 `COUNT(DISTINCT user_id)` 更合适的是？",
               "options": [
                 "改用 `COUNT(user_id)`，反正 NULL 不会计入",
-                "改用 HyperLogLog 一类近似去重计数，避开排序和临时表",
                 "给 `user_id` 建索引，`COUNT(DISTINCT)` 就能只读索引完成",
+                "改用 HyperLogLog 一类近似去重计数，避开排序和临时表",
                 "改成 `SUM(DISTINCT user_id)`，求和比计数快"
               ],
-              "answer": 1,
+              "answer": 2,
               "explain": "近似算法用固定内存估算基数，误差可控，适合千万级去重统计。`COUNT(user_id)` 根本不去重，会把重复用户重复计数；索引能减少回表，但去重仍要排序或哈希，不会把代价降到常数；`SUM(DISTINCT user_id)` 求的是用户 ID 之和，语义已经变了。"
             }
           ]
@@ -298,34 +298,34 @@
             {
               "q": "users.phone 上有普通索引，下面查询的执行计划第一行最可能是什么？\n\n```sql\nEXPLAIN QUERY PLAN\nSELECT * FROM users WHERE substr(phone, 4) = '00000042';\n```",
               "options": [
-                "SCAN users",
                 "SEARCH users USING INDEX idx_users_phone (phone=?)",
+                "SCAN users",
                 "SEARCH users USING COVERING INDEX idx_users_phone (substr(phone,4)=?)",
                 "USE TEMP B-TREE FOR WHERE"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "函数作用在列上，B 树里存的是 phone 的原始值，没有 substr 的结果，无法按它定位，只能逐行算再比。索引只在「列与常量直接比较」时能定位；没有为这个表达式单独建索引就不会出现 SEARCH；SQLite 也没有 USE TEMP B-TREE FOR WHERE 这种计划项，临时 B 树用于 ORDER BY 或 GROUP BY。"
             },
             {
               "q": "已经建了 `CREATE INDEX idx_city_created ON users(city, created_at);`，在收集统计信息之前，下面这条查询为什么还是全表扫？\n\n```sql\nSELECT * FROM users WHERE created_at = '2024-03-01';\n```",
               "options": [
-                "违反了最左前缀：created_at 不是索引的第一列，无法单独定位",
                 "因为 SELECT * 要取整行，而索引里没有整行，所以必须全表扫",
                 "因为 created_at 是 TEXT 类型，TEXT 列不能建索引",
-                "因为 created_at 上缺少唯一约束，普通索引不能用于范围查找"
+                "因为 created_at 上缺少唯一约束，普通索引不能用于范围查找",
+                "违反了最左前缀：created_at 不是索引的第一列，无法单独定位"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "复合索引先按 city 排序，city 不定时 created_at 在整棵索引里不是全局有序的，所以不能直接定位。SELECT * 只影响要不要回表，不影响能否按索引定位；TEXT 完全可以建索引；ANALYZE 会更新成本估算，SQLite 在 city 取值很少时还可能用 skip-scan（ANY(city)）逐 city 探测，但那是多次小查找，不是按 created_at 一次定位，第一列取值多时仍会退回全表扫。"
             },
             {
               "q": "SQLite 的 rowid 表上，二级索引的叶子节点存的是什么？",
               "options": [
                 "整行数据，所以二级索引查询永远不需要回表",
-                "索引列的值加上 rowid，取其他列时还要回主表 B 树",
                 "数据页的物理磁盘地址",
+                "索引列的值加上 rowid，取其他列时还要回主表 B 树",
                 "主键的哈希值，用来做等值比较"
               ],
-              "answer": 1,
+              "answer": 2,
               "explain": "rowid 表的表本身就是以 rowid 为键的 B 树，二级索引叶子存「索引列 + rowid」，查到 rowid 后再回表取整行，这就是回表。只有查询列全在索引里（覆盖索引）才不用回表。存整行是 InnoDB 聚簇索引的行为，不是二级索引；B 树存的是键，不是磁盘地址或哈希。"
             },
             {
@@ -534,40 +534,40 @@
                 "USE TEMP B-TREE FOR GROUP BY"
               ],
               "answer": 1,
-              "explain": "`date(created_at)` 把列包在函数里，索引按 `created_at` 的原始值排序，对 `date()` 之后的值没有顺序，优化器折不出区间，只能全表扫。A 是改写成 `created_at >= ... AND created_at < ...` 之后才会出现的计划；C 要求既能定位区间、查询列又全在索引里，这里两条都不成立；D 只在分组没有可用顺序时出现，本句没有 GROUP BY。"
+              "explain": "`date(created_at)` 把列包在函数里，索引按 `created_at` 的原始值排序，对 `date()` 之后的值没有顺序，优化器折不出区间，只能全表扫。`SEARCH ... USING INDEX (created_at=?)` 这种按索引定位的计划，要先把条件改写成 `created_at >= ... AND created_at < ...` 才会出现；`SEARCH ... USING COVERING INDEX` 既要求能定位区间、又要求查询列全在索引里，这里两条都不成立；`USE TEMP B-TREE FOR GROUP BY` 只在分组没有可用顺序时出现，本句没有 GROUP BY。"
             },
             {
               "q": "500 万行的订单表，已有索引 `(status, created_at)`。下面这条查询第 1 页 12ms，第 300 页 2.3 秒，翻页时还偶发重复行。根因是？\n\n```sql\nSELECT id, user_id, amount FROM orders\nWHERE status = 'paid'\nORDER BY created_at DESC\nLIMIT 20 OFFSET 5980;\n```",
               "options": [
                 "复合索引的列顺序写反了，应该把 created_at 放最前",
                 "缺少 status 上的单列索引",
-                "OFFSET 之前要按索引顺序读出 6000 行再丢弃 5980 行，成本随页码线性增长",
-                "ORDER BY 的方向与索引不一致，退化成 filesort"
+                "ORDER BY 的方向与索引不一致，退化成 filesort",
+                "OFFSET 之前要按索引顺序读出 6000 行再丢弃 5980 行，成本随页码线性增长"
               ],
-              "answer": 2,
-              "explain": "OFFSET 不是跳转而是「先生产再丢弃」，读取行数等于 offset 加 limit，所以越翻越慢；`created_at` 只精确到秒，并列值的先后没有定义，翻页期间数据一变就会重复或漏行。A 把 created_at 放最前会让 status 的等值条件用不上定位；B 的单列 status 选择性问题不变，不会更快；D 里索引可以反向扫描，DESC 本身不产生 filesort。"
+              "answer": 3,
+              "explain": "OFFSET 不是跳转而是「先生产再丢弃」，读取行数等于 offset 加 limit，所以越翻越慢；`created_at` 只精确到秒，并列值的先后没有定义，翻页期间数据一变就会重复或漏行。把 `created_at` 放到最前会让 `status` 的等值条件用不上定位；单独给 `status` 建索引不改变选择性问题，不会更快；索引可以反向扫描，`DESC` 本身不产生 filesort。"
             },
             {
               "q": "`EXPLAIN` 输出里的 `rows` 列，准确含义是？",
               "options": [
-                "上一次执行实际读取的行数",
                 "优化器基于统计信息估算出的、需要检查的行数",
                 "查询最终返回给客户端的行数",
-                "索引叶子节点里存放的行数"
+                "索引叶子节点里存放的行数",
+                "上一次执行实际读取的行数"
               ],
-              "answer": 1,
-              "explain": "`rows` 是成本模型里的估算值，来自表行数、列基数、选择率等统计信息，多列条件之间还默认相互独立。实际读取行数要开 `EXPLAIN ANALYZE` 看 `actual rows`，或对比慢日志里的 `Rows_examined`（A 说的是那个）。C 对应 `Rows_sent` 或结果集行数；D 与优化器的行数估算没有直接关系。"
+              "answer": 0,
+              "explain": "`rows` 是成本模型里的估算值，来自表行数、列基数、选择率等统计信息，多列条件之间还默认相互独立。要看实际读取的行数得开 `EXPLAIN ANALYZE` 看 `actual rows`，或对比慢日志里的 `Rows_examined`；`Rows_sent` 或结果集行数对应的是最终返回给客户端的行数；索引叶子节点存多少行与优化器的行数估算没有直接关系。"
             },
             {
               "q": "下面哪种需求最不适合用「预聚合汇总表」来优化？",
               "options": [
                 "每天凌晨生成、按渠道和品类固定维度的销售日报",
-                "要求秒级刷新、能看到「此刻」GMV 的实时大屏",
                 "跨 12 个月的趋势折线图",
+                "要求秒级刷新、能看到「此刻」GMV 的实时大屏",
                 "财务月度对账的汇总数字"
               ],
-              "answer": 1,
-              "explain": "预聚合的收益来自「不再扫明细」，代价是数据滞后一个刷新周期（分钟级或 T+1）；实时大屏要求最新数据立即可见，两者直接冲突。A、C、D 都是固定维度、能接受分钟级或天级延迟的报表，正是预聚合的适用场景。"
+              "answer": 2,
+              "explain": "预聚合的收益来自「不再扫明细」，代价是数据滞后一个刷新周期（分钟级或 T+1）；实时大屏要求最新数据立即可见，两者直接冲突。按渠道和品类出销售日报、跨 12 个月的趋势折线图、财务月度对账，都是固定维度、能接受分钟级或天级延迟的报表，正是预聚合的适用场景。"
             }
           ]
         },
@@ -636,35 +636,35 @@
             {
               "q": "两个 worker 同时执行下面这条语句（表里此时只有一条 `pending` 消息）。第二个 worker 执行后 `changes()` 返回什么？\n\n```sql\nUPDATE outbox SET status = 'sent'\nWHERE id = (SELECT id FROM outbox WHERE status = 'pending' ORDER BY id LIMIT 1)\n  AND status = 'pending';\n```",
               "options": [
-                "0",
-                "1",
                 "2",
-                "NULL"
+                "NULL",
+                "0",
+                "1"
               ],
-              "answer": 0,
-              "explain": "这是 CAS：第一个 worker 把状态改成 sent 之后，第二个的 `status = 'pending'` 不再成立，命中 0 行，`changes()` 返回 0。返回 1 说明它是抢到的那一个（只有第一个如此）；2 不可能，一条 UPDATE 不会凭空多出第二行；NULL 只在表达式无值时出现，`changes()` 总是整数。"
+              "answer": 2,
+              "explain": "这是 CAS：第一个 worker 把状态改成 sent 之后，第二个的 `status = 'pending'` 不再成立，命中 0 行，`changes()` 返回 0。返回 1 说明它是抢到的那一个，只有先到的那次如此；2 不可能，一条 UPDATE 不会凭空多出第二行；NULL 只在表达式无值时出现，`changes()` 总是整数。"
             },
             {
               "q": "用户下单成功后立刻跳详情页，偶尔显示「订单不存在」，刷新后又正常。最可能的原因？",
               "options": [
-                "下单事务没有提交，数据根本没落库",
                 "详情页读的是从库，复制延迟导致读到旧快照",
                 "详情页 SQL 缺少 WHERE 条件",
-                "订单表缺少 created_at 索引"
+                "订单表缺少 created_at 索引",
+                "下单事务没有提交，数据根本没落库"
               ],
-              "answer": 1,
-              "explain": "刷新后能看到，说明数据最终存在，只是第一次读的副本还没回放，典型的「读己之写」被破坏；修复方式是写后读主库，或按位点判断副本是否追上。A 与「刷新后又正常」矛盾；C 会稳定返回错误结果；D 只会让查询变慢，不会偶发查不到。"
+              "answer": 0,
+              "explain": "刷新后能看到，说明数据最终存在，只是第一次读的副本还没回放，典型的「读己之写」被破坏；修复方式是写后读主库，或按位点判断副本是否追上。「下单事务没提交」与「刷新后又正常」矛盾；详情页 SQL 少了 `WHERE` 会稳定返回错误结果，不是偶发查不到；缺 `created_at` 索引只会让查询变慢。"
             },
             {
               "q": "本地消息表（outbox）为什么能保证「订单写入」和「消息写入」的原子性？",
               "options": [
                 "因为消息队列支持事务消息，失败会自动重试",
-                "因为业务表和消息表在同一个数据库，由同一个本地事务提交",
                 "因为 outbox 表的 msg_id 上有唯一约束",
-                "因为后台轮询会不断重发，直到成功为止"
+                "因为后台轮询会不断重发，直到成功为止",
+                "因为业务表和消息表在同一个数据库，由同一个本地事务提交"
               ],
-              "answer": 1,
-              "explain": "同一个本地事务里提交两条 INSERT，数据库保证它们一起成功或一起失败。A 说的是 MQ 的事务消息能力，和 outbox 无关；C 只保证消息不重复，不保证原子；D 是投递侧的最终一致手段，解决的是「消息写成功了但没被消费」，而不是「订单成功、消息没写」。"
+              "answer": 3,
+              "explain": "同一个本地事务里提交两条 INSERT，数据库保证它们一起成功或一起失败。「MQ 支持事务消息」说的是消息队列自身的能力，和 outbox 无关；`msg_id` 上的唯一约束只保证消息不重复，不保证原子；后台轮询重发是投递侧的最终一致手段，解决的是「消息写成功了但没被消费」，而不是「订单成功、消息没写」。"
             },
             {
               "q": "下面哪个流程不适合用 Saga 来保证一致性？",
@@ -675,7 +675,7 @@
                 "积分累计：算错了可以扣回"
               ],
               "answer": 1,
-              "explain": "Saga 依赖补偿，而「货已在路上」没有等价的逆向操作，只能人工介入或走逆向物流，不适合纯自动补偿。A、C、D 的每一步都有明确的撤销动作，且可以幂等重试，正是 Saga 的适用场景。"
+              "explain": "Saga 依赖补偿，而「货已在路上」没有等价的逆向操作，只能人工介入或走逆向物流，不适合纯自动补偿。旅游订单的机票、酒店、租车，优惠券发放，积分累计，每一步都有明确的撤销动作，且可以幂等重试，正是 Saga 的适用场景。"
             }
           ]
         }

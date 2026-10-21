@@ -213,22 +213,22 @@
               "q": "调用 Object.defineProperty(obj, \"x\", { value: 1 }) 之后，下面哪句描述是对的？",
               "options": [
                 "x 可写可枚举，和字面量属性完全一样",
-                "x 可读，但不可写、不可枚举、不可配置；Object.keys、JSON.stringify、展开都看不到它",
                 "x 完全不可读，访问它得到 undefined",
+                "x 可读，但不可写、不可枚举、不可配置；Object.keys、JSON.stringify、展开都看不到它",
                 "x 可读可写，只是不能用 delete 删除"
               ],
-              "answer": 1,
-              "explain": "defineProperty 没有写出来的开关默认是 false，所以 x 不可写、不可枚举、不可配置，遍历和序列化都会跳过它。选项一混淆了 defineProperty 与字面量的默认值；选项三把\"不可枚举\"错当成\"不可读\"；选项四说反了 writable 与 configurable。"
+              "answer": 2,
+              "explain": "defineProperty 没有写出来的开关默认是 false，所以 x 不可写、不可枚举、不可配置，遍历和序列化都会跳过它。「x 可写可枚举」那项混淆了 defineProperty 与字面量的默认值；「x 完全不可读」把\"不可枚举\"错当成\"不可读\"；「只是不能用 delete 删除」说反了 writable 与 configurable。"
             },
             {
               "q": "下面哪种用法会让 structuredClone 抛错或丢数据？",
               "options": [
                 "克隆一个带循环引用的普通对象",
-                "克隆 class 实例，并期望克隆后还能调用原型上的方法",
                 "克隆同时包含 Date 和 Map 的配置对象",
-                "克隆一个嵌套三层的普通数组"
+                "克隆一个嵌套三层的普通数组",
+                "克隆 class 实例，并期望克隆后还能调用原型上的方法"
               ],
-              "answer": 1,
+              "answer": 3,
               "explain": "结构化克隆能处理循环引用，也支持 Date、Map、Set 和嵌套数组；但类实例会被还原成普通对象，原型上的方法全部丢失，如果实例自带了函数属性还会直接抛 DataCloneError。其余三项都是它明确支持的输入。"
             }
           ]
@@ -321,23 +321,23 @@
               "q": "关于 class 与原型的关系，下面哪句是对的？",
               "options": [
                 "class 的方法会复制到每个实例上，所以实例之间互不影响",
-                "class 的方法定义在构造函数的 prototype 上且不可枚举，实例通过原型链访问，Object.keys(实例) 看不到方法",
                 "class 是全新的对象模型，不依赖 prototype",
-                "实例的 __proto__ 指向构造函数本身"
+                "实例的 __proto__ 指向构造函数本身",
+                "class 的方法定义在构造函数的 prototype 上且不可枚举，实例通过原型链访问，Object.keys(实例) 看不到方法"
               ],
-              "answer": 1,
-              "explain": "class 本质仍是构造函数加 prototype，方法挂在 Ctor.prototype 上且不可枚举，实例通过原型链共享它们。选项一错在\"复制到每个实例\"，那样会浪费内存；选项三错在 class 就是原型机制的语法糖；选项四错在实例的 __proto__ 指向 Ctor.prototype，而不是构造函数。"
+              "answer": 3,
+              "explain": "class 本质仍是构造函数加 prototype，方法挂在 Ctor.prototype 上且不可枚举，实例通过原型链共享它们。「class 的方法会复制到每个实例上」错在那样会浪费内存；「class 是全新的对象模型」错在 class 就是原型机制的语法糖；「__proto__ 指向构造函数本身」错在实例的 __proto__ 指向 Ctor.prototype，而不是构造函数。"
             },
             {
               "q": "关于 this 与 bind 的取舍，下面哪句是对的？",
               "options": [
                 "给 addEventListener 传 this.handler.bind(this)，可以用同样写法的 removeEventListener 移除",
-                "在构造函数里 bind 一次并保存引用，或用箭头类字段，才能保证 add 与 remove 拿到同一个函数",
                 "bind 之后仍然可以用 call 改掉 this",
+                "在构造函数里 bind 一次并保存引用，或用箭头类字段，才能保证 add 与 remove 拿到同一个函数",
                 "箭头函数可以被 new 调用，只是拿不到 this"
               ],
-              "answer": 1,
-              "explain": "bind 每次都返回新函数，两次 bind 的引用不同，removeEventListener 匹配不上，监听器会泄漏；只有绑定一次并保存引用（或箭头类字段）才稳定。选项一错在引用不一致；选项三错在 bind 固定 this 后 call 无效；选项四错在箭头函数没有构造能力，new 会抛 TypeError。"
+              "answer": 2,
+              "explain": "bind 每次都返回新函数，两次 bind 的引用不同，removeEventListener 匹配不上，监听器会泄漏；只有绑定一次并保存引用（或箭头类字段）才稳定。「传 bind(this) 给 addEventListener」错在引用不一致；「bind 之后仍然可以用 call」错在 bind 固定 this 后 call 无效；「箭头函数可以被 new 调用」错在箭头函数没有构造能力，new 会抛 TypeError。"
             }
           ]
         }
@@ -359,12 +359,12 @@
             {
               "q": "下面代码输出什么？\n\n```js\nconst outer = document.createElement('div')\nconst inner = document.createElement('span')\nouter.append(inner)\ndocument.body.append(outer)\n\nconst log = []\nouter.addEventListener('click', () => log.push('outer-capture'), true)\nouter.addEventListener('click', () => log.push('outer-bubble'))\ninner.addEventListener('click', () => log.push('inner'))\ninner.click()\n\nconsole.log(log.join(','))\n```",
               "options": [
-                "inner,outer-capture,outer-bubble",
                 "outer-capture,inner,outer-bubble",
+                "inner,outer-capture,outer-bubble",
                 "outer-capture,outer-bubble,inner",
                 "inner,outer-bubble（捕获阶段不经过 outer）"
               ],
-              "answer": 1,
+              "answer": 0,
               "explain": "事件先走捕获：从 window 沿祖先下到目标，所以 outer 的捕获监听器最先执行；到 inner 时进入目标阶段；冒泡阶段从 inner 回到 outer，触发它的冒泡监听器。认为 inner 最先的那个选项忽略了捕获阶段；把两个 outer 监听器排在一起的选项，误以为它们按注册顺序连续执行，其实它们分属两个阶段；最后一项「捕获不经过 outer」的说法本身错误，捕获必然经过所有祖先。"
             },
             {
@@ -382,11 +382,11 @@
               "q": "`window.addEventListener('wheel', onWheel, { passive: true })` 的实际效果是什么？",
               "options": [
                 "监听器会在滚动开始前同步执行，`preventDefault()` 依然能阻止滚动",
-                "浏览器不必等监听器返回就可以开始滚动，因此 `onWheel` 里的 `preventDefault()` 不再生效",
                 "监听器会被推迟到滚动停止后才执行",
-                "`passive` 等价于 `once`，监听器只触发一次"
+                "`passive` 等价于 `once`，监听器只触发一次",
+                "浏览器不必等监听器返回就可以开始滚动，因此 `onWheel` 里的 `preventDefault()` 不再生效"
               ],
-              "answer": 1,
+              "answer": 3,
               "explain": "`passive: true` 是提前承诺「我不会调用 `preventDefault`」，浏览器据此不必等待监听器返回就能滚动，代价是里面再调 `preventDefault()` 无效，控制台会给警告。它不改变回调的执行时机，所以「滚动停止后才执行」不成立；它也跟触发次数无关，那是 `once` 的作用。要阻止默认滚动，必须显式写 `{ passive: false }`。"
             },
             {
@@ -414,11 +414,11 @@
               "q": "接口正常返回 `{\"n\":1}`，下面代码（位于 async 函数内）输出什么？\n\n```js\nconst res = await fetch('/api/data')\nconst a = await res.json()\ntry {\n  await res.json()\n} catch (e) {\n  console.log(e.name)\n}\nconsole.log(a.n)\n```",
               "options": [
                 "先 `1`，再 `1`",
-                "先 `TypeError`，再 `1`",
                 "先 `1`，再 `TypeError`",
+                "先 `TypeError`，再 `1`",
                 "两行都是 `undefined`"
               ],
-              "answer": 1,
+              "answer": 2,
               "explain": "`Response.body` 是一条只能消费一次的流，`json()` 已经把流读干，第二次调用直接抛 `TypeError`（body stream already read），被 `catch` 打印出来，之后才执行 `console.log(a.n)`，所以顺序是先 `TypeError` 再 `1`。它不会返回缓存结果，所以「再输出一次 1」不成立；`a.n` 是第一次解析成功的结果，不会是 `undefined`。要复用响应必须先 `res.clone()`。"
             },
             {
@@ -435,23 +435,23 @@
             {
               "q": "关于 ESM 的导入绑定，下面哪一句正确？\n\n```js\n// counter.js\nexport let count = 0\nexport const inc = () => { count++ }\n\n// main.js\nimport { count, inc } from './counter.js'\ninc()\nconsole.log(count)\n```",
               "options": [
-                "输出 `0`，因为 import 拿到的是导出那一刻的值的拷贝",
                 "输出 `1`，因为 import 是实时绑定，导出方改变量后导入方读到新值",
+                "输出 `0`，因为 import 拿到的是导出那一刻的值的拷贝",
                 "输出 `1`，因为 import 会把变量提升成全局变量",
                 "输出 `0`，因为 `let` 导出的值在导入侧会被冻结"
               ],
-              "answer": 1,
+              "answer": 0,
               "explain": "ESM 的导出是实时绑定（live binding），导入方读到的是同一个变量，`inc()` 把 `count` 改成 1，之后读就是 1。它不是值拷贝，也不是把变量变成全局——全局变量反而会让模块之间的依赖无法静态分析。导入方拿到的是只读视图，可以读、不能赋值，但这不影响导出方自己修改。"
             },
             {
               "q": "给请求加自动重试时，下面哪种策略是对的？",
               "options": [
                 "任何失败的请求都重试三次，多数情况下第三次就成功了",
-                "只重试幂等请求（如 `GET`），且失败原因是网络错误 / 5xx / 429，配合退避、随机抖动和次数上限",
                 "`POST /orders` 创建订单失败后立即重试，保证不丢单",
-                "401 未授权时反复重试，直到拿到新 token"
+                "401 未授权时反复重试，直到拿到新 token",
+                "只重试幂等请求（如 `GET`），且失败原因是网络错误 / 5xx / 429，配合退避、随机抖动和次数上限"
               ],
-              "answer": 1,
+              "answer": 3,
               "explain": "重试的前提是「重复执行不会产生副作用」，所以只对幂等请求安全；5xx、429 和网络错误属于可能自愈的失败，配指数退避、随机抖动和上限才不会把后端打垮。`POST /orders` 不幂等，重试可能创建多笔订单。401 是凭证问题，重试同一请求只会一直 401，应该去刷新 token 或跳登录。4xx（429 除外）重试多少次都是同样结果。"
             }
           ]
@@ -468,11 +468,11 @@
               "q": "下面代码输出什么？\n\n```js\nasync function load() {\n  try {\n    await Promise.reject(new Error('inner'))\n  } catch (e) {\n    throw new Error('outer', { cause: e })\n  }\n}\nload().catch((e) => console.log(e.message, e.cause?.message))\n```",
               "options": [
                 "`outer undefined`",
-                "`outer inner`",
                 "`inner inner`",
-                "`inner undefined`"
+                "`inner undefined`",
+                "`outer inner`"
               ],
-              "answer": 1,
+              "answer": 3,
               "explain": "`await` 把 rejection 变成 `catch` 里的同步异常 `e`（原始错误，message 是 `inner`），再用 `new Error('outer', { cause: e })` 包一层，新错误的 `message` 是 `outer`、`cause` 指向原始错误，所以输出 `outer inner`。忘掉 `cause` 的话第二段就是 `undefined`，那正是「包装错误把根因丢掉」的典型现场。`throw` 之后的错误才是 `load()` 的 rejection，所以第一段不可能是 `inner`。"
             },
             {
@@ -489,23 +489,23 @@
             {
               "q": "关于 `window.onerror` 与 `unhandledrejection`，下面哪一句正确？",
               "options": [
-                "两者是同一个事件的两个名字，注册一个就够",
                 "`unhandledrejection` 的 `event.reason` 是 rejection 的原因，而 `window.onerror` 收不到 Promise rejection",
+                "两者是同一个事件的两个名字，注册一个就够",
                 "注册 `unhandledrejection` 之后，未处理的 rejection 就不会再发生了",
                 "跨域脚本抛出的错误，`window.onerror` 仍能拿到完整的 message 和堆栈"
               ],
-              "answer": 1,
+              "answer": 0,
               "explain": "同步未捕获错误走 `window.onerror`（或捕获阶段的 `error` 事件），未处理的 Promise rejection 走 `unhandledrejection`，两者是不同事件，所以要各注册一个。`unhandledrejection` 只能上报、降级 UI，或在 `event.preventDefault()` 后抑制默认控制台输出，错误本身已经发生。跨域脚本没有 CORS 头时，浏览器只会给出 `Script error.`，拿不到 message 和堆栈。"
             },
             {
               "q": "生产环境的 source map 该怎么处理？",
               "options": [
                 "内联进 JS 文件，方便随时打开控制台调试",
-                "用 `hidden-source-map` 生成，只上传给错误监控平台，不放进静态目录",
                 "不生成 source map，压缩后的堆栈照样能精确还原到源码行",
+                "用 `hidden-source-map` 生成，只上传给错误监控平台，不放进静态目录",
                 "source map 会让线上运行变慢，因为浏览器每次请求都要下载它"
               ],
-              "answer": 1,
+              "answer": 2,
               "explain": "`hidden-source-map` 会生成 `.map` 但不写 `sourceMappingURL` 注释，产物里不留线索，把 `.map` 上传到监控平台就能还原堆栈，也不会公开源码。内联 map 会让包体积接近翻倍并把源码直接暴露。不生成 map 时，压缩后的列号和混淆过的变量名基本无法定位。浏览器只在打开 DevTools 时才去取 `.map`，所以它不影响线上运行性能。"
             }
           ]
@@ -539,35 +539,35 @@
             {
               "q": "这段代码想让进度条每处理一条就更新一次，实际运行时进度条几乎不动、页面整体卡住。原因是？\n\n```js\n\nasync function showProgress(items) {\n  for (const item of items) {\n    render(item);               // 更新进度条\n    await Promise.resolve();    // 以为能让浏览器画一帧\n  }\n}\n```",
               "options": [
-                "render 的调用顺序错了，应该挪到 await 后面",
                 "await Promise.resolve() 只是把续体排进微任务队列，微任务清空前不会渲染，应该改为进入下一个宏任务",
+                "render 的调用顺序错了，应该挪到 await 后面",
                 "应该用 Promise.all 并行处理所有 item",
                 "queueMicrotask 比 await 更快，换成它就行"
               ],
-              "answer": 1,
-              "explain": "微任务之间不会插入渲染步骤，await 一个已完成的 Promise 等于没让。选项 0 与渲染时机无关；选项 2 把串行改并行，只会让主线程一次性更忙；选项 3 更糟，queueMicrotask 仍然是微任务，渲染照样等不到机会。"
+              "answer": 0,
+              "explain": "微任务之间不会插入渲染步骤，await 一个已完成的 Promise 等于没让。「把 render 挪到 await 后面」与渲染时机无关；「用 Promise.all 并行」把串行改并行，只会让主线程一次性更忙；「换成 queueMicrotask」更糟，queueMicrotask 仍然是微任务，渲染照样等不到机会。"
             },
             {
               "q": "关于一次事件循环里微任务队列的清空时机，哪一条正确？",
               "options": [
                 "每执行完一个微任务就让出一次渲染机会",
-                "当前宏任务结束后彻底清空，期间新入队的微任务也在同一轮执行完",
                 "每 16.7ms 清空一次，与屏幕刷新同步",
+                "当前宏任务结束后彻底清空，期间新入队的微任务也在同一轮执行完",
                 "每轮只清空一个微任务，剩下的留到下一轮"
               ],
-              "answer": 1,
-              "explain": "规范的做法是「清到空」：只要微任务队列非空就继续取，因此微任务可以自我繁殖。0 把微任务当成了渲染时机；2 混淆了渲染节奏与队列清空；3 描述的是「每轮一个」，会让 then 链被无限拉长，与实现不符。"
+              "answer": 2,
+              "explain": "规范的做法是「清到空」：只要微任务队列非空就继续取，因此微任务可以自我繁殖。以为每执行完一个微任务就让出一次渲染机会的那项，把微任务当成了渲染时机；「每 16.7ms 清空一次」混淆了渲染节奏与队列清空；「每轮只清空一个微任务」会让 then 链被无限拉长，与实现不符。"
             },
             {
               "q": "要把一段约两秒的数组计算切成小片，并保证进度条每片都更新，下面哪种让出方式有渲染保证？",
               "options": [
                 "每片后 await Promise.resolve()",
-                "每片后 await new Promise((r) => setTimeout(r, 0))，或用 MessageChannel 调度下一片",
                 "每片后调用 queueMicrotask(next)",
-                "每片后调用 requestIdleCallback(next)"
+                "每片后调用 requestIdleCallback(next)",
+                "每片后 await new Promise((r) => setTimeout(r, 0))，或用 MessageChannel 调度下一片"
               ],
-              "answer": 1,
-              "explain": "只有进入下一个宏任务，浏览器才拿到渲染窗口。0 与 2 都是微任务，等于没让；3 的空闲回调不保证触发，持续动画或主线程忙碌时可能长时间排不上，切分节奏也不受控。"
+              "answer": 3,
+              "explain": "只有进入下一个宏任务，浏览器才拿到渲染窗口。`await Promise.resolve()` 与 `queueMicrotask` 都是微任务，等于没让；`requestIdleCallback` 的空闲回调不保证触发，持续动画或主线程忙碌时可能长时间排不上，切分节奏也不受控。"
             }
           ]
         },
@@ -583,11 +583,11 @@
               "q": "下面代码在 200ms 后输出什么？（debounce 为标准的防抖实现）\n\n```js\n\nconst save = debounce((v) => console.log('save', v), 100);\nsave('a');\nsave('b');\nsetTimeout(() => save('c'), 50);\n```",
               "options": [
                 "save a、save b、save c",
-                "save c",
                 "save a、save c",
+                "save c",
                 "save b"
               ],
-              "answer": 1,
+              "answer": 2,
               "explain": "防抖每次调用都会清掉上一个计时器：a 被 b 取消，b 又被 50ms 时的 c 取消，只有 c 熬过 100ms 静默期，在约 150ms 处执行一次。选「save a、save c」是把第一次调用误当成 leading；选另外两项则是把防抖当成了节流。"
             },
             {
@@ -616,12 +616,12 @@
               "q": "「自动保存草稿」用 debounce(fn, 800) 实现。用户连续打字三分钟一次没停，会发生什么？",
               "options": [
                 "每 800ms 保存一次",
-                "一次都不会保存：每次输入都重置计时器，防抖没有执行上界",
                 "第一次输入时保存一次，之后不再保存",
-                "内存泄漏，改用 WeakMap 才能修复"
+                "内存泄漏，改用 WeakMap 才能修复",
+                "一次都不会保存：每次输入都重置计时器，防抖没有执行上界"
               ],
-              "answer": 1,
-              "explain": "默认的防抖只在静默 wait 之后触发，只要间隔始终小于 wait，回调永远轮不到。0 描述的是节流；2 只有打开 leading 才会发生；正确做法是加 maxWait 兜底或改成固定间隔快照。3 与此无关，问题不是内存。"
+              "answer": 3,
+              "explain": "默认的防抖只在静默 wait 之后触发，只要间隔始终小于 wait，回调永远轮不到。「每 800ms 保存一次」描述的是节流；「第一次输入时保存一次」只有打开 leading 才会发生；正确做法是加 maxWait 兜底或改成固定间隔快照。「内存泄漏」与此无关，问题不是内存。"
             }
           ]
         },
@@ -637,12 +637,12 @@
               "q": "控制台输出什么？\n\n```js\n\nconst box = document.querySelector('#box');\nfor (let i = 1; i <= 3; i++) {\n  box.style.width = i * 10 + 'px';\n  console.log(box.offsetWidth);\n}\n```",
               "options": [
                 "10 20 30，全程只发生一次布局",
-                "10 20 30，但每次读 offsetWidth 都强制同步布局，共三次",
                 "0 0 0，样式要等到下一帧才生效",
-                "抛出异常，offsetWidth 不能这样读"
+                "抛出异常，offsetWidth 不能这样读",
+                "10 20 30，但每次读 offsetWidth 都强制同步布局，共三次"
               ],
-              "answer": 1,
-              "explain": "读布局属性时会先把挂起的样式与布局结算完再返回值，所以每次都读到新宽度，代价是三次强制布局。0 忽略了强制结算；2 错在以为写样式要等下一帧（读取会立刻结算）；3 是虚构的限制。"
+              "answer": 3,
+              "explain": "读布局属性时会先把挂起的样式与布局结算完再返回值，所以每次都读到新宽度，代价是三次强制布局。「全程只发生一次布局」忽略了强制结算；「0 0 0」错在以为写样式要等下一帧（读取会立刻结算）；「抛出异常」是虚构的限制。"
             },
             {
               "q": "这个动画每帧都要重新布局，掉帧严重。最有效的改法是？\n\n```js\n\nfunction animate() {\n  const x = box.offsetLeft;\n  box.style.left = x + 2 + 'px';\n  requestAnimationFrame(animate);\n}\nrequestAnimationFrame(animate);\n```",
@@ -669,13 +669,13 @@
             {
               "q": "关于虚拟滚动，哪一条说法正确？",
               "options": [
-                "它能减少首屏 DOM，所以任何长度的列表都该用",
                 "未渲染的行不在 DOM 里，浏览器自带查找、无障碍与焦点管理会受影响，需要额外补偿",
+                "它能减少首屏 DOM，所以任何长度的列表都该用",
                 "所有行必须等高，否则无法实现",
                 "用了虚拟滚动就不会再出现长任务"
               ],
-              "answer": 1,
-              "explain": "0 错在几十行的小列表用它纯属增加复杂度；2 错在可变高度可以用测量缓存加平均高度估算；3 错在滚动时的区间计算与样式重排本身就可能超标，虚拟滚动降低的是节点数，不是所有成本。"
+              "answer": 0,
+              "explain": "「任何长度的列表都该用」错在几十行的小列表用它纯属增加复杂度；「所有行必须等高」错在可变高度可以用测量缓存加平均高度估算；「不会再出现长任务」错在滚动时的区间计算与样式重排本身就可能超标，虚拟滚动降低的是节点数，不是所有成本。"
             }
           ]
         }

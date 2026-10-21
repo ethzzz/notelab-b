@@ -359,45 +359,45 @@
             {
               "q": "下面代码输出什么？\n\n```python\nimport json\nprint(json.dumps({\"b\": 1, \"a\": [2, 3]}, sort_keys=True, separators=(\",\", \":\")))\nprint(json.dumps(\"中文\"))\n```",
               "options": [
-                "第一行 `{\"b\": 1, \"a\": [2, 3]}`，第二行原样输出 `\"中文\"`",
                 "第一行 `{\"a\":[2,3],\"b\":1}`，第二行 `\"\\u4e2d\\u6587\"`",
+                "第一行 `{\"b\": 1, \"a\": [2, 3]}`，第二行原样输出 `\"中文\"`",
                 "第一行 `{\"a\":[2,3],\"b\":1}`，第二行原样输出 `\"中文\"`",
                 "第一行 `{\"b\":1,\"a\":[2,3]}`，第二行 `\"\\u4e2d\\u6587\"`"
               ],
-              "answer": 1,
-              "explain": "`sort_keys=True` 按键名排序，所以 `a` 在 `b` 前；`separators=(\",\", \":\")` 去掉了默认的逗号后空格和冒号后空格，这两点排除了带空格的选项和键序未变的选项。`ensure_ascii` 默认是 `True`，非 ASCII 字符会被转成 `\\uXXXX` 转义，所以第二行不是原样中文——要原样输出得显式写 `ensure_ascii=False`。只有第二项同时满足排序、无空格、转义三条。"
+              "answer": 0,
+              "explain": "`sort_keys=True` 按键名排序，所以 `a` 在 `b` 前；`separators=(\",\", \":\")` 去掉了默认的逗号后空格和冒号后空格，这两点排除了带空格的选项和键序未变的选项。`ensure_ascii` 默认是 `True`，非 ASCII 字符会被转成 `\\uXXXX` 转义，所以第二行不是原样中文——要原样输出得显式写 `ensure_ascii=False`。只有第一项同时满足排序、无空格、转义三条。"
             },
             {
               "q": "服务器日志里的时间是本地时间（Asia/Shanghai）。下面这段想把时间转成秒级时间戳，结果整体偏了 8 小时。问题在哪？\n\n```python\nfrom datetime import datetime, timezone\nts = datetime.fromisoformat(\"2026-10-21T11:14:15\").replace(tzinfo=timezone.utc)\nprint(int(ts.timestamp()))\n```",
               "options": [
-                "`replace(tzinfo=...)` 只给墙上时间贴了 UTC 标签，没有换算；应改用 `astimezone` 或先赋真实时区",
                 "`fromisoformat` 不接受不带时区的字符串，这行会先抛 `ValueError`",
+                "`replace(tzinfo=...)` 只给墙上时间贴了 UTC 标签，没有换算；应改用 `astimezone` 或先赋真实时区",
                 "`timestamp()` 只能用在 aware datetime 上，对 naive 调用会抛 `TypeError`",
                 "应该把 `timezone.utc` 换成 `datetime.utcnow()` 的返回值"
               ],
-              "answer": 0,
-              "explain": "`replace` 只改 `tzinfo` 字段，年月日时分秒原封不动，等于宣称\"这个本地时间本来就在 UTC\"，于是 epoch 比真实值早 8 小时；`astimezone` 才会按规则换算。`fromisoformat` 从 3.7 起就接受不带偏移的字符串并返回 naive，不会抛 `ValueError`，所以第二项错。`timestamp()` 对 naive 也会正常返回，只是按系统本地时区解释，不抛 `TypeError`，第三项错。`utcnow()` 返回的同样是 naive datetime，换进去只会把错误藏得更深（而且 3.12 起已标记弃用），第四项错。"
+              "answer": 1,
+              "explain": "`replace` 只改 `tzinfo` 字段，年月日时分秒原封不动，等于宣称\"这个本地时间本来就在 UTC\"，于是 epoch 比真实值早 8 小时；`astimezone` 才会按规则换算。`fromisoformat` 从 3.7 起就接受不带偏移的字符串并返回 naive，不会抛 `ValueError`，所以第一项错。`timestamp()` 对 naive 也会正常返回，只是按系统本地时区解释，不抛 `TypeError`，第三项错。`utcnow()` 返回的同样是 naive datetime，换进去只会把错误藏得更深（而且 3.12 起已标记弃用），第四项错。"
             },
             {
               "q": "关于 `json.dumps(obj, default=handler)`，下面哪一句正确？",
               "options": [
                 "每次序列化任意对象前都会调用 handler，返回值直接替换原对象",
-                "只有遇到编码器不认识的类型才调用 handler，返回值必须能被继续序列化，抛异常才能暴露问题",
                 "只有传了 `ensure_ascii=False` 时 handler 才会生效",
+                "只有遇到编码器不认识的类型才调用 handler，返回值必须能被继续序列化，抛异常才能暴露问题",
                 "handler 必须返回字符串，返回 dict 或 list 会直接报错"
               ],
-              "answer": 1,
-              "explain": "`default` 是\"未知类型的最后出口\"：`str`/`int`/`float`/`bool`/`None`/`list`/`dict` 都走编码器的快路径，根本不会调用它，所以\"每次都会调用\"不成立。它的返回值会被**继续序列化**，因此返回 dict 或 list 完全合法（递归下去再遇到未知类型还会再调一次），没有任何要求必须返回字符串。它跟 `ensure_ascii` 无关，后者只管非 ASCII 字符是否转义，所以第三、四项都错。"
+              "answer": 2,
+              "explain": "`default` 是\"未知类型的最后出口\"：`str`/`int`/`float`/`bool`/`None`/`list`/`dict` 都走编码器的快路径，根本不会调用它，所以\"每次都会调用\"不成立。它的返回值会被**继续序列化**，因此返回 dict 或 list 完全合法（递归下去再遇到未知类型还会再调一次），没有任何要求必须返回字符串。它跟 `ensure_ascii` 无关，后者只管非 ASCII 字符是否转义，所以第二项和第四项都错。"
             },
             {
               "q": "下面哪种任务**不该**用正则表达式完成？",
               "options": [
                 "从固定格式的日志行里按 `key=value` 抽字段",
-                "把一段嵌套的 HTML 表格解析成行与单元格",
                 "校验一个字符串是否只含小写字母和数字",
-                "把 `2026-10-21T03:14:15Z` 这种固定格式拆成年月日时分秒"
+                "把 `2026-10-21T03:14:15Z` 这种固定格式拆成年月日时分秒",
+                "把一段嵌套的 HTML 表格解析成行与单元格"
               ],
-              "answer": 1,
+              "answer": 3,
               "explain": "HTML 是嵌套结构：标签可以任意层嵌套、可以省略闭合、属性值里还能出现 `>`。正则没有栈，表达不了\"配对\"，任何能跑的版本都会在脏 HTML 上错位，正确工具是标准库的 `html.parser` 或专门解析器。日志行、字符集校验、固定格式时间戳都是行级、结构固定的文本，正是正则擅长的场景，剩下三项都可以用它完成。"
             }
           ]
@@ -528,13 +528,13 @@
             {
               "q": "下面代码输出什么？（`Barrier` 只是把「读」和「写」之间的交错固定下来）\n\n```python\nimport threading\n\ncount = 0\nbarrier = threading.Barrier(2)\n\ndef work():\n    global count\n    for _ in range(100):\n        value = count        # 两个线程读到同一个旧值\n        barrier.wait()       # 都读完之后，再各自写回\n        count = value + 1\n\nthreads = [threading.Thread(target=work) for _ in range(2)]\nfor t in threads:\n    t.start()\nfor t in threads:\n    t.join()\nprint(count)\n```",
               "options": [
-                "200",
                 "100",
+                "200",
                 "0",
                 "死锁，进程一直不结束"
               ],
-              "answer": 1,
-              "explain": "每一轮两个线程都先读到同一个 `count`，再各自写回 `value + 1`，后写的覆盖先写的，所以 100 轮只让计数加了 100。`count += 1` 会编译成读取、加一、写回三步，中间可以被切走——这正是「GIL 不保证复合操作原子」的含义；真实代码里的插入点由调度器决定，不一定每次复现，Barrier 只是把它固定下来。选项 0 把 `+=` 当成原子操作；选项 2 错：每轮都会写回，计数不会停在 0；选项 3 错：两个线程都会到达屏障并继续，不会死锁。"
+              "answer": 0,
+              "explain": "每一轮两个线程都先读到同一个 `count`，再各自写回 `value + 1`，后写的覆盖先写的，所以 100 轮只让计数加了 100。`count += 1` 会编译成读取、加一、写回三步，中间可以被切走——这正是「GIL 不保证复合操作原子」的含义；真实代码里的插入点由调度器决定，不一定每次复现，Barrier 只是把它固定下来。选项 1 把 `+=` 当成原子操作；选项 2 错：每轮都会写回，计数不会停在 0；选项 3 错：两个线程都会到达屏障并继续，不会死锁。"
             },
             {
               "q": "这段异步代码压测时表现为「8 个请求一个个排队」，问题出在哪？\n\n```python\nimport asyncio, requests\n\nasync def fetch(url):\n    resp = requests.get(url)\n    return resp.text\n\nasync def main(urls):\n    return await asyncio.gather(*(fetch(u) for u in urls))\n```",
@@ -551,23 +551,23 @@
               "q": "为什么把一个纯 Python 计算任务拆给 4 个线程，在单进程里几乎不会变快？",
               "options": [
                 "线程创建和销毁的开销比计算本身还大",
-                "GIL 让同一时刻只有一个线程执行 Python 字节码",
                 "线程之间传递参数需要 pickle 序列化",
+                "GIL 让同一时刻只有一个线程执行 Python 字节码",
                 "CPython 会把多线程自动绑定到同一个 CPU 核心"
               ],
-              "answer": 1,
-              "explain": "纯计算没有 I/O 放锁点，线程必须轮流持有 GIL，并行度上限就是 1，多出来的只有切换成本。选项 0 错：线程创建约几十微秒，任务稍长就不是主要因素；选项 2 错：pickle 是进程间通信的成本，线程共享同一块内存；选项 3 错：操作系统仍可能把线程调度到不同核心，是 GIL 让它们无法同时执行字节码。"
+              "answer": 2,
+              "explain": "纯计算没有 I/O 放锁点，线程必须轮流持有 GIL，并行度上限就是 1，多出来的只有切换成本。选项 0 错：线程创建约几十微秒，任务稍长就不是主要因素；选项 1 错：pickle 是进程间通信的成本，线程共享同一块内存；选项 3 错：操作系统仍可能把线程调度到不同核心，是 GIL 让它们无法同时执行字节码。"
             },
             {
               "q": "8 个各耗时约 20 毫秒的纯计算小任务，跑在 20 核机器上，最合适的选择是？",
               "options": [
                 "进程池，核多就该用满",
                 "线程池，比进程池轻量",
-                "直接串行跑，总耗时约 160 毫秒，最省事",
-                "`asyncio.gather`，一次并发发出"
+                "`asyncio.gather`，一次并发发出",
+                "直接串行跑，总耗时约 160 毫秒，最省事"
               ],
-              "answer": 2,
-              "explain": "总计算量只有 160 毫秒，而进程池的启动、pickle 与管道传输固定成本通常就有 100–300 毫秒，收益为负；线程池受 GIL 限制无法并行。选项 0 只看核数忽略任务粒度，进程池适合「任务重、数量少」；选项 1 的「轻量」不改变 GIL 下不提速的事实；选项 3 更不行，纯计算放进协程只会阻塞事件循环。正确做法是串行跑，或把 8 个小任务合并成一个大任务再考虑进程。"
+              "answer": 3,
+              "explain": "总计算量只有 160 毫秒，而进程池的启动、pickle 与管道传输固定成本通常就有 100–300 毫秒，收益为负；线程池受 GIL 限制无法并行。选项 0 只看核数忽略任务粒度，进程池适合「任务重、数量少」；选项 1 的「轻量」不改变 GIL 下不提速的事实；选项 2 更不行，纯计算放进协程只会阻塞事件循环。正确做法是串行跑，或把 8 个小任务合并成一个大任务再考虑进程。"
             }
           ]
         },

@@ -310,22 +310,22 @@
               "q": "下面这段代码为什么会卡死？\n\n```rust\nuse std::sync::{Arc, Mutex};\nlet data = Arc::new(Mutex::new(vec![1, 2, 3]));\nlet mut guard = data.lock().unwrap();\nguard.push(4);\nlet len = data.lock().unwrap().len();\nprintln!(\"{len}\");\n```",
               "options": [
                 "data 是 Arc 不是 Vec，不能 push",
-                "第一把锁的 guard 仍然存活，同一线程第二次 lock 会永久阻塞",
                 "Vec 放进 Mutex 之后就不再实现 Clone",
+                "第一把锁的 guard 仍然存活，同一线程第二次 lock 会永久阻塞",
                 "必须在第二次 lock 前调用 drop(data)"
               ],
-              "answer": 1,
+              "answer": 2,
               "explain": "`Arc<Mutex<Vec<_>>>` 通过 Deref 提供 `push`，能编译；`guard` 没 drop，锁仍被本线程持有，std 的 `Mutex` 不可重入，第二次 `lock()` 等到死。`drop(data)` 既不能释放锁（锁归 guard 管），还会因为借用冲突编译失败。"
             },
             {
               "q": "`Send` 与 `Sync` 的区别，下面哪句正确？",
               "options": [
                 "Send 表示 &T 可跨线程共享，Sync 表示所有权可转移",
-                "Send 表示所有权可转移到另一线程，Sync 表示 &T 可被多线程共享",
                 "两者都由运行时 GC 检查，编译器不参与",
-                "只有 Copy 类型才实现 Send"
+                "只有 Copy 类型才实现 Send",
+                "Send 表示所有权可转移到另一线程，Sync 表示 &T 可被多线程共享"
               ],
-              "answer": 1,
+              "answer": 3,
               "explain": "`Send` 约束的是值本身跨线程移动，`Sync` 约束的是共享引用 `&T` 跨线程使用。两者都是编译期自动推导的 auto trait，与 GC 无关；`String`、`Vec<T>` 都不是 Copy，却都实现了 Send（在元素满足条件时）。"
             },
             {

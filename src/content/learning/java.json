@@ -190,12 +190,12 @@
             {
               "q": "下面这段代码输出什么？\n\n```java\nList<String> a = new ArrayList<>();\nList<Integer> b = new ArrayList<>();\nSystem.out.println(a.getClass() == b.getClass());\n```",
               "options": [
-                "true",
                 "false",
                 "编译错误：两个不同的泛型类型不能比较",
+                "true",
                 "运行期抛 ClassCastException"
               ],
-              "answer": 0,
+              "answer": 2,
               "explain": "两个变量都指向 ArrayList，类型实参擦除后不进入对象头，getClass() 返回同一个类对象，所以是 true。选 false 的人以为不同实参会生成不同的类；编译器只比较原始类型，这个引用比较本身完全合法；这里没有任何元素读取，不会触发强转。"
             },
             {
@@ -213,22 +213,22 @@
               "q": "接口与实现的泛型返回值，在字节码层面发生了什么？\n\n```java\ninterface Box<T> { T get(); }\nclass StringBox implements Box<String> {\n    public String get() { return \"s\"; }\n}\n```",
               "options": [
                 "只有 String get()，接口调用靠反射在运行时适配",
-                "编译器额外生成 Object get() 桥接方法，内部强转后调用 String get()",
                 "运行时为 Box<String> 生成独立的 Box$String 类",
-                "get() 被擦除成 Object get()，String 版本在字节码里不存在"
+                "get() 被擦除成 Object get()，String 版本在字节码里不存在",
+                "编译器额外生成 Object get() 桥接方法，内部强转后调用 String get()"
               ],
-              "answer": 1,
+              "answer": 3,
               "explain": "接口方法擦除为 Object get()，实现返回 String，JVM 按描述符匹配方法，两者对不上，所以编译器生成一个 Object get() 桥接方法，内部改成 (String) this.get()。字节码里 String get() 确实存在，因此说它不存在或只靠反射适配都是错的；擦除不会为每个实参生成新类。"
             },
             {
               "q": "下面哪种需求最不该用泛型来表达？",
               "options": [
-                "一个能装任意类型、并且需要在运行时用 instanceof 判断元素实际类型的容器",
                 "一个元素类型在编译期确定、写入后不允许放错类型的容器",
+                "一个能装任意类型、并且需要在运行时用 instanceof 判断元素实际类型的容器",
                 "一个对 Integer、Long、Double 都适用的求和工具方法",
                 "一个让调用方拿到结果时不必强转的 API 返回值"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "运行时判断元素类型正是擦除抹掉的信息，泛型容器做不到这件事，只能额外传 Class 或加类型字段。其余三项都是泛型的标准收益：编译期类型安全、用上界约束多种数值类型、用类型参数消除调用方强转。把运行时类型判断硬塞进泛型，最后一定退化成原始类型加 instanceof。"
             }
           ]
@@ -244,23 +244,23 @@
             {
               "q": "下面这段代码输出什么？\n\n```java\nAtomicInteger c = new AtomicInteger();\nRunnable r = () -> {\n    for (int i = 0; i < 1000; i++) {\n        c.incrementAndGet();\n    }\n};\nThread t1 = new Thread(r);\nThread t2 = new Thread(r);\nt1.start();\nt2.start();\nt1.join();\nt2.join();\nSystem.out.println(c.get());\n```",
               "options": [
-                "2000",
                 "小于 2000 的某个值，取决于调度",
+                "2000",
                 "必然大于 2000，因为两个线程各自缓存了计数",
                 "抛 IllegalStateException"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "incrementAndGet 是 CAS 循环，读改写作为一个原子操作完成，一千次乘两个线程就是 2000。会小于 2000 的是 int 上的 i++，那是三步操作；说必然大于 2000 混淆了缓存与计数语义；AtomicInteger 的常规操作不抛 IllegalStateException。"
             },
             {
               "q": "下面这个双重检查锁有什么问题？\n\n```java\nclass Config {\n    private static Config instance;\n    static Config get() {\n        if (instance == null) {\n            synchronized (Config.class) {\n                if (instance == null) {\n                    instance = new Config();\n                }\n            }\n        }\n        return instance;\n    }\n}\n```",
               "options": [
-                "instance 少了 volatile，构造与赋值可能重排，别的线程会看到非 null 但字段还没初始化",
                 "synchronized 锁的应该是 this，锁 Class 对象不起作用",
                 "synchronized 不能用在静态方法里，必须改成实例方法",
-                "内层 if 是多余的，去掉它就不会有问题"
+                "内层 if 是多余的，去掉它就不会有问题",
+                "instance 少了 volatile，构造与赋值可能重排，别的线程会看到非 null 但字段还没初始化"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "new 分三步：分配内存、初始化字段、把引用赋给 instance，后两步可能重排。没有 volatile 时另一个线程可能在引用可见后立刻读到未初始化的对象。锁 Class 对象对静态方法完全有效；synchronized 块可以出现在静态方法里；内层 if 删掉会让每次调用都进同步块，只是变慢，并不能修掉重排问题。"
             },
             {
@@ -272,17 +272,17 @@
                 "先建到最大线程数，再考虑入队列，队列满走拒绝策略"
               ],
               "answer": 0,
-              "explain": "正确顺序是核心、队列、扩容、拒绝。第二项把扩容提到入队之前，是最常见的误解；第三项把入队放在最前，会让核心线程永远建不起来；第四项等于忽略核心与队列的区别，也就是 newCachedThreadPool 的行为，不是通用规则。"
+              "explain": "正确顺序是核心、队列、扩容、拒绝。「核心线程未满就建核心线程；核心满就直接扩到最大线程数；最大也满才入队列」把扩容提到入队之前，是最常见的误解；「先入队列，队列满了再建核心线程」把入队放在最前，会让核心线程永远建不起来；「先建到最大线程数，再考虑入队列」等于忽略核心与队列的区别，也就是 newCachedThreadPool 的行为，不是通用规则。"
             },
             {
               "q": "哪一类任务最不适合丢进同一个固定大小的业务线程池？",
               "options": [
-                "会阻塞等待同一个池里另一个任务结果的递归拆分任务",
                 "彼此独立、只做纯 CPU 计算的分片求和任务",
                 "读一次数据库就返回的短查询任务",
+                "会阻塞等待同一个池里另一个任务结果的递归拆分任务",
                 "需要返回值、用 Callable 提交的导出任务"
               ],
-              "answer": 0,
+              "answer": 2,
               "explain": "同一池内互相等待会耗尽线程：父任务占着线程等子任务，子任务排在队列里没线程执行，池被自己锁死，本质是线程饥饿死锁。其余三项互不依赖，正是线程池的典型负载；Callable 只是带返回值的提交方式，不构成限制。"
             }
           ]
@@ -298,34 +298,34 @@
             {
               "q": "下面这段代码打印什么？\n\n```java\nByteBuffer b = ByteBuffer.allocate(8);\nb.put((byte) 1);\nb.put((byte) 2);\nb.flip();\nSystem.out.println(b.position() + \" \" + b.limit() + \" \" + b.remaining());\n```",
               "options": [
-                "0 2 2",
                 "2 8 6",
                 "0 8 8",
-                "2 2 0"
+                "2 2 0",
+                "0 2 2"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "put 两次后 position 是 2、limit 仍是容量 8；flip 把 limit 设为 position（2）、position 归零，于是 position=0、limit=2、remaining=2。2 8 6 是 flip 之前的状态；0 8 8 是完全没写过数据的状态；2 2 0 把 flip 的方向理解反了。"
             },
             {
               "q": "这段读文件的代码有什么隐患？\n\n```java\ntry (BufferedReader r = new BufferedReader(\n        new InputStreamReader(new FileInputStream(file)))) {\n    String line = r.readLine();\n    System.out.println(line);\n}\n```",
               "options": [
-                "InputStreamReader 没指定 Charset，会用平台默认编码，跨平台读同一文件结果不同",
                 "FileInputStream 不能被 InputStreamReader 包装，必须先转成 byte 数组",
+                "InputStreamReader 没指定 Charset，会用平台默认编码，跨平台读同一文件结果不同",
                 "BufferedReader 不需要关闭，try-with-resources 用错了对象",
                 "readLine 必须在 close 之后调用，否则读不到数据"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "三层包装本身合法，缺的是 Charset：不传时用 Charset.defaultCharset()，Windows 与 Linux 上可能不同。FileInputStream 正是 InputStreamReader 的标准输入源；BufferedReader 实现了 Closeable，try-with-resources 完全正确；readLine 在流关闭后才会抛 IOException，不存在必须先关闭的说法。"
             },
             {
               "q": "FileChannel.transferTo 省掉的到底是什么？",
               "options": [
-                "省掉「内核页缓存 → 用户缓冲区 → 内核 socket 缓冲」的两次数据拷贝，数据在内核内直接搬运",
                 "省掉磁盘读取，数据直接从磁盘进入应用堆内存",
                 "省掉字符解码，传输过程不需要 Charset",
+                "省掉「内核页缓存 → 用户缓冲区 → 内核 socket 缓冲」的两次数据拷贝，数据在内核内直接搬运",
                 "省掉文件句柄的打开与关闭，调用后通道自动关闭"
               ],
-              "answer": 0,
+              "answer": 2,
               "explain": "零拷贝省的是用户态与内核态之间的数据复制，页缓存到目标通道由内核完成。它不绕过磁盘读取，磁盘 IO 该发生还是发生；它工作在字节层，本来就不做字符解码；通道仍由调用方负责关闭，transferTo 不会替你关。"
             },
             {
@@ -539,34 +539,34 @@
             {
               "q": "这段启动命令跑在 limit 为 2G 的容器里，最主要的问题是什么？\n\n```bash\njava -Xms4g -Xmx4g -Xmn3g -XX:MaxGCPauseMillis=20 -jar app.jar\n```",
               "options": [
-                "堆开到 4G 超过容器 limit，进程会被内核 OOMKilled；同时 -Xmn3g 写死年轻代，和 G1 的停顿预算互相打架",
                 "-Xmn 必须小于 -Xmx 的一半，否则 JVM 启动时直接报参数错误",
                 "-XX:MaxGCPauseMillis 只对 ZGC 生效，G1 会静默忽略它",
+                "堆开到 4G 超过容器 limit，进程会被内核 OOMKilled；同时 -Xmn3g 写死年轻代，和 G1 的停顿预算互相打架",
                 "-Xms 与 -Xmx 相等会让启动变慢，应改成 -Xms512m 让堆慢慢长"
               ],
-              "answer": 0,
+              "answer": 2,
               "explain": "JVM 只看到 -Xmx4g，不会感知容器被限制在 2G，堆一涨上去就会被 cgroup 杀掉，且没有 Java 异常可抓；固定 -Xmn 又取消了 G1 用停顿预算动态调整年轻代的余地。Java 不要求 -Xmn 小于一半，只是超过后 Survivor 空间会很尴尬；MaxGCPauseMillis 正是 G1 的核心参数；-Xms 等于 -Xmx 是推荐做法，能避免运行期反复扩容。"
             },
             {
               "q": "关于线上诊断工具，下面哪一句是对的？",
               "options": [
-                "jstat 是低开销采样，适合看 GC 趋势；jcmd GC.heap_info 给的是各代瞬时占用，用来判断哪一代满了",
                 "jmap -histo:live 不触发 STW，所以可以每秒跑一次持续观察",
+                "jstat 是低开销采样，适合看 GC 趋势；jcmd GC.heap_info 给的是各代瞬时占用，用来判断哪一代满了",
                 "GC 日志里 Pause Full 的耗时包含并发标记阶段，不能直接当停顿时间用",
                 "ZGC 的停顿时间与堆大小成正比，堆越大单次停顿越久"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "jstat 靠读取 JVM 内部计数器采样，开销极低；GC.heap_info 是一次快照，用来看 Eden、Old、Metaspace 各自占了多少。-histo:live 会先做一次 Full GC 再统计，必然 STW；Pause Full 就是实打实的停顿，并发标记在 Pause 之外；ZGC 的设计目标正是让停顿不随堆变大。"
             },
             {
               "q": "一台 32 核 128G 的机器，服务堆 64G，要求 P99 延迟 20 毫秒以内，团队目前只用默认参数。下面哪个判断最站得住？",
               "options": [
-                "可以试 ZGC 并以压测数据决策：它把停顿压到毫秒级，但要接受吞吐下降和更多内存开销",
                 "把 G1 的 MaxGCPauseMillis 设成 5，就能保证 P99 在 20 毫秒以内",
                 "堆越大停顿越短，所以继续加堆就能解决延迟问题",
-                "Parallel 的单次停顿最短，应该直接换成 Parallel"
+                "Parallel 的单次停顿最短，应该直接换成 Parallel",
+                "可以试 ZGC 并以压测数据决策：它把停顿压到毫秒级，但要接受吞吐下降和更多内存开销"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "64G 堆上 G1 的停顿会随老年代规模上升，ZGC 是针对性方案，但它是用吞吐和内存换停顿，必须用压测对比后再定。MaxGCPauseMillis 只是目标，压到 5 毫秒只会让 GC 更频繁、吞吐更差；堆变大通常让单次 Full GC 更久；Parallel 追求吞吐，停顿往往最长。"
             }
           ]
@@ -582,23 +582,23 @@
             {
               "q": "下面代码输出什么？\n\n```java\nConcurrentHashMap<String, Integer> m = new ConcurrentHashMap<>();\nm.put(\"a\", 1);\nint v = m.computeIfAbsent(\"a\", k -> 2);\nSystem.out.println(v + \",\" + m.get(\"a\"));\n```",
               "options": [
-                "1,1",
                 "2,2",
                 "1,2",
+                "1,1",
                 "抛 IllegalStateException: Recursive update"
               ],
-              "answer": 0,
+              "answer": 2,
               "explain": "computeIfAbsent 只有在 key 不存在时才执行映射函数，这里 key 已存在，直接返回旧值 1，map 不会被改动，所以是 1,1。说 2,2 的人以为它一定会覆盖；说 1,2 的人以为返回旧值但仍会写入新值；Recursive update 只在映射函数内部再次修改同一个 map 时才出现。"
             },
             {
               "q": "下面这段“缓存加载”在并发下有什么问题？\n\n```java\nif (!cache.containsKey(id)) {\n    cache.put(id, load(id));\n}\n```",
               "options": [
-                "containsKey 与 put 是两次独立操作，中间可被插队，导致重复加载和后写覆盖；应改用 computeIfAbsent",
                 "ConcurrentHashMap 的 containsKey 不是线程安全的，会读到脏数据",
                 "必须用 synchronized (cache) 包住两行，这是唯一正确写法",
-                "put 会抛 UnsupportedOperationException，因为 key 已被占用"
+                "put 会抛 UnsupportedOperationException，因为 key 已被占用",
+                "containsKey 与 put 是两次独立操作，中间可被插队，导致重复加载和后写覆盖；应改用 computeIfAbsent"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "容器只保证单次方法调用原子，检查与写入之间的窗口是竞态的来源，典型后果是同一个 id 被加载两次、耗时翻倍，或者后写覆盖先写。containsKey 本身是线程安全的读；synchronized 不是唯一解法且会把整个 map 串行化；put 是正常写入，不会因为 key 存在就抛异常（它只是覆盖）。"
             },
             {
@@ -615,12 +615,12 @@
             {
               "q": "要用 CompletableFuture 并行调 5 个阻塞 HTTP 接口并汇总，下面哪种做法最合适？",
               "options": [
-                "传入自己管理的固定线程池，并对每个 future 加 exceptionally 兜底后再 allOf",
                 "不传线程池，让 commonPool 自动扩容以适应阻塞调用",
+                "传入自己管理的固定线程池，并对每个 future 加 exceptionally 兜底后再 allOf",
                 "全部改用 thenApply 而不是 thenApplyAsync，就不会占用线程",
                 "换成 CachedThreadPool，线程越多吞吐越高"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "阻塞任务要放在可控的池里，池大小与下游承载能力匹配，异常还要逐个兜底，否则一个失败就让 allOf 抛 CompletionException。commonPool 的并行度固定为 CPU 减一且不会为阻塞扩容；thenApply 依然在完成线程上执行，长阻塞照样占住线程；CachedThreadPool 无上限，会把下游和本机一起压垮。"
             }
           ]
@@ -636,12 +636,12 @@
             {
               "q": "代理在进入方法时打印 `[方法名]`，`b()` 上的拦截注解已配置。`proxy.a()` 输出什么？\n\n```java\nclass Svc {\n    public void a() { System.out.print(\"a>\"); b(); }\n    public void b() { System.out.print(\"b\"); }\n}\n```",
               "options": [
-                "[a]a>b",
                 "[a]a>[b]b",
+                "[a]a>b",
                 "a>[b]b",
                 "[a][b]a>b"
               ],
-              "answer": 0,
+              "answer": 1,
               "explain": "进入 a 时经过代理，打印 [a]，随后目标对象的 a 打印 a> 并用 this 调 b，绕过了代理，所以 b 只打印自身内容。选 [a]a>[b]b 的人以为内部调用也会被拦截，这正是自调用失效的经典误解；a>[b]b 少了外层拦截；[a][b]a>b 连打印顺序都不对。"
             },
             {
@@ -658,23 +658,23 @@
             {
               "q": "Spring 为什么需要第三级缓存 singletonFactories，而不是只用二级缓存？",
               "options": [
-                "为了在循环依赖中按需提前生成 AOP 代理，保证注入方拿到的是代理而不是裸对象",
                 "为了缓存 BeanDefinition，加快容器启动速度",
                 "为了支持 prototype 作用域的循环依赖",
-                "为了记录 @PostConstruct 的调用顺序，避免重复初始化"
+                "为了记录 @PostConstruct 的调用顺序，避免重复初始化",
+                "为了在循环依赖中按需提前生成 AOP 代理，保证注入方拿到的是代理而不是裸对象"
               ],
-              "answer": 0,
+              "answer": 3,
               "explain": "如果二级缓存直接放原始对象，B 注入到的就是没有事务、没有切面的裸对象；ObjectFactory 把“要不要提前造代理”推迟到真正被引用时，并保证只造一次。BeanDefinition 在另一套注册表里，与三级缓存无关；prototype 的循环依赖无法靠缓存解决；初始化顺序由生命周期回调控制，不是这三张表。"
             },
             {
               "q": "内层方法用 REQUIRES_NEW 传播，高并发下最主要的代价是什么？",
               "options": [
-                "外层事务被挂起但不释放连接，内层再取一个新连接，连接池可能被两层同时占满而互相等待",
                 "内层会复用外层连接，所以几乎没有额外开销",
                 "外层事务会被强制提交，导致部分成功",
+                "外层事务被挂起但不释放连接，内层再取一个新连接，连接池可能被两层同时占满而互相等待",
                 "只影响日志顺序，对连接和性能没有影响"
               ],
-              "answer": 0,
+              "answer": 2,
               "explain": "REQUIRES_NEW 的语义就是独立事务，必须挂起外层并新开连接，并发高时一个请求占两个连接，池子耗尽后线程互相等待。复用的是 REQUIRED 或 NESTED（同连接 savepoint）；外层不会被提交，只是被挂起；它影响的是连接占用与锁范围，不只是日志。"
             }
           ]

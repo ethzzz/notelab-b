@@ -414,45 +414,45 @@
               "q": "`note` 列允许 NULL，执行下面的代码时该行 note 恰好是 NULL，会发生什么？\n\n```go\nvar note string\nerr := db.QueryRow(\"SELECT note FROM orders WHERE id = ?\", 1).Scan(&note)\n```",
               "options": [
                 "err 为 nil，note 是空字符串",
-                "err 是类似 converting NULL to string is unsupported 的扫描错误",
                 "note 变成字符串 \"NULL\"",
+                "err 是类似 converting NULL to string is unsupported 的扫描错误",
                 "发生 panic，必须用 recover 接住"
               ],
-              "answer": 1,
-              "explain": "database/sql 不会把 NULL 悄悄转成零值：扫描进 string 会返回错误。选项 A 把 Go 零值和 SQL NULL 混为一谈；选项 C 是某些数据库客户端的显示行为，不是 Go 的；选项 D 错在 Scan 用返回 error 表达失败，不 panic。"
+              "answer": 2,
+              "explain": "database/sql 不会把 NULL 悄悄转成零值：扫描进 string 会返回错误。说「err 为 nil，note 是空字符串」的那一项，是把 Go 零值和 SQL NULL 混为一谈；说「note 变成字符串 \"NULL\"」的那一项，是某些数据库客户端的显示行为，不是 Go 的；说「发生 panic，必须用 recover 接住」的那一项错在 Scan 用返回 error 表达失败，不 panic。"
             },
             {
               "q": "下面的查询在 `userID == 0` 时提前 return，连接会怎样？\n\n```go\nrows, err := db.QueryContext(ctx, \"SELECT id, user_id FROM orders WHERE user_id = ?\", uid)\nif err != nil {\n\treturn nil, err\n}\nfor rows.Next() {\n\tvar id, userID int64\n\tif err := rows.Scan(&id, &userID); err != nil {\n\t\treturn nil, err\n\t}\n\tif userID == 0 {\n\t\treturn nil, errors.New(\"bad row\")\n\t}\n}\nreturn orders, nil\n```",
               "options": [
-                "遍历结束会自动关闭，提前 return 也一样，不会泄漏",
                 "提前 return 时 rows 没关，连接一直占着，池耗尽后请求阻塞在等连接",
-                "只要用了 QueryContext 就必然泄漏，必须改成 QueryRow",
-                "GC 会在下一次回收时立刻归还连接，不用管"
+                "遍历结束会自动关闭，提前 return 也一样，不会泄漏",
+                "GC 会在下一次回收时立刻归还连接，不用管",
+                "只要用了 QueryContext 就必然泄漏，必须改成 QueryRow"
               ],
-              "answer": 1,
-              "explain": "只有遍历到 EOF 才会自动关闭；break、提前 return、Scan 失败都不会，连接要等到显式 Close 才归还。选项 A 错在「提前 return 也一样」；选项 C 过于绝对，QueryContext 本身没问题；选项 D 错在 GC 不保证时机，也不能替代 Close。"
+              "answer": 0,
+              "explain": "只有遍历到 EOF 才会自动关闭；break、提前 return、Scan 失败都不会，连接要等到显式 Close 才归还。说「遍历结束会自动关闭，提前 return 也一样」的那一项，错在把「遍历到 EOF 自动关闭」套到了提前 return 上；说「只要用了 QueryContext 就必然泄漏」的那一项过于绝对，QueryContext 本身没问题；说「GC 会在下一次回收时立刻归还连接」的那一项错在 GC 不保证时机，也不能替代 Close。"
             },
             {
               "q": "`db, err := sql.Open(\"mysql\", dsn)` 返回 `err == nil`，能说明什么？",
               "options": [
                 "已经和 MySQL 建立了至少一条连接",
-                "DSN 语法被接受，但还没有拨号；第一次查询或 Ping 才会建连接",
                 "连接池已经预热到 MaxOpenConns 条连接",
-                "数据库和需要的表一定都存在"
+                "数据库和需要的表一定都存在",
+                "DSN 语法被接受，但还没有拨号；第一次查询或 Ping 才会建连接"
               ],
-              "answer": 1,
-              "explain": "sql.Open 只校验驱动名和 DSN，不建立网络连接；所以启动时要 PingContext 才能发现地址、账号、库名错误。选项 A 把 Open 当成了 Connect；选项 C 反了，池是惰性增长的；选项 D 更不可能，Open 连库都不连。"
+              "answer": 3,
+              "explain": "sql.Open 只校验驱动名和 DSN，不建立网络连接；所以启动时要 PingContext 才能发现地址、账号、库名错误。说「已经和 MySQL 建立了至少一条连接」的那一项把 Open 当成了 Connect；说「连接池已经预热到 MaxOpenConns 条连接」的那一项反了，池是惰性增长的；说「数据库和需要的表一定都存在」的那一项更不可能，Open 连库都不连。"
             },
             {
               "q": "把 `MaxOpenConns` 从 20 调到 500，而 MySQL 的 `max_connections` 是 151，最可能发生什么？",
               "options": [
-                "吞吐随连接数线性提升",
-                "部分连接被拒绝（Too many connections），锁竞争和延迟反而上升",
                 "连接池会自动把上限压到 151",
+                "部分连接被拒绝（Too many connections），锁竞争和延迟反而上升",
+                "吞吐随连接数线性提升",
                 "每条连接的内存占用会下降"
               ],
               "answer": 1,
-              "explain": "池上限超过数据库容量后，多出来的连接会在建立时被拒绝，同时更多并发事务争抢行锁，延迟上升。选项 A 忽略了数据库是共享瓶颈；选项 C 是编造的，database/sql 不会读数据库配置；选项 D 与连接数无关。"
+              "explain": "池上限超过数据库容量后，多出来的连接会在建立时被拒绝，同时更多并发事务争抢行锁，延迟上升。说「吞吐随连接数线性提升」的那一项忽略了数据库是共享瓶颈；说「连接池会自动把上限压到 151」的那一项是编造的，database/sql 不会读数据库配置；说「每条连接的内存占用会下降」的那一项与连接数无关。"
             }
           ]
         },
@@ -468,45 +468,45 @@
               "q": "下面的代码会输出什么？\n\n```go\nlv := new(slog.LevelVar)\nlv.Set(slog.LevelWarn)\nlog := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lv}))\nlog.Info(\"a\")\nlog.Warn(\"b\")\n```",
               "options": [
                 "a 和 b 两行都输出",
-                "只输出 b 那一行（level=WARN msg=b）",
                 "只输出 a 那一行（level=INFO msg=a）",
+                "只输出 b 那一行（level=WARN msg=b）",
                 "第二次调用会 panic：LevelVar 不能在运行中读取"
               ],
-              "answer": 1,
-              "explain": "LevelVar 作为 Handler 的级别阈值，设为 WARN 后 INFO 被过滤，只有 WARN 输出。选项 A 忽略了级别过滤；选项 C 把阈值方向弄反；选项 D 错在 LevelVar 本来就是给运行中并发读写设计的，内部是原子操作。"
+              "answer": 2,
+              "explain": "LevelVar 作为 Handler 的级别阈值，设为 WARN 后 INFO 被过滤，只有 WARN 输出。说「a 和 b 两行都输出」的那一项忽略了级别过滤；说「只输出 a 那一行」的那一项把阈值方向弄反；说「第二次调用会 panic」的那一项错在 LevelVar 本来就是给运行中并发读写设计的，内部是原子操作。"
             },
             {
               "q": "下面的代码在 `run` 返回错误时，`defer db.Close()` 会执行吗？\n\n```go\nfunc main() {\n\tdb, _ := sql.Open(\"mysql\", dsn)\n\tdefer db.Close()\n\tif err := run(db); err != nil {\n\t\tlog.Fatalf(\"run: %v\", err)\n\t}\n}\n```",
               "options": [
-                "会执行，Fatalf 会先触发 defer 再退出",
                 "不会执行，log.Fatalf 内部调用 os.Exit，defer 被跳过",
-                "只有 db 为 nil 时才不执行",
-                "会执行，但执行顺序在 Fatalf 打印之前"
+                "会执行，Fatalf 会先触发 defer 再退出",
+                "会执行，但执行顺序在 Fatalf 打印之前",
+                "只有 db 为 nil 时才不执行"
               ],
-              "answer": 1,
-              "explain": "log.Fatalf 打印后调用 os.Exit(1)，os.Exit 直接终止进程，任何 defer 都不会运行。选项 A 和 D 都以为 Fatalf 像普通 return；选项 C 与 db 是否为 nil 无关。正确写法是 main 调 run，run 内部用 defer 清理，main 只负责打印和退出。"
+              "answer": 0,
+              "explain": "log.Fatalf 打印后调用 os.Exit(1)，os.Exit 直接终止进程，任何 defer 都不会运行。说「会执行，Fatalf 会先触发 defer 再退出」与「会执行，但执行顺序在 Fatalf 打印之前」的那两项，都以为 Fatalf 像普通 return；说「只有 db 为 nil 时才不执行」的那一项与 db 是否为 nil 无关。正确写法是 main 调 run，run 内部用 defer 清理，main 只负责打印和退出。"
             },
             {
               "q": "把数据库 Ping 放进 liveness 探针，数据库抖动 10 秒时最可能发生什么？",
               "options": [
-                "所有实例 liveness 失败被重启，重启期间服务整体不可用，甚至加重数据库负担",
                 "只会把实例从负载均衡摘掉，数据库恢复后自动回来",
                 "探针会自动降级为 readiness，不影响重启",
-                "liveness 失败只会记录日志，不会重启容器"
+                "liveness 失败只会记录日志，不会重启容器",
+                "所有实例 liveness 失败被重启，重启期间服务整体不可用，甚至加重数据库负担"
               ],
-              "answer": 0,
-              "explain": "liveness 失败的语义就是「重启这个容器」，数据库抖动会让所有实例同时被重启，重启中的实例继续连数据库，形成雪崩。选项 B 描述的是 readiness；选项 C 是编造的，两种探针不会互相降级；选项 D 与编排系统的行为相反。"
+              "answer": 3,
+              "explain": "liveness 失败的语义就是「重启这个容器」，数据库抖动会让所有实例同时被重启，重启中的实例继续连数据库，形成雪崩。说「只会把实例从负载均衡摘掉」的那一项描述的是 readiness；说「探针会自动降级为 readiness」的那一项是编造的，两种探针不会互相降级；说「liveness 失败只会记录日志」的那一项与编排系统的行为相反。"
             },
             {
               "q": "下列哪组配置适合热更新，哪组必须重启？",
               "options": [
-                "监听地址和日志级别都可以热更新",
+                "所有配置都必须重启，热更新没有意义",
                 "日志级别可以（通过 LevelVar 原子替换），监听地址、连接池大小、DSN 必须重启",
                 "所有配置都可以热更新，只要重新读一遍文件",
-                "所有配置都必须重启，热更新没有意义"
+                "监听地址和日志级别都可以热更新"
               ],
               "answer": 1,
-              "explain": "日志级别只是一个原子整数，Handler 每次判断都读它，改了立刻生效；监听地址已经在 socket 上、池大小和 DSN 已经建好连接，改了只会让新旧状态混在一起。选项 A 忽略了 socket 已绑定；选项 C 还漏了并发安全；选项 D 太绝对，级别和开关类配置确实适合热更。"
+              "explain": "日志级别只是一个原子整数，Handler 每次判断都读它，改了立刻生效；监听地址已经在 socket 上、池大小和 DSN 已经建好连接，改了只会让新旧状态混在一起。说「监听地址和日志级别都可以热更新」的那一项忽略了 socket 已绑定；说「所有配置都可以热更新，只要重新读一遍文件」的那一项还漏了并发安全；说「所有配置都必须重启」的那一项太绝对，级别和开关类配置确实适合热更。"
             }
           ]
         }
@@ -528,46 +528,46 @@
             {
               "q": "下面这段代码在 `go test -bench . -benchmem` 里，`allocs/op` 最接近哪个？\n\n```go\nfunc fill(n int) []int {\n\tout := []int{}\n\tfor i := 0; i < n; i++ {\n\t\tout = append(out, i)\n\t}\n\treturn out\n}\n```",
               "options": [
-                "约 log2(n)+1 次：空切片起步，append 在容量不足时按倍增长",
                 "恰好 n 次：每 append 一个元素就单独分配一次",
+                "约 log2(n)+1 次：空切片起步，append 在容量不足时按倍增长",
                 "0 次：int 是值类型，整个切片都分配在栈上",
                 "2 次：make 一次、return 时再复制一次"
               ],
-              "answer": 0,
-              "explain": "append 的扩容策略是容量不足时翻倍（小切片增长更细），从 cap=0 出发依次是 1、2、4、8，到 n 大约 ceil(log2(n))+1 次分配；元素本身不单独分配，整块底层数组一次分配完。返回切片不增加分配次数，因为底层数组本来就在堆上。第三个选项错在切片底层数组必然逃逸到堆，不会因为元素是 int 就留在栈；第四个选项错在 return 返回的是切片头（指针、长度、容量），不会再复制一遍数据。"
+              "answer": 1,
+              "explain": "append 的扩容策略是容量不足时翻倍（小切片增长更细），从 cap=0 出发依次是 1、2、4、8，到 n 大约 ceil(log2(n))+1 次分配；元素本身不单独分配，整块底层数组一次分配完。返回切片不增加分配次数，因为底层数组本来就在堆上。说「恰好 n 次：每 append 一个元素就单独分配一次」的那一项错在 append 只在扩容时才分配；说「0 次：整个切片都分配在栈上」的那一项错在切片底层数组必然逃逸到堆，不会因为元素是 int 就留在栈；说「2 次：make 一次、return 再复制一次」的那一项错在 return 返回的是切片头（指针、长度、容量），不会再复制一遍数据。"
             },
             {
               "q": "线上想抓 30 秒 CPU profile，于是加了这段代码，结果 `-top` 里几乎全是 `runtime.futex` 与 `runtime.mcall`，业务函数一个都看不到。问题出在哪？\n\n```go\nf, _ := os.Create(\"cpu.pprof\")\ndefer f.Close()\npprof.StartCPUProfile(f)\ntime.Sleep(30 * time.Second)\npprof.StopCPUProfile()\n```",
               "options": [
-                "采集窗口里没有业务负载，采样器只能采到空闲栈；应边跑真实流量或边压测边采",
                 "Sleep 会阻塞采样器，应改成 for 空转把 CPU 占满",
                 "profile 文件必须先 go tool pprof -symbolize 才能看到业务符号",
-                "StartCPUProfile 只能在 init 里调用，放 main 里不生效"
+                "StartCPUProfile 只能在 init 里调用，放 main 里不生效",
+                "采集窗口里没有业务负载，采样器只能采到空闲栈；应边跑真实流量或边压测边采"
               ],
-              "answer": 0,
-              "explain": "CPU profile 是 100Hz 定时采样当前执行的栈，样本与 CPU 时间成正比；进程在 sleep，采样到的自然只有调度与空闲路径。第二个选项错在 for 空转只会把「空转」本身变成热点，测不到真实请求的调用栈；第三个选项错在符号信息就写在 profile 里，pprof 默认就能解析；第四个选项错在 StartCPUProfile 任何地方都能调用，只是全局唯一、重复启动会返回 error。"
+              "answer": 3,
+              "explain": "CPU profile 是 100Hz 定时采样当前执行的栈，样本与 CPU 时间成正比；进程在 sleep，采样到的自然只有调度与空闲路径。说「Sleep 会阻塞采样器，应改成 for 空转把 CPU 占满」的那一项错在空转只会把「空转」本身变成热点，测不到真实请求的调用栈；说「必须先 go tool pprof -symbolize 才能看到业务符号」的那一项错在符号信息就写在 profile 里，pprof 默认就能解析；说「StartCPUProfile 只能在 init 里调用」的那一项错在它任何地方都能调用，只是全局唯一、重复启动会返回 error。"
             },
             {
               "q": "关于 heap profile 的四个视图，哪一句是对的？",
               "options": [
                 "alloc_space 是进程启动至今累计分配的字节（采样估算），inuse_space 是当前仍存活对象的字节",
+                "两者数值必然相等，只是一个按对象数、一个按字节数",
                 "inuse_space 是累计分配，alloc_space 是当前存活",
-                "alloc_space 只统计逃逸到堆的字符串，inuse_space 统计所有对象",
-                "两者数值必然相等，只是一个按对象数、一个按字节数"
+                "alloc_space 只统计逃逸到堆的字符串，inuse_space 统计所有对象"
               ],
               "answer": 0,
-              "explain": "alloc 系列是「从启动到现在一共分配了多少」，用来找分配热点；inuse 系列是「此刻还活着多少」，用来找泄漏，两者衡量的是完全不同的东西。第二个选项把两者说反了。第三个选项错在 alloc_space 覆盖所有堆分配（切片、map、结构体、闭包），不只字符串。第四个选项错在数值通常差一个数量级：累计分配包含已经死掉的对象。另外要记住它们都是按 512KB 采样率估算出来的，不是精确计数。"
+              "explain": "alloc 系列是「从启动到现在一共分配了多少」，用来找分配热点；inuse 系列是「此刻还活着多少」，用来找泄漏，两者衡量的是完全不同的东西。说「inuse_space 是累计分配，alloc_space 是当前存活」的那一项把两者说反了。说「alloc_space 只统计逃逸到堆的字符串」的那一项错在 alloc_space 覆盖所有堆分配（切片、map、结构体、闭包），不只字符串。说「两者数值必然相等」的那一项错在数值通常差一个数量级：累计分配包含已经死掉的对象。另外要记住它们都是按 512KB 采样率估算出来的，不是精确计数。"
             },
             {
               "q": "一个 QPS 20 的内部管理后台，某接口耗时 80 毫秒，profile 显示 12% CPU 花在 `fmt.Sprintf`。最合理的处理是？",
               "options": [
-                "先不动：优化收益约 10 毫秒，低于引入手写缓冲的维护成本，优先保证可读性",
                 "把 fmt 全部换成 unsafe 手写字节缓冲，把分配压到 0",
                 "把 GOGC 设成 off，减少 GC 次数，顺带省下 fmt 的开销",
+                "先不动：优化收益约 10 毫秒，低于引入手写缓冲的维护成本，优先保证可读性",
                 "用 sync.Pool 缓存整个响应字符串，牺牲一致性换吞吐"
               ],
-              "answer": 0,
-              "explain": "每秒 20 个请求、每次省 10 毫秒，一个月也省不出一次用户可感知的等待，而手写缓冲会让代码难读三倍、还要长期维护 unsafe。第二个选项是典型的过度优化：收益 10 毫秒，风险是未定义行为与内存 bug。第三个选项错在 GOGC=off 并不减少 fmt 的格式化开销，只会让内存无界增长直到被内核杀掉。第四个选项错在缓存整串响应会引入陈旧数据，用正确性换来的吞吐在这个量级上毫无意义。"
+              "answer": 2,
+              "explain": "每秒 20 个请求、每次省 10 毫秒，一个月也省不出一次用户可感知的等待，而手写缓冲会让代码难读三倍、还要长期维护 unsafe。说「把 fmt 全部换成 unsafe 手写字节缓冲」的那一项是典型的过度优化：收益 10 毫秒，风险是未定义行为与内存 bug。说「把 GOGC 设成 off」的那一项错在 GOGC=off 并不减少 fmt 的格式化开销，只会让内存无界增长直到被内核杀掉。说「用 sync.Pool 缓存整个响应字符串」的那一项错在会引入陈旧数据，用正确性换来的吞吐在这个量级上毫无意义。"
             }
           ]
         },
@@ -582,46 +582,46 @@
             {
               "q": "下面这段代码输出什么？\n\n```go\ntype Celsius float64\n\ntype Number interface{ ~float64 }\n\nfunc Sum[T Number](xs []T) T {\n\tvar total T\n\tfor _, x := range xs {\n\t\ttotal += x\n\t}\n\treturn total\n}\n\nfmt.Println(Sum([]Celsius{1.5, 2.5}))\n```",
               "options": [
-                "输出 4：~ 允许底层类型为 float64 的具名类型，返回值类型仍是 Celsius",
                 "编译错误：Celsius 不是 float64，应该用 float64 而不是 ~float64",
                 "输出 4.0：返回时被转换成 float64，再按浮点格式打印",
-                "运行时 panic：类型推断失败，必须写 Sum[Celsius](...)"
+                "运行时 panic：类型推断失败，必须写 Sum[Celsius](...)",
+                "输出 4：~ 允许底层类型为 float64 的具名类型，返回值类型仍是 Celsius"
               ],
-              "answer": 0,
-              "explain": "约束里的 ~float64 匹配所有底层类型为 float64 的类型，Celsius 满足条件；推断出的 T 是 Celsius，返回的也是 Celsius，fmt 打印时按 float64 的格式输出 4。第二个选项正是 ~ 存在的意义：没有 ~ 才只能传字面 float64。第三个选项错在返回类型就是 T，不会变成 float64，而且整数值的浮点打印是 4 不是 4.0。第四个选项错在类型参数可以从实参 []Celsius 推断出来，不需要显式实例化。"
+              "answer": 3,
+              "explain": "约束里的 ~float64 匹配所有底层类型为 float64 的类型，Celsius 满足条件；推断出的 T 是 Celsius，返回的也是 Celsius，fmt 打印时按 float64 的格式输出 4。说「编译错误：Celsius 不是 float64」的那一项正是 ~ 存在的意义：没有 ~ 才只能传字面 float64。说「输出 4.0，返回时被转换成 float64」的那一项错在返回类型就是 T，不会变成 float64，而且整数值的浮点打印是 4 不是 4.0。说「运行时 panic，必须写 Sum[Celsius](...)」的那一项错在类型参数可以从实参 []Celsius 推断出来，不需要显式实例化。"
             },
             {
               "q": "下面代码会怎样？\n\n```go\ntype User struct{ Name string }\n\nu := User{Name: \"old\"}\nreflect.ValueOf(u).Field(0).SetString(\"new\")\nfmt.Println(u.Name)\n```",
               "options": [
-                "panic：ValueOf 复制了结构体，副本不可寻址；要改用 ValueOf(&u).Elem()",
                 "输出 new：SetString 改的就是 u 里的那个字段",
+                "panic：ValueOf 复制了结构体，副本不可寻址；要改用 ValueOf(&u).Elem()",
                 "编译失败：SetString 的参数必须是 *string",
                 "输出 old 且不 panic，因为字段未导出所以被静默忽略"
               ],
-              "answer": 0,
-              "explain": "报错原文是 reflect: reflect.Value.SetString using unaddressable value：ValueOf(u) 拿到的是 u 的副本，CanSet 为 false，reflect 不会替你改原对象。第二个选项错在副本和原变量没有关系，即使能改也改不到 u。第三个选项错在 SetString 的签名就是 func(string)，问题在接收者不可寻址而不是参数类型。第四个选项错在 Name 是导出字段，panic 的原因是可寻址性，不是导出性；如果是未导出字段，报错信息会是 obtained using unexported field。"
+              "answer": 1,
+              "explain": "报错原文是 reflect: reflect.Value.SetString using unaddressable value：ValueOf(u) 拿到的是 u 的副本，CanSet 为 false，reflect 不会替你改原对象。说「输出 new：SetString 改的就是 u 里的那个字段」的那一项错在副本和原变量没有关系，即使能改也改不到 u。说「编译失败：SetString 的参数必须是 *string」的那一项错在 SetString 的签名就是 func(string)，问题在接收者不可寻址而不是参数类型。说「输出 old 且不 panic，因为字段未导出」的那一项错在 Name 是导出字段，panic 的原因是可寻址性，不是导出性；如果是未导出字段，报错信息会是 obtained using unexported field。"
             },
             {
               "q": "关于 Go 泛型的实现与限制，哪一句是对的？",
               "options": [
-                "类型实参只从函数实参推断，推不出来要显式写 Sum[int](xs)；并且 Go 不允许定义带自己类型参数的方法",
                 "泛型函数会为每个具体类型各生成一份机器码，等价于 C++ 模板的完全特化",
                 "类型参数上可以写 switch x.(type) 来为 int、string 分别生成特化分支",
+                "类型实参只从函数实参推断，推不出来要显式写 Sum[int](xs)；并且 Go 不允许定义带自己类型参数的方法",
                 "comparable 约束保证类型参数支持 <、> 比较，所以可以直接排序"
               ],
-              "answer": 0,
-              "explain": "Go 的推断只基于实参，不支持从返回值或上下文反向推断；同时语言层面没有泛型方法，方法不能声明新的类型参数。第二个选项错在 Go 用的是 GC shape stenciling 加字典，布局相同的类型共享代码，不是每个类型一份。第三个选项错在类型参数上只能用约束声明的操作，any(x).(type) 是运行时判断，不会产生编译期特化。第四个选项错在 comparable 只保证 == 与 !=，排序需要自己写 union 或引入约束包。"
+              "answer": 2,
+              "explain": "Go 的推断只基于实参，不支持从返回值或上下文反向推断；同时语言层面没有泛型方法，方法不能声明新的类型参数。说「泛型函数会为每个具体类型各生成一份机器码，等价于 C++ 模板的完全特化」的那一项错在 Go 用的是 GC shape stenciling 加字典，布局相同的类型共享代码，不是每个类型一份。说「类型参数上可以写 switch x.(type)」的那一项错在类型参数上只能用约束声明的操作，any(x).(type) 是运行时判断，不会产生编译期特化。说「comparable 保证支持 <、> 比较」的那一项错在 comparable 只保证 == 与 !=，排序需要自己写 union 或引入约束包。"
             },
             {
               "q": "一个每秒 50 万次调用的序列化热点，profile 显示 40% CPU 在反射路径上。最合理的做法是？",
               "options": [
                 "用代码生成把序列化固化成类型专属代码，接受多一个构建步骤与生成物维护成本",
-                "把反射调用包一层 sync.Pool 缓存 reflect.Value，反射的 CPU 开销就会消失",
                 "设置 GOGC=off 减少 GC 抖动，反射本身的 CPU 开销会跟着下降",
+                "把反射调用包一层 sync.Pool 缓存 reflect.Value，反射的 CPU 开销就会消失",
                 "统一改成 map[string]any 中转，这样反射只发生一次"
               ],
               "answer": 0,
-              "explain": "反射的成本在字段查找、类型检查与装箱，不在值的分配次数上，所以唯一能真正去掉它的是把逻辑提前到编译期，代码生成是标准答案，代价是构建复杂度。第二个选项错在 reflect.Value 缓存省不下 FieldByName 与类型检查，且池化会引入逃逸与生命周期问题。第三个选项错在 GOGC 只影响 GC 频率，不影响反射路径的 CPU，还会让内存无界增长。第四个选项错在 map 中转会多出一次分配与拷贝，反射只是换了个位置发生。"
+              "explain": "反射的成本在字段查找、类型检查与装箱，不在值的分配次数上，所以唯一能真正去掉它的是把逻辑提前到编译期，代码生成是标准答案，代价是构建复杂度。说「包一层 sync.Pool 缓存 reflect.Value，反射的 CPU 开销就会消失」的那一项错在缓存省不下 FieldByName 与类型检查，且池化会引入逃逸与生命周期问题。说「设置 GOGC=off」的那一项错在 GOGC 只影响 GC 频率，不影响反射路径的 CPU，还会让内存无界增长。说「统一改成 map[string]any 中转」的那一项错在会多出一次分配与拷贝，反射只是换了个位置发生。"
             }
           ]
         },
@@ -636,46 +636,46 @@
             {
               "q": "下面这段代码（假设执行前只有主 goroutine）输出什么？\n\n```go\nch := make(chan struct{})\ngo func() { <-ch }()\ntime.Sleep(10 * time.Millisecond)\nfmt.Println(runtime.NumGoroutine())\n```",
               "options": [
-                "2：新起的 goroutine 阻塞在 channel 接收上，没有退出",
                 "1：被阻塞的 goroutine 不计入 NumGoroutine",
-                "0：主 goroutine 之外都不算",
-                "2，但 GC 跑过一次后会回落到 1"
+                "2，但 GC 跑过一次后会回落到 1",
+                "2：新起的 goroutine 阻塞在 channel 接收上，没有退出",
+                "0：主 goroutine 之外都不算"
               ],
-              "answer": 0,
-              "explain": "NumGoroutine 返回当前存活的 goroutine 数，包括正在阻塞的那些；阻塞在 channel 接收上只是状态是 waiting，生命周期并没有结束。chan 没有关闭、也没有人发送，那个 goroutine 会永远卡住，这正是泄漏的最小形态。第二个与第三个选项错在统计口径：只要有栈、没退出就算一个。第四个选项错在 GC 只回收堆对象，从不回收阻塞中的 goroutine。"
+              "answer": 2,
+              "explain": "NumGoroutine 返回当前存活的 goroutine 数，包括正在阻塞的那些；阻塞在 channel 接收上只是状态是 waiting，生命周期并没有结束。chan 没有关闭、也没有人发送，那个 goroutine 会永远卡住，这正是泄漏的最小形态。说「1：被阻塞的 goroutine 不计入」与「0：主 goroutine 之外都不算」的那两项错在统计口径：只要有栈、没退出就算一个。说「2，但 GC 跑过一次后会回落到 1」的那一项错在 GC 只回收堆对象，从不回收阻塞中的 goroutine。"
             },
             {
               "q": "服务 RSS 从 300MB 涨到 1.9GB，容器 limit 2G 后被杀（exit 137）。但 `/debug/pprof/heap?gc=1` 显示 `inuse_space` 只有 120MB。最合理的判断是？",
               "options": [
                 "内存不在 Go 堆上：优先查 goroutine 栈、cgo 分配、arena 与未归还的空闲页，并对比 /memory/classes/total:bytes 与 RSS 的差值",
-                "一定是缓存泄漏，heap profile 采样率太低所以统计不到",
+                "RSS 把操作系统的页缓存算进去了，属于正常现象可以忽略",
                 "Go 的 GC 出了 bug，把 GOGC 设成 10 就能压住",
-                "RSS 把操作系统的页缓存算进去了，属于正常现象可以忽略"
+                "一定是缓存泄漏，heap profile 采样率太低所以统计不到"
               ],
               "answer": 0,
-              "explain": "Go 堆只占进程 RSS 的一部分：goroutine 栈（初始只有几 KB，但会随调用深度增长，泄漏的 goroutine 还常持有大对象）、cgo 与直接内存、runtime 自身的结构、以及已经空闲但没归还的 span 都在堆外。/memory/classes/total:bytes 是 Go 视角的总占用，和 RSS 一比就能看出差值在哪一层。第二个选项忽略了采样只让人低估、不会把 1.6GB 的堆藏成 120MB。第三个选项在堆外内存问题上完全无效，还会让 CPU 飙升。第四个选项错在页缓存属于内核计数，通常不计入进程 RSS。"
+              "explain": "Go 堆只占进程 RSS 的一部分：goroutine 栈（初始只有几 KB，但会随调用深度增长，泄漏的 goroutine 还常持有大对象）、cgo 与直接内存、runtime 自身的结构、以及已经空闲但没归还的 span 都在堆外。/memory/classes/total:bytes 是 Go 视角的总占用，和 RSS 一比就能看出差值在哪一层。说「一定是缓存泄漏，heap profile 采样率太低所以统计不到」的那一项忽略了采样只让人低估、不会把 1.6GB 的堆藏成 120MB。说「GC 出了 bug，把 GOGC 设成 10」的那一项在堆外内存问题上完全无效，还会让 CPU 飙升。说「RSS 把操作系统的页缓存算进去了」的那一项错在页缓存属于内核计数，通常不计入进程 RSS。"
             },
             {
               "q": "关于指标、日志、链路的分工，哪一句是对的？",
               "options": [
-                "指标回答何时变坏与范围多大，日志回答具体发生了什么，链路回答慢在哪一跳；三者靠同一个 request_id 或 trace_id 关联才有证据价值",
                 "指标足够细就能还原单次请求的完整调用链，所以链路追踪可以省掉",
+                "指标回答何时变坏与范围多大，日志回答具体发生了什么，链路回答慢在哪一跳；三者靠同一个 request_id 或 trace_id 关联才有证据价值",
                 "日志越多越安全，应该全量采集并永久保留",
                 "链路必须 100% 采样，否则任何结论都不成立"
               ],
-              "answer": 0,
-              "explain": "三者的数据模型不同：指标是聚合的时间序列，天生丢失个体信息；日志是离散事件，保留个体但没有跨服务因果；链路是采样的调用树，能还原路径但要靠采样控成本。共享 id 是把它们缝起来的前提。第二个选项错在指标无论如何加维度都无法还原单次调用的顺序与耗时分布，而且高基数会先压垮存储。第三个选项错在成本与写入量线性相关，全量永久保留通常第一个月就超预算。第四个选项错在链路本来就是靠采样工作的，尾部采样能保留所有错误与慢请求。"
+              "answer": 1,
+              "explain": "三者的数据模型不同：指标是聚合的时间序列，天生丢失个体信息；日志是离散事件，保留个体但没有跨服务因果；链路是采样的调用树，能还原路径但要靠采样控成本。共享 id 是把它们缝起来的前提。说「指标足够细就能还原单次请求的完整调用链」的那一项错在指标无论如何加维度都无法还原单次调用的顺序与耗时分布，而且高基数会先压垮存储。说「日志越多越安全，应该全量采集并永久保留」的那一项错在成本与写入量线性相关，全量永久保留通常第一个月就超预算。说「链路必须 100% 采样」的那一项错在链路本来就是靠采样工作的，尾部采样能保留所有错误与慢请求。"
             },
             {
               "q": "一个 200 万 DAU 的接口想加监控维度，下面哪个做法最稳？",
               "options": [
-                "指标只按状态码、路由模板、地域这类有限枚举打标签，用户级维度留给日志与链路",
                 "把 user_id 做成指标 label，基数大就换更快的时序数据库",
                 "把完整 URL（含 query 参数）当 label，信息最全",
-                "每个请求写一条 INFO 日志代替指标，成本更低"
+                "每个请求写一条 INFO 日志代替指标，成本更低",
+                "指标只按状态码、路由模板、地域这类有限枚举打标签，用户级维度留给日志与链路"
               ],
-              "answer": 0,
-              "explain": "指标的时间序列数等于各 label 取值的笛卡尔积，用户维度一进去就是百万级序列，采集内存与查询都会先崩；有限枚举能把序列数控制在几百到几千。第二个选项错在换存储治不了基数爆炸，采集端与查询端仍是瓶颈。第三个选项错在 query 里常带 id、时间戳，基数同样失控，还会泄露敏感参数。第四个选项错在「每请求一条日志」既撑不起聚合曲线，成本也比指标高得多。"
+              "answer": 3,
+              "explain": "指标的时间序列数等于各 label 取值的笛卡尔积，用户维度一进去就是百万级序列，采集内存与查询都会先崩；有限枚举能把序列数控制在几百到几千。说「把 user_id 做成指标 label，基数大就换更快的时序数据库」的那一项错在换存储治不了基数爆炸，采集端与查询端仍是瓶颈。说「把完整 URL（含 query 参数）当 label」的那一项错在 query 里常带 id、时间戳，基数同样失控，还会泄露敏感参数。说「每个请求写一条 INFO 日志代替指标」的那一项错在既撑不起聚合曲线，成本也比指标高得多。"
             }
           ]
         }
