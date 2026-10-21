@@ -1,0 +1,685 @@
+{
+  "code": "c",
+  "name": "C / C++",
+  "icon": "⚙️",
+  "desc": "指针、内存布局、RAII 与未定义行为：理解程序在机器上到底怎么跑。",
+  "runner": "clang-wasm",
+  "stages": [
+    {
+      "id": "c-basic",
+      "name": "入门",
+      "goal": "能画出一块内存落在栈、堆还是静态区，说清指针的地址与类型各管什么，写出不发生泄漏与双重释放的 C 代码，并用 RAII 与智能指针把资源生命周期交给类型系统。",
+      "lessons": [
+        {
+          "id": "c-01",
+          "title": "指针与内存：地址、类型与所有权",
+          "minutes": 45,
+          "lang": "c",
+          "content": "## 一、先看一个会出事的场景\n\n三个真实现象：释放后继续用、把指针当数组、把局部数组的地址带出函数。\n\n第一个是释放后继续读。有人在代码里写了这段，本地跑十次十次都对，于是认为「free 之后还能读」：\n\n```c\nint *p = malloc(sizeof(int));\n*p = 7;\nfree(p);\nprintf(\"%d\\n\", *p);   /* 开发机上稳定打印 7，线上偶尔是垃圾值 */\n```\n\n实际情况是：`free` 只是把这块内存还给分配器，既不清零内容，也不改变 `p` 的值。下一次 `malloc` 很可能立刻把同一块内存拿走，再读就是另一个对象的数据；如果构建时加了 `-fsanitize=address`，这一行会直接报 `heap-use-after-free` 并以非零码退出。上线后的表现是「偶发脏数据」，而不是稳定崩溃，因为它取决于分配器的内部状态，换个编译器、换台机器就换一个结果，这种故障最难复现。\n\n第二个是把指针当数组。函数签名里写着 `int a[]`，看起来像数组，实际上它只是一个指针：\n\n```c\nvoid fill(int a[]) {\n    for (size_t i = 0; i < sizeof(a) / sizeof(a[0]); ++i) a[i] = 0;\n}\n```\n\n调用方传的是 `int buf[100]`，函数里 `sizeof(a)` 却是 8（64 位下的指针大小），循环要么一次都不执行，要么只清零一个元素。编译器不会报错，因为语法完全合法；长度信息在实参变成形参的那一刻就丢了，这件事只能由写代码的人负责补回来。\n\n第三个是返回局部数组的地址。`buf` 在栈上，函数返回时栈帧被回收，调用方拿到的是一个悬垂指针：\n\n```c\nchar *name(void) {\n    char buf[32];\n    strcpy(buf, \"note\");\n    return buf;          /* 编译器通常给一条 warning，但不阻止你 */\n}\n```\n\n它可能在被覆盖前碰巧还是 `note`，也可能在下一次调用 `printf` 之后变成别的字符串。`-Wreturn-local-addr` 能抓住直接返回的情况，但如果地址先赋给一个指针变量再返回，很多编译器就看不出来了。\n\n这三个现象对应本课三件事：指针是「地址 + 类型」，类型决定解引用读几个字节、加一前进多少字节；对象的生命周期由它所在的存储区决定，而不是由指向它的指针决定；所有权必须由显式约定来管理，C 语言不提供任何自动机制。\n\n## 二、原理：它到底怎么运作\n\n指针的值是一个地址，指针的类型决定两件事：解引用时按几个字节解释，以及 `p + 1` 前进多少字节。`int *p` 的 `p + 1` 前进 `sizeof(int)`，`char *p` 的 `p + 1` 前进 1。这解释了为什么把 `int *` 转成 `char *` 逐字节遍历是合法的（对象表示可以按 `unsigned char` 访问），而把 `char *` 强转成 `int *` 再解引用，在地址没有满足 `int` 对齐要求时就是未定义行为——可能慢，可能崩，也可能在 ARM 上直接触发总线错误。\n\n数组和指针的关系只有一条：数组名在大多数表达式里退化成指向首元素的指针，但数组本身是对象，`sizeof` 作用在数组名上得到整个数组的字节数，`&arr` 的类型是「指向整个数组的指针」。退化发生在按值传给形参的那一刻，所以函数里拿不到长度，必须另传一个 `size_t n`。C 没有「数组引用」，C++ 才有 `int (&a)[100]` 这种能把长度保留到函数里的写法。\n\n存储区决定生命周期。栈上的对象在离开作用域时自动结束，成本是几条指令，栈通常只有几 MB，递归太深就会栈溢出；堆上的对象从 `malloc` 或 `new` 成功那一刻开始，到 `free` 或 `delete` 才结束，中间跨多少函数都有效，上限由系统和 `ulimit` 决定；静态区（全局变量、`static` 局部变量、字符串字面量）在程序启动时就有，到进程结束才消失。字符串字面量还有额外限制：修改它是未定义行为，所以正确写法是 `const char *s = \"abc\";`，而不是用 `char *` 接住它再去改。\n\n分配和释放必须配对，形式也要匹配：`malloc` 配 `free`，`new` 配 `delete`，`new[]` 配 `delete[]`。混用的后果不是编译错误，而是堆的元数据被破坏，可能当场崩，也可能在几次分配之后崩在完全无关的位置。C 的 `malloc` 返回 `void *`，在 C 里可以隐式转换，在 C++ 里必须显式转换；失败时返回 `NULL`，所以每次分配都要判断，不判断就解引用是确定的段错误。\n\n`const` 在指针声明里有三种位置，读法是「从标识符出发、先看右边再看左边」：`const int *p` 是「指向 const int 的指针」，`*p` 不能改、`p` 可以改；`int *const p` 是「const 指针，指向 int」，`p` 不能改、`*p` 可以改；`const int *const p` 两者都不能改。函数参数里最常见的是第一种，含义是「我只读你的数据，不会写回去」。\n\n传值、传指针、传引用解决的是不同问题。传值复制一份，函数内改不到外面；传指针传的是地址，函数内能改到外面，但指针可能为 `NULL`，而且调用方和被调用方必须约定谁负责释放；C++ 的引用是别名，不能为空、不能重新绑定，语义最干净。C 没有引用，所以输出参数只能靠指针，并且要用返回值或注释说明它是否可能为空。\n\n空指针、野指针、悬垂指针是三种不同的东西，报错表现也各不相同。空指针是值等于 `NULL` 的指针，解引用它通常是确定的崩溃（地址接近 0），所以「解引用前判空」是能验证的好习惯。野指针是未初始化的指针，它的值是一个随机地址，可能在栈上碰巧指向一块可写内存，于是错误要过很久才暴露；把指针一律初始化成 `NULL`，再配合 `-Wuninitialized`，是成本最低的防线。悬垂指针则曾经合法、后来失效，比如 `free` 之后没有置空，或者指向已返回函数的栈帧；它最难查，因为地址看起来完全正常，读写都不会立刻报错，只有在分配器把这块内存复用之后才以「数据莫名变了」的形式出现。\n\n## 三、代码逐行\n\n下面是一个完整的 C11 程序，把堆上的向量、栈上的数组、只读借用和释放后置空放进同一个文件。编译命令是 `gcc -std=c11 -Wall -Wextra -g c-01.c -o c-01`，或 `clang -std=c11 -Wall -Wextra -g c-01.c -o c-01`。完整源码见本节代码区，关键行逐个看：\n\n- `v->data = malloc(n * sizeof *v->data)`：写 `sizeof *v->data` 而不是 `sizeof(int)`，以后把 `int` 换成 `double`，这一行不用跟着改；但 `n * sizeof` 本身可能溢出，生产代码要先判断 `n > SIZE_MAX / sizeof *v->data`。\n- `if (v->data == NULL) return -1;`：`malloc` 失败返回空指针，不判断就解引用是确定的段错误；返回 -1 把「是退出还是重试」的决定权交给调用方，而不是在库函数里 `exit`。\n- `v->len = n;`：长度只在分配成功之后写入，避免出现「指针非空但长度是垃圾值」的半初始化状态，这种状态在错误处理路径上特别容易漏。\n- `free(v->data); v->data = NULL; v->len = 0;`：置空防的是同一个结构体被释放两次，`free(NULL)` 是合法的空操作；它防不了另一个指针还指着同一块内存，那需要所有权约定。\n- `static int sum(const int *xs, size_t n)`：`const` 声明「不写调用方的内存」，长度单独传，因为 `xs` 已经退化成指针，`sizeof` 拿不到元素个数。\n- `sizeof stack_arr / sizeof stack_arr[0]`：这里的 `stack_arr` 还没退化，能算出 5；同一个表达式搬进函数就是 bug，这是本课最容易踩的一处。\n- `IntVec v = {0};`：聚合初始化把 `data` 置 NULL、`len` 置 0；如果写 `IntVec v;` 再在错误路径上提前返回，`free` 一个未初始化的指针就是未定义行为。\n\n## 四、三个常见误区\n\n### 误区一：以为 `sizeof` 在哪里都能拿到数组长度\n\n现象是「本机循环 100 次，线上只循环 1 次」。原因是形参 `int a[]` 已经是指针，`sizeof(a)` 就是指针宽度。正确做法是把长度作为参数传进来；C++ 里可以用 `std::span`（C++20）或 `int (&a)[N]` 模板来保留长度，但 C 只有「传长度」这一条路。\n\n### 误区二：以为 `free` 之后指针就安全了\n\n`free` 不会把指针置空，也不会清零内容。二次释放常见报错是 `free(): double free detected in tcache 2`，随后进程 abort；而「释放后读」不会报错，只会读到别人的数据。正确做法是释放后立刻置 `NULL`，并且让一块内存只有一个所有者，其他位置只持有不拥有的借用指针。\n\n### 误区三：把 `const int *p` 读成「p 不能改」\n\n`const` 修饰的是 `*p`，不是 `p`。反过来 `int *const p` 才是 `p` 不能改。判断时从变量名出发：`p` 左边最近的是 `*`，说明它是指针；`const` 在 `*` 左边就约束被指向的值，在 `*` 右边就约束指针本身。函数接口里想要「你不能改我的数据」就用 `const T *`，想要「你不能换掉这个指针」才用 `T *const`。\n\n## 五、边界与代价\n\n指针不是越少越好，也不是越多越好。需要表达「可空的所有权」时用指针；只是借用时参数写成 `const T *` 加长度。代价在于别名：指针让「这块内存现在还有谁在用」变成无法从类型上看出来的问题，一次 `free` 是否正确要看完整条调用链，编译器也没法帮你检查。\n\n工具层面的代价同样要算。`-fsanitize=address` 能把越界和 use-after-free 变成可复现的报错，但程序会慢两倍左右、内存涨几倍，只能用于调试和 CI，不能带进线上。另一个代价是可移植性：指针宽度 4 或 8、`int` 宽度、对齐要求都不保证，把指针值序列化下来存盘或跨进程传递是错的，换个进程地址空间就失效。\n\n反例：项目里用一个全局 `struct Cache *g_cache` 到处传，谁想清理就 `free` 一下，最后没人说得清这块内存归谁，崩溃点永远在离 bug 很远的地方。这种场景应该改成「单一所有者持有对象，其他模块只拿 `const` 借用指针」，或者干脆用值语义、把数据拷贝出去。\n\n## 六、动手任务\n\n实现两个函数：`int *make_squares(size_t n)` 用 `malloc` 分配 n 个 `int`，依次填入 0、1、4、9、16……；`void reverse(int *xs, size_t n)` 原地反转数组。在 `main` 里对 n=5 验证：分配后打印 `0 1 4 9 16`，反转后打印 `16 9 4 1 0`，最后 `free` 并把指针置空。\n\n验收标准：`gcc -std=c11 -Wall -Wextra` 零警告；`n == 0` 时你的实现要明确选择返回 `NULL` 还是可安全 `free` 的指针，并把这个选择写进注释；再用 `-fsanitize=address` 跑一遍，确认没有越界和泄漏。\n\n## 七、一句话总结\n\n- 指针 = 地址 + 类型，类型决定解引用宽度和 `p + 1` 的步长。\n- 生命周期由存储区决定，不由指向它的指针决定；`free` 之后指针不变、内容未必清空。\n- 数组一旦退化成形参，`sizeof` 就只剩指针宽度，长度必须另传。\n- `const` 在 `*` 左边约束值、在 `*` 右边约束指针。\n- 所有权要显式：谁分配谁释放，其他人只借用。",
+          "code": "/* c-01.c —— 指针与内存：堆、栈、借用与释放\n * 编译：gcc -std=c11 -Wall -Wextra -g c-01.c -o c-01\n *   或：clang -std=c11 -Wall -Wextra -g c-01.c -o c-01\n * 可选：追加 -fsanitize=address 观察越界与 use-after-free\n */\n#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n\ntypedef struct {\n    int   *data;\n    size_t len;\n} IntVec;\n\n/* 成功返回 0，失败返回 -1；调用方负责 vec_free */\nstatic int vec_init(IntVec *v, size_t n)\n{\n    if (n > SIZE_MAX / sizeof *v->data) return -1;   /* 乘法溢出保护 */\n    v->data = malloc(n * sizeof *v->data);\n    if (v->data == NULL) return -1;                  /* 失败必须判空 */\n    v->len = n;                                      /* 成功后才写长度 */\n    for (size_t i = 0; i < n; ++i) v->data[i] = (int)(i * i);\n    return 0;\n}\n\nstatic void vec_free(IntVec *v)\n{\n    free(v->data);      /* free(NULL) 是合法的空操作 */\n    v->data = NULL;     /* 置空只防本结构体二次释放 */\n    v->len  = 0;\n}\n\n/* 只读借用：const 说明不写调用方的内存 */\nstatic int sum(const int *xs, size_t n)\n{\n    int total = 0;\n    for (size_t i = 0; i < n; ++i) total += xs[i];\n    return total;\n}\n\nint main(void)\n{\n    IntVec v = {0};                     /* 聚合初始化：data=NULL, len=0 */\n    if (vec_init(&v, 5) != 0) {\n        fprintf(stderr, \"vec_init failed\\n\");\n        return 1;\n    }\n    printf(\"len=%zu sum=%d\\n\", v.len, sum(v.data, v.len));   /* len=5 sum=30 */\n\n    int stack_arr[5] = {1, 2, 3, 4, 5};\n    printf(\"elems=%zu bytes=%zu\\n\",\n           sizeof stack_arr / sizeof stack_arr[0],          /* 5 */\n           sizeof stack_arr);                               /* 20（int 4 字节时） */\n\n    const int *p = stack_arr;           /* *p 只读，p 本身可以改 */\n    p += 2;                             /* 前进 2 * sizeof(int) 字节 */\n    printf(\"p[0]=%d p[1]=%d\\n\", p[0], p[1]);                 /* p[0]=3 p[1]=4 */\n\n    int *const fixed = stack_arr;       /* fixed 不能改指向，*fixed 可以改 */\n    fixed[0] = 100;\n    printf(\"stack_arr[0]=%d\\n\", stack_arr[0]);               /* 100 */\n\n    vec_free(&v);\n    printf(\"after free: len=%zu null=%d\\n\", v.len, v.data == NULL); /* 0 1 */\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```c\nint a[4] = {10, 20, 30, 40};\nint *p = a + 1;\nprintf(\"%d %td\\n\", *(p + 2), (p + 2) - p);\n```",
+              "options": [
+                "`40 2`",
+                "`30 2`",
+                "`40 8`",
+                "`20 2`"
+              ],
+              "answer": 0,
+              "explain": "`p` 指向 `a[1]`，`p + 2` 指向 `a[3]`，所以解引用是 40；两个同类型指针相减得到的是元素个数而不是字节数，结果 2。选 `30 2` 是把它当成 0 起算的 `a + 2`；选 `40 8` 是以为指针差以字节计，实际 `(char*)` 相减才会得到 8；选 `20 2` 则把 `p` 本身当成了要解引用的目标。"
+            },
+            {
+              "q": "下面函数的问题是什么？\n\n```c\nchar *dup_name(const char *s) {\n    char buf[32];\n    strcpy(buf, s);\n    return buf;\n}\n```",
+              "options": [
+                "应改成用 `malloc(strlen(s) + 1)` 分配、拷贝后返回，并由调用方 `free`",
+                "把 `buf` 改成 `static` 即可，这样既线程安全又可重入",
+                "把返回类型改成 `const char *` 就能消除悬垂指针",
+                "把 `strcpy` 换成 `strncpy(buf, s, 31)` 就安全了"
+              ],
+              "answer": 0,
+              "explain": "`buf` 是栈上的自动数组，函数返回即失效，返回它的地址必然是悬垂指针。正确做法是把生命周期交给堆，并明确由调用方释放。`static` 只是让内存在函数返回后仍然存在，但所有调用共享同一块缓冲，第二次调用会覆盖第一次的结果，既不可重入也不线程安全；加 `const` 只改变类型，不改变存储期；`strncpy` 限制的是写入长度，返回的仍是同一个局部数组地址，悬垂照旧。"
+            },
+            {
+              "q": "执行 `free(p)` 之后，关于变量 `p` 和它原来指向的那块内存，哪个说法正确？",
+              "options": [
+                "`p` 的值不变、内存内容通常也不变，但访问它是未定义行为；应自己把 `p` 置为 NULL",
+                "`free` 会把 `p` 自动置为 NULL，并把内存清零",
+                "`free` 只释放指针变量本身，堆块仍然可以安全读写",
+                "`free` 之后立刻读取一定得到 0，因为分配器会清零"
+              ],
+              "answer": 0,
+              "explain": "`free` 只把块交还分配器，参数是值传递，没法改变调用方的指针变量；内容也不会被清零，`malloc` 从不承诺返回清零内存（那是 `calloc` 的事）。所以释放后继续读是 use-after-free，属于未定义行为，可能读到旧值、别人的数据，也可能崩溃。选项里「自动置 NULL」「堆块仍可读写」「一定读到 0」都是把 `free` 当成了带清零和置空的回收动作，属于最常见的误解。"
+            },
+            {
+              "q": "哪个声明表示「指针本身不能改，但它指向的 int 可以改」？",
+              "options": [
+                "`int *const p`",
+                "`const int *p`",
+                "`const int *const p`",
+                "`int const *p`"
+              ],
+              "answer": 0,
+              "explain": "`const` 写在 `*` 右边时约束指针本身：`int *const p` 中 `p` 不能改指向，但 `*p = 1` 合法。`const int *p` 与 `int const *p` 等价，约束的是被指向的值，`p` 可以重新赋值；`const int *const p` 两者都锁死。判断方法是看 `const` 落在 `*` 的哪一侧，而不是看它离类型名多近。"
+            }
+          ]
+        },
+        {
+          "id": "c-02",
+          "title": "字符串与内存管理：从 \\0 约定到所有权",
+          "minutes": 45,
+          "lang": "c",
+          "content": "## 一、先看一个会出事的场景\n\n四个现象：结构体的用户名字段被写爆、把 `snprintf` 的返回值当成写入长度、`strncpy` 不留结尾、用 `sizeof` 算字符串长度。\n\n场景一，最经典的一类越界。结构体里 `char name[16]` 存用户名，注册接口不做长度校验：\n\n```c\nstruct User {\n    char name[16];\n    int  is_admin;      /* 0 普通用户，1 管理员 */\n};\nstruct User u = {0};\nstrcpy(u.name, argv[1]);   /* argv[1] 有 20 个字符 */\n```\n\n多出来的字节按内存布局覆盖后面的字段，攻击者构造一个 19 字符的用户名就能把 `is_admin` 写成非零。这类 bug 在本地测试时往往不崩，因为多写的几个字节只是盖住了相邻的填充或另一个字段，数据悄悄变了，直到某天权限判断出现一个「不该有权限的账号」。开 `-fsanitize=address` 会立刻报 `stack-buffer-overflow`，并指出越界的字节数。\n\n场景二，把返回值用错：\n\n```c\nchar buf[8];\nint n = snprintf(buf, sizeof buf, \"%s\", \"0123456789\");\nbuf[n] = '\\0';    /* n 是 10，buf 只有 8 字节 */\n```\n\n`snprintf` 返回的是「假如缓冲区足够大，本应写入多少个字符」，不是实际写入数。这一行 `buf[n]` 直接越界写，还会破坏 `buf` 后面的栈数据。正确的判断是：`n < 0` 表示编码错误，`(size_t)n >= sizeof buf` 表示结果被截断。\n\n场景三，`strncpy` 不是安全版 `strcpy`：\n\n```c\nchar dst[4];\nstrncpy(dst, \"abcdef\", sizeof dst);\nprintf(\"%s\", dst);   /* dst 里没有结尾符，printf 会一直往后读 */\n```\n\n源串长度大于等于 n 时，`strncpy` 既不补结尾符也不报错。它原本是为「定长字段清零填充」设计的：源串短于 n 时把剩余字节全填 0，适合写进磁盘的定长记录，但不适合当普通字符串用。所以它只适合「定长记录」，不适合「字符串」——名字里带 `str` 并不代表它能安全处理任意字符串。\n\n场景四，长度算错。`strlen(\"abc\")` 是 3，`sizeof \"abc\"` 是 4，因为字面量包含结尾的 `\\0`；对 `char *p` 求 `sizeof` 得到的是指针宽度，对 `char arr[100]` 求 `sizeof` 得到的是容量 100。三种「长度」混用，就会出现「复制了 8 个字节却以为复制了整串」这种事故。这些问题的共同点是：编译器一律不拦，运行时也未必当场报错，边界被踩坏之后往往以「数据变了」而不是「程序崩了」的形式出现。\n\n## 二、原理：它到底怎么运作\n\nC 没有字符串类型，只有「以 `\\0` 结尾的 `char` 数组」这个约定。所有 `str` 开头的函数都靠它工作：`strlen` 从指针开始逐字节找第一个 0，复杂度 O(n)，所以循环里反复调用 `strlen` 会退化成 O(n²)；`strcpy` 逐字节复制到遇到 0 为止，它根本不知道目标缓冲区多大；`strcat` 每次都要先扫到目标末尾，在循环里拼 n 段就是 O(n²)。\n\n`std::string` 与 `char *` 是两套模型。`std::string` 自己管缓冲区、长度、容量：拷贝是深拷贝，析构自动释放，`c_str()` 返回的指针在下一次修改后可能失效。多数实现还有短字符串优化（SSO），把十几个字符以内的内容直接存在对象内部，不额外分配堆内存，所以小字符串的构造析构很便宜。如果确实要自己管一个会增长的字符串，标准做法是把「长度」和「容量」分成两个字段：长度是当前字符数，容量是已分配的字节数；追加前先判断 `len + need + 1 > cap`，不够就按翻倍或 1.5 倍扩容，扩容失败时保持原对象不变。把这两件事分开，才能做到「追加失败不影响已有内容」，也才能在调试时一眼看出是哪一步算错了。\n\n合理的分层是：需要拼接、查找、切片时用 `std::string` 或 `std::vector<char>`；必须交给 C API（系统调用、第三方库、网络协议）时，用 `c_str()` 拿只读视图，并把长度一起传过去。手写缓冲区只在三种情况下有必要：不能动态分配（嵌入式、实时）、需要避免分配（热路径）、要写二进制格式。\n\n`snprintf` 的契约值得背下来：返回「需要的长度，不含结尾符」；返回值大于等于 cap 说明被截断；cap 大于 0 时最多写 cap-1 个字符再补结尾符；cap 为 0 时什么都不写。这让你可以用两段式写法——先用 0 长度问需要多长，再分配，再写一次——彻底避免猜缓冲区大小。这也是为什么现代代码倾向「先算长度再分配」，而不是「分配一个够大的再祈祷」。`strcpy` 与 `strcat` 之所以危险，就是因为它们只有「复制到 0 为止」这一个终止条件，完全没有容量概念；而 `memcpy` 显式要求长度，责任清清楚楚，性能通常也更好，代价是结尾符要由调用方自己负责。\n\n手动内存管理有三条规则。第一，谁分配谁释放，`malloc` 的返回值必须由同一层的 `free` 收尾；第二，一块内存同一时刻只能有一个所有者，其他人只持有借用指针，并且不能在所有者释放后继续使用；第三，所有失败路径都要清理，C 里通常用 `goto cleanup` 把释放集中到函数末尾，C++ 里靠析构函数自动完成。\n\n泄漏与重复释放的定位思路：泄漏看「分配点与释放点是否配对」，ASan 的 LeakSanitizer 会在进程退出时打印未释放内存的分配栈；重复释放看 glibc 的 `free(): double free detected` 报错，再用 `-g` 编译拿到行号；越界读写靠 ASan 的 redzone 精确到字节。这些工具都要求带 `-g` 编译，否则只能看到一串地址。\n\n## 三、代码逐行\n\n完整源码见本节代码区，核心是「拼接时把长度算准、错误路径返回 NULL、调用方负责释放」。关键行逐个看：\n\n- `size_t na = strlen(a), nb = strlen(b);`：两个长度各算一次，后面复用；如果写进循环条件，每次迭代都会重扫整串。\n- `if (na > SIZE_MAX - nb - 1) return NULL;`：`na + nb + 1` 是无符号运算，溢出会回绕成一个很小的值，`malloc` 成功但后面的 `memcpy` 写出界，这是「堆溢出」最常见的来源。\n- `char *out = malloc(na + nb + 1);`：加 1 是给结尾符，少加 1 就是 off-by-one，写满时正好越界一个字节，只有 ASan 才抓得到。\n- `memcpy(out, a, na);`：只拷贝 na 个字节，不带 a 的结尾符，因为后面还会接着写。\n- `memcpy(out + na, b, nb + 1);`：把 b 连结尾符一起搬过来，省掉单独补结尾的那一行，也不容易忘。\n- `return snprintf(buf, cap, \"%s/%s\", dir, file);`：把「需要多长」原样交给调用方，调用方据此决定扩容还是接受截断。\n- `const char *lit = \"abc\"; char arr[] = \"abc\";`：`sizeof lit` 是指针宽度，`sizeof arr` 是 4；同一个字面量，初始化指针和初始化数组得到的类型完全不同。\n- `if (out == NULL) return NULL;`：分配失败时直接返回，让调用方决定重试还是报错；库函数最忌讳在这里 `exit`，它没有权力结束整个进程。\n- `free(s); s = NULL;`：释放后立刻置空，是为了让后面误用时至少稳定地崩，而不是安静地读到别人的数据；真正的所有权仍然要靠接口约定。\n\n## 四、三个常见误区\n\n### 误区一：以为 `sizeof` 能算出字符串长度\n\n`sizeof arr` 是数组容量（含结尾符），`sizeof p` 是指针宽度，只有 `strlen` 才是当前字符数。三者混用会写出「缓冲区明明够大却截断」或「以为复制了整串其实只复制了 8 字节」这类代码，而且都不会报错。\n\n### 误区二：以为 `snprintf` 返回实际写入的字符数\n\n返回值是「本应写入」的长度，可能大于 cap。把它当下标写 `buf[n]` 就是越界；把它当成功长度去切分日志，会静默丢掉真正的尾部。判断截断只能写 `(size_t)n >= cap`，判断失败只能写 `n < 0`。\n\n### 误区三：以为 `strncpy` 是安全版 `strcpy`\n\n它不保证结尾符，也不报告任何错误，本质是「定长字段复制」。要安全拼接用 `snprintf`；要定长复制，复制完自己补 `buf[cap - 1] = '\\0'`。C11 的 `strcpy_s` 在附录 K 里，很多平台（包括 glibc 默认配置）不实现，跨平台代码不要依赖。判断标准很朴素：函数签名里没有长度参数，它就不可能安全地写目标缓冲区；遇到这种函数，要么换掉它，要么自己先把容量算清楚再调用。\n\n## 五、边界与代价\n\n`std::string` 的代价：超过 SSO 阈值后要一次堆分配；按值传参会复制整块字符数据；`c_str()` 的生命周期绑在对象上，对象被移动或修改后指针失效。`snprintf` 的代价：格式串解析比 `memcpy` 慢一个数量级，热路径上大量拼接应该预分配缓冲区再手写拷贝。\n\n手写缓冲区不是原罪，问题在于「没有边界信息」。任何接受 `char *` 的接口都必须同时接受长度，否则就是留了一个溢出点给下一个人。反例：为了「省掉 `std::string` 的开销」，在日志热路径用固定 256 字节的栈缓冲区拼路径，结果长路径被无声截断，排查线上问题时最关键的那段信息正好丢了。这种场景应该用可增长缓冲区，或者把日志拆成分段写入。还有一类隐性代价是参数顺序：`snprintf` 的格式串和实参在编译器眼里是两个独立列表，类型检查只能做到有限程度；当一条拼接语句里有四个以上参数时，把 `dir` 和 `file` 传反非常常见，而两者类型相同，编译器不会提醒，只有测试能发现。\n\n## 六、动手任务\n\n实现 `int path_join(char *buf, size_t cap, const char *dir, const char *name)`：用 `snprintf` 拼出 `dir/name`，返回需要的长度（不含结尾符）。用三个用例验证：cap=32 时返回 16、`buf` 为 `/var/log/app.log`；cap=6 时返回 16、`buf` 为 `/var/`；cap=1 时返回 16、`buf` 为空串。再开 ASan 跑一遍，确认三种情况都没有越界。最后补一个边界用例：cap 恰好等于 17（16 个字符加结尾符）时，返回值仍是 16，但不属于截断——这一格最容易被 `>=` 和 `>` 写错，专门测它。\n\n## 七、一句话总结\n\n- C 字符串是「`char` 数组 + 结尾符」的约定，长度必须自己带着走。\n- `strlen` 是 O(n)，`sizeof` 是容量，`snprintf` 返回的是「本应写入」的长度。\n- `strncpy` 不保证结尾，`strcpy` 与 `strcat` 不知道边界，跨平台用 `snprintf`。\n- 手动管理的三条规则：谁分配谁释放、单一所有者、失败路径也清理。\n- `std::string` 与 `std::vector` 把这三条规则变成了类型系统的默认行为。",
+          "code": "/* c-02.c —— C 字符串：结尾符约定、边界与手动所有权\n * 编译：gcc -std=c11 -Wall -Wextra -g -fsanitize=address c-02.c -o c-02\n *   或：clang -std=c11 -Wall -Wextra -g -fsanitize=address c-02.c -o c-02\n */\n#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n/* 拼接 a + b：成功返回新字符串（调用方 free），失败返回 NULL */\nstatic char *str_join(const char *a, const char *b)\n{\n    size_t na = strlen(a);\n    size_t nb = strlen(b);\n    if (na > SIZE_MAX - nb - 1) return NULL;   /* na + nb + 1 溢出 */\n    char *out = malloc(na + nb + 1);           /* +1 给结尾符 */\n    if (out == NULL) return NULL;\n    memcpy(out, a, na);                        /* 不含结尾符 */\n    memcpy(out + na, b, nb + 1);               /* 连结尾符一起拷 */\n    return out;\n}\n\n/* 返回需要的长度（不含结尾符）；cap 不足时截断写入 */\nstatic int format_path(char *buf, size_t cap, const char *dir, const char *file)\n{\n    return snprintf(buf, cap, \"%s/%s\", dir, file);\n}\n\nint main(void)\n{\n    char name[16];\n    int n = snprintf(name, sizeof name, \"%s\", \"a-very-long-user-name\");\n    printf(\"n=%d cap=%zu name=[%s] len=%zu\\n\", n, sizeof name, name, strlen(name));\n    /* n=21 cap=16 name=[a-very-long-us] len=15：截断但一定以结尾符收尾 */\n\n    char *s = str_join(\"hello, \", \"world\");\n    if (s == NULL) return 1;\n    printf(\"s=[%s] len=%zu\\n\", s, strlen(s));       /* s=[hello, world] len=12 */\n    free(s);\n    s = NULL;\n\n    char small[6];\n    int need = format_path(small, sizeof small, \"/var/log\", \"app.log\");\n    printf(\"need=%d small=[%s]\\n\", need, small);     /* need=16 small=[/var/] */\n\n    char big[32];\n    need = format_path(big, sizeof big, \"/var/log\", \"app.log\");\n    printf(\"need=%d big=[%s]\\n\", need, big);         /* need=16 big=[/var/log/app.log] */\n\n    const char *lit = \"abc\";\n    char arr[] = \"abc\";\n    printf(\"sizeof lit=%zu sizeof arr=%zu strlen(arr)=%zu\\n\",\n           sizeof lit, sizeof arr, strlen(arr));     /* 64 位：8 4 3 */\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```c\nchar s[8] = \"abc\";\nprintf(\"%zu %zu %zu\\n\", strlen(s), sizeof s, sizeof \"abc\");\n```",
+              "options": [
+                "`3 8 4`",
+                "`3 7 4`",
+                "`3 8 3`",
+                "`4 8 4`"
+              ],
+              "answer": 0,
+              "explain": "`strlen` 数到第一个结尾符为止，得到 3；`sizeof s` 是整个数组的容量 8；`sizeof \"abc\"` 是字面量的类型 `char[4]`，包含结尾符。选 `3 7 4` 是多减了一个字节；选 `3 8 3` 是以为字面量不含结尾符；选 `4 8 4` 则是把 `strlen` 也当成了含结尾符的长度。"
+            },
+            {
+              "q": "下面代码在 64 位 Linux 上运行时，最可能发生什么？\n\n```c\nchar dst[4];\nstrncpy(dst, \"abcdef\", sizeof dst);\nprintf(\"%s\\n\", dst);\n```",
+              "options": [
+                "`dst` 里没有结尾符，`printf` 会越过 `dst` 继续读，属于未定义行为",
+                "`strncpy` 一定会在第 4 个字节补结尾符，输出 `abc`",
+                "`printf` 只会输出 `abcd`，因为数组最多 4 个字节",
+                "编译期直接报错，因为源串比目标长"
+              ],
+              "answer": 0,
+              "explain": "`strncpy` 只在源串短于 n 时用 0 补齐；这里源串更长，它恰好写满 4 个字节，不补结尾符，`dst` 因此不是合法的 C 字符串。`printf` 会一直读到栈上第一个 0，输出长度不可预测，属于未定义行为。其余选项分别错在「一定补结尾」「按容量自动截断输出」「编译期能发现」——编译器不会为运行期的字符串长度报错。"
+            },
+            {
+              "q": "执行下面代码后，`n` 与 `buf` 分别是什么？\n\n```c\nchar buf[5];\nint n = snprintf(buf, sizeof buf, \"%s\", \"abcdefgh\");\n```",
+              "options": [
+                "`n=8`，`buf` 为 `abcd`",
+                "`n=4`，`buf` 为 `abcd`",
+                "`n=5`，`buf` 为 `abcde`",
+                "`n=8`，`buf` 为 `abcdefgh`"
+              ],
+              "answer": 0,
+              "explain": "`snprintf` 返回「假如空间足够时需要写入的字符数」，即 8，与 cap 无关；实际写入最多 cap-1 = 4 个字符，再加结尾符，所以 `buf` 是 `abcd`。`n=4` 是把返回值当成了实际写入数；`n=5` 是以为 cap 也计入返回值；`buf` 为 `abcdefgh` 则忽略了截断，5 字节的缓冲区装不下 9 字节（含结尾符）。"
+            },
+            {
+              "q": "关于把大字符串传给函数，哪个说法正确？",
+              "options": [
+                "按值传 `std::string` 会复制整块字符数据，只读场景应传 `const std::string &`",
+                "按值传参一定会被编译器优化成移动，所以没有代价",
+                "传 `const std::string &` 会悬垂，因为引用在函数返回后失效",
+                "只要函数内不修改字符串，按值传参就不会发生复制"
+              ],
+              "answer": 0,
+              "explain": "按值传参调用的是拷贝构造，长度超过 SSO 阈值时就是一次堆分配加整块复制；只读场景传 `const std::string &` 可以避免。编译器只在实参是右值（临时对象、`std::move` 的结果）时才会选择移动构造，传左值时仍会复制；引用参数在函数调用期间有效，函数返回后失效的是引用本身，不会造成悬垂；「不修改就不复制」没有依据，拷贝发生在进入函数的那一刻。"
+            }
+          ]
+        },
+        {
+          "id": "c-03",
+          "title": "C++ 的 RAII：为什么 C++ 能少犯内存错",
+          "minutes": 50,
+          "lang": "cpp",
+          "content": "## 一、先看一个会出事的场景\n\n三个现象：异常路径上 `delete` 被跳过、`new[]` 配了 `delete`、拷贝一个持有裸指针的对象之后双重释放。\n\n场景一，异常路径上的泄漏：\n\n```cpp\nvoid load(const char *path) {\n    std::FILE *f = std::fopen(path, \"rb\");\n    if (f == nullptr) throw std::runtime_error(\"open failed\");\n    char *buf = new char[4096];\n    if (std::fread(buf, 1, 4096, f) == 0)\n        throw std::runtime_error(\"read failed\");   /* buf 和 f 都没有释放 */\n    delete[] buf;\n    std::fclose(f);\n}\n```\n\n只要 `fread` 失败，一块堆内存和一个文件描述符就同时泄漏。如果这个函数在长驻服务里每分钟被调用一次、每次都撞上同一个坏文件，一天就是 1440 个句柄，几天后 `fopen` 开始返回空指针，日志里全是「打开文件太多」。C 的常规解法是在函数末尾放一个 `cleanup` 标签，所有失败路径 `goto` 过去；C++ 的解法是让资源的生命周期等于对象的生命周期，异常怎么飞都绕不过析构。\n\n场景二，`new[]` 配 `delete`。数组的释放要销毁 n 个元素，分配时编译器记下了元素个数，用标量 `delete` 去释放它是未定义行为。ASan 会直接报 `alloc-dealloc-mismatch`，而没有开 sanitizer 时，堆元数据可能被悄无声息地破坏，十分钟后崩在完全无关的模块里。\n\n场景三，拷贝一个持有裸指针的对象：\n\n```cpp\nBuffer a(4);\nBuffer b = a;    /* 编译器生成的拷贝构造：逐成员复制，两个指针指向同一块内存 */\n```\n\n离开作用域时 `a` 和 `b` 的析构函数都会释放同一块内存，第二次释放触发 `free(): double free detected` 然后 abort。根因不是「忘了写析构函数」，而是「写了析构函数，却没有管拷贝」。\n\n## 二、原理：它到底怎么运作\n\n构造函数在对象生命周期开始时运行，析构函数在结束时运行。局部对象的析构由作用域结束触发；抛异常时一样会析构——异常从 `throw` 点向外传播，每退出一层作用域，该层已经构造完成的自动对象按构造的逆序被析构，这个过程叫栈展开（stack unwinding）。所以「把释放写进析构函数」等价于「无论正常返回还是异常返回都会释放」，这是 RAII 能成立的全部基础。\n\nRAII 就是把这个观察制度化：构造函数获取资源，析构函数释放资源，资源的生命周期自动等于对象的生命周期。文件、互斥锁、socket、堆内存、数据库连接全都适用。标准库通篇都是这个模式：`std::string` 管字符数组，`std::vector` 管连续内存，`std::lock_guard` 管互斥量，`std::unique_ptr` 管单个对象，`std::fstream` 管文件句柄。\n\n析构的边界必须说清楚：只有自动对象和静态对象会被析构；`std::exit` 不会析构局部对象；`longjmp` 会跳过析构；通过基类指针 `delete` 派生对象时，如果基类析构函数不是 virtual，是未定义行为；析构函数里抛异常，而此刻已经在栈展开中，程序直接 terminate。这些不是 RAII 的缺陷，而是「对象没有被正常销毁」的场合，任何依赖析构的设计在这些地方都会失效。\n\n拷贝与移动：编译器默认生成的拷贝构造和拷贝赋值是逐成员复制，对裸指针就是复制地址；默认移动对指针成员同样是复制地址，同时让源对象保持不变。所以要自己定义：Rule of 3 是「需要析构函数，就一并定义拷贝构造和拷贝赋值」；Rule of 5 再加移动构造与移动赋值；Rule of 0 是不直接持有资源，交给标准容器和智能指针，五个函数一个都不写。现代 C++ 首选 Rule of 0，因为手写移动有三个容易漏的细节——源对象置空、自赋值检查、标记 noexcept。\n\n顺带说一句异常安全的三个等级，面试和 code review 都常问：不泄漏、对象仍可用，叫基本保证；失败后对象仍处于操作之前的状态，叫强保证；承诺不抛异常，叫不抛保证。`std::vector::push_back` 提供的是强保证，做法是「先分配新块、把元素移动过去、成功后再交换」，而交换那一步必须不抛异常——这才是移动构造要标 `noexcept` 的真实原因，不是为了代码好看。\n\n所有权的三种表达：`unique_ptr` 独占，不可拷贝、只能移动，大小与裸指针相同；`shared_ptr` 共享，内部有控制块保存强引用计数与弱引用计数，拷贝时原子增减；裸指针或引用表示「不拥有，只是借用」。函数参数用 `const T &` 表示借用，返回值用 `unique_ptr` 表示移交所有权，成员用值或 `unique_ptr` 表示拥有，三者不要混着用。\n\n`shared_ptr` 的循环引用：两个对象互相持有对方的 `shared_ptr`，强引用计数永远不归零，两个对象都不会析构，内存就泄漏了。打破的办法是把一端改成 `weak_ptr`：它不增加强引用计数，使用前用 `lock()` 提升成 `shared_ptr`，提升失败说明对象已经销毁，这正是「观察者不延长被观察者寿命」的表达方式。\n\n## 三、代码逐行\n\n完整源码见本节代码区，核心是一个不可拷贝、可移动的 `Buffer`，加上异常路径与两种智能指针的对照。关键行逐个看：\n\n- `explicit Buffer(std::size_t n) : data_(new int[n]()), n_(n)`：构造即获取资源；`new int[n]()` 的值初始化让元素全为 0；`explicit` 阻止 `int` 被隐式转换成 `Buffer`。\n- `~Buffer() { delete[] data_; }`：析构即释放，`delete[]` 必须与 `new[]` 配对；对象无论怎样离开作用域，这一行都会执行。\n- `Buffer(const Buffer &) = delete;`：从类型层面禁止「两个对象拥有一块内存」，把运行时事故变成编译错误，这是 RAII 最值钱的地方。\n- `Buffer(Buffer &&other) noexcept`：移动构造偷走指针后立刻把 `other.data_` 置空；不置空，`other` 析构时就会二次释放。\n- `if (this != &other)`：移动赋值必须先判自赋值，否则 `delete[] data_` 删掉的正是马上要搬过来的那块内存。\n- `throw std::runtime_error(\"boom\")`：异常离开 `may_throw`，局部对象 `b` 仍然被析构，输出顺序可以直接验证这一点。\n- `owners.push_back(std::move(p))`：转移之后 `p` 变成空指针，所有权已经不在它手上。\n- `sp.use_count()`：依次打印 1、2、1，对应「拷贝一次、内层作用域结束」两个事件。\n\n## 四、三个常见误区\n\n### 误区一：以为 `shared_ptr` 是线程安全的\n\n控制块里的引用计数是原子的，多个线程同时拷贝、销毁 `shared_ptr` 不会把计数搞坏；但它指向的那个对象没有任何保护，两个线程同时修改同一个 `Buffer` 照样是数据竞争。另外，到处用 `shared_ptr` 会让对象的释放时机变成「最后一个持有者说了算」，生命周期变得不可预测。\n\n### 误区二：以为「写了析构函数」就万事大吉\n\n写了析构函数却没禁止拷贝，编译器生成的拷贝构造仍然逐成员复制指针，两个对象析构同一块内存。Rule of 3 说的就是这件事：析构、拷贝构造、拷贝赋值是一组，动一个就要想另外两个；不想手写就 `= delete`，或者换成 `unique_ptr` 成员让编译器自动处理。编译器不会因为你写了析构函数就停止生成拷贝构造，这一点和「有垃圾回收就没人管内存」的直觉正好相反。\n\n### 误区三：以为析构函数在任何情况下都会执行\n\n`std::exit` 不析构局部对象；`longjmp` 直接跳走；基类析构不是 virtual 时，通过基类指针 `delete` 派生对象是未定义行为，派生部分的析构不会执行。RAII 依赖「作用域正常退出」这个前提，跨语言边界、信号处理、`setjmp` 这些地方要单独设计，不能指望析构兜底。\n\n## 五、边界与代价\n\n`shared_ptr` 的成本是实打实的：控制块要额外分配（`make_shared` 把对象和控制块合并成一次分配），每次拷贝都要原子增减计数，对象的释放时机由最后一个持有者决定。循环引用会泄漏，全局 `shared_ptr` 的析构顺序跨编译单元不确定，可能在你以为「已经初始化」的静态对象里拿到空指针。\n\nRAII 也不是万能的。有些资源必须在精确的时刻释放，比如事务提交前必须关闭文件、必须在 fork 前释放锁，这种场合需要显式的 `close()`，并让析构函数容忍「已经关闭」的状态；析构函数不应该抛异常，所以它也无法把「关闭失败」报告给调用方，只能记日志。与 C API 交互时，`unique_ptr` 要配自定义 deleter，否则默认的 `delete` 会用在 `fopen` 返回的指针上。\n\n反例：一个只在函数内活三行的临时缓冲区，用 `shared_ptr` 持有。它既多了一次控制块分配，又让所有权变得模糊，读代码的人会以为这块内存要传出去。用栈上的 `std::array` 或 `std::vector` 更清楚，也更快。判断标准可以很直接：如果这个对象从来不需要被两个地方同时拥有，它就不该出现 `shared_ptr`。\n\n## 六、动手任务\n\n把开头的 `fopen` 版本改成一个 `File` 类：构造函数接收路径并打开，失败就抛 `std::runtime_error`；析构函数关闭并在关闭时打印一行；删除拷贝构造和拷贝赋值；实现移动构造与移动赋值，移动后源对象的句柄置空。在 `main` 里用 `try`/`catch` 让 `File` 在作用域中途抛异常，确认「关闭」一定被打印，且只打印一次。\n\n验收：`g++ -std=c++17 -Wall -Wextra` 零警告；故意把移动构造里的置空删掉，观察是否出现第二次关闭（或崩溃），再把置空补回去；最后用 `-fsanitize=address` 跑一遍确认没有泄漏。\n\n## 七、一句话总结\n\n- RAII = 构造获取、析构释放；异常时的栈展开保证析构照样执行。\n- 默认拷贝是逐成员复制，持资源的类要么写 Rule of 5，要么直接 Rule of 0。\n- `unique_ptr` 表达独占且零开销，`shared_ptr` 表达共享但有计数成本。\n- `shared_ptr` 循环引用必然泄漏，用 `weak_ptr` 打断环。\n- 别用 `shared_ptr` 表达「可能为空」或「只是借用」，那是裸指针和引用的职责。",
+          "code": "// c-03.cpp —— RAII：把资源生命周期绑定到对象生命周期\n// 编译：g++ -std=c++17 -Wall -Wextra -g c-03.cpp -o c-03\n//   或：clang++ -std=c++17 -Wall -Wextra -g c-03.cpp -o c-03\n#include <cstddef>\n#include <cstdio>\n#include <memory>\n#include <stdexcept>\n#include <utility>\n#include <vector>\n\nclass Buffer {\npublic:\n    explicit Buffer(std::size_t n) : data_(new int[n]()), n_(n) {\n        std::printf(\"  Buffer(%zu) 构造\\n\", n_);\n    }\n    ~Buffer() {\n        std::printf(\"  Buffer(%zu) 析构\\n\", n_);\n        delete[] data_;\n    }\n\n    // 资源不可复制：两个对象会释放同一块内存\n    Buffer(const Buffer &) = delete;\n    Buffer &operator=(const Buffer &) = delete;\n\n    // 移动 = 偷走指针，并把源对象置空（否则源对象析构时二次释放）\n    Buffer(Buffer &&other) noexcept : data_(other.data_), n_(other.n_) {\n        other.data_ = nullptr;\n        other.n_ = 0;\n    }\n    Buffer &operator=(Buffer &&other) noexcept {\n        if (this != &other) {            // 自赋值时先 delete 会删掉要搬的内存\n            delete[] data_;\n            data_ = other.data_;\n            n_ = other.n_;\n            other.data_ = nullptr;\n            other.n_ = 0;\n        }\n        return *this;\n    }\n\n    int &operator[](std::size_t i) { return data_[i]; }\n    std::size_t size() const { return n_; }\n\nprivate:\n    int *data_;\n    std::size_t n_;\n};\n\nstatic void may_throw(bool boom) {\n    Buffer b(3);                        // 无论怎么离开作用域，b 都会析构\n    b[0] = 42;\n    if (boom) throw std::runtime_error(\"boom\");\n    std::printf(\"  no throw, b[0]=%d\\n\", b[0]);\n}\n\nint main() {\n    std::printf(\"1) 异常路径\\n\");\n    try {\n        may_throw(true);\n    } catch (const std::exception &e) {\n        std::printf(\"  caught: %s\\n\", e.what());\n    }\n\n    std::printf(\"2) unique_ptr 转移所有权\\n\");\n    {\n        auto p = std::make_unique<Buffer>(2);\n        std::vector<std::unique_ptr<Buffer>> owners;\n        owners.push_back(std::move(p));  // 转移后 p 为空\n        std::printf(\"  p is %s, owners=%zu\\n\", p ? \"non-null\" : \"null\", owners.size());\n    }\n\n    std::printf(\"3) shared_ptr 引用计数\\n\");\n    {\n        auto sp = std::make_shared<Buffer>(1);\n        std::printf(\"  use_count=%ld\\n\", static_cast<long>(sp.use_count()));\n        {\n            auto sp2 = sp;               // 拷贝：计数 +1\n            std::printf(\"  use_count=%ld\\n\", static_cast<long>(sp.use_count()));\n        }\n        std::printf(\"  use_count=%ld\\n\", static_cast<long>(sp.use_count()));\n    }\n\n    std::puts(\"4) end of main\");\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面程序输出什么？\n\n```cpp\nstruct A { const char *n; ~A() { std::printf(\"%s\", n); } };\nvoid f() { A a{\"1\"}; A b{\"2\"}; throw 1; }\nint main() {\n    try { A c{\"3\"}; f(); }\n    catch (...) { std::puts(\"caught\"); }\n}\n```",
+              "options": [
+                "`213caught`",
+                "`123caught`",
+                "`321caught`",
+                "`21caught3`"
+              ],
+              "answer": 0,
+              "explain": "栈展开时每一层按构造的逆序析构：`f` 里先析构 `b`（打印 2）再析构 `a`（打印 1），随后控制权回到 `main`，`c` 在离开 `try` 块时析构（打印 3），最后 `catch` 里的 `puts` 打印 `caught`。`123caught` 是以为按构造顺序析构；`321caught` 把内外层次序弄反了；`21caught3` 则以为 `c` 在 `catch` 之后才析构。"
+            },
+            {
+              "q": "下面的类有什么问题？\n\n```cpp\nclass Buf {\n    int *p_;\npublic:\n    explicit Buf(int v) : p_(new int(v)) {}\n    ~Buf() { delete p_; }\n    Buf(Buf &&o) : p_(o.p_) {}\n};\n```",
+              "options": [
+                "移动构造没有把 `o.p_` 置空，源对象析构时会二次释放；应置空并标记 `noexcept`",
+                "应该把析构函数改成 `delete[] p_`，因为 `new int(v)` 分配的是数组",
+                "把移动构造删掉（`= delete`）即可，这样 `Buf` 就能安全地按值拷贝",
+                "移动构造里应该写成 `p_(new int(*o.p_))`，用深拷贝代替偷指针"
+              ],
+              "answer": 0,
+              "explain": "移动构造复制了指针却没清空源对象，`o` 和当前对象析构时都会 `delete p_`，属于双重释放；正确写法是置空源指针并声明 `noexcept`，让容器扩容时放心使用移动。`new int(v)` 分配的是单个对象，配 `delete` 正确，改成 `delete[]` 反而是未定义行为；删除移动构造并不会让裸指针可安全拷贝，编译器仍会生成逐成员复制的拷贝构造；深拷贝是另一种设计（那样就成了值语义），不是修复这个移动构造的办法，而且这里 `o.p_` 与 `p_` 指向同一对象，问题依旧存在。"
+            },
+            {
+              "q": "关于 `std::make_shared<T>(args...)` 与 `std::shared_ptr<T>(new T(args...))`，哪个说法正确？",
+              "options": [
+                "`make_shared` 只做一次分配，且在 `f(shared_ptr<T>(new T), g())` 这类表达式里不会因为 `g()` 抛异常而泄漏裸指针",
+                "`make_shared` 创建的 `shared_ptr` 不需要引用计数，所以拷贝更便宜",
+                "`shared_ptr<T>(new T)` 在控制块分配失败时一定会泄漏，而 `make_shared` 不会",
+                "两者完全等价，只是写法不同，性能没有差别"
+              ],
+              "answer": 0,
+              "explain": "`make_shared` 把对象和控制块合并成一次分配，裸指针从 `new` 到交给 `shared_ptr` 之间也没有别的求值点，`g()` 抛异常不会漏掉它。代价是对象内存要等最后一个 `weak_ptr` 也销毁才归还。它仍然使用引用计数，只是少一次分配；`shared_ptr<T>(new T)` 的构造函数在控制块分配失败时会按标准 `delete` 掉指针，真正会泄漏的是「`new` 已求值、`shared_ptr` 还没构造就被异常打断」的表达式场景，所以「一定泄漏」是错的；说「完全等价」则忽略了分配次数与异常安全差异。"
+            },
+            {
+              "q": "关于智能指针的取舍，下面哪个说法正确？",
+              "options": [
+                "对象只有一个所有者、生命周期就是当前作用域时，栈对象或 `unique_ptr` 比 `shared_ptr` 更合适",
+                "`shared_ptr` 的引用计数是原子的，所以它指向的对象也自动线程安全",
+                "`unique_ptr` 有运行时开销，性能敏感的地方应该换回裸指针",
+                "`weak_ptr` 也会增加强引用计数，因此不能用来打破循环引用"
+              ],
+              "answer": 0,
+              "explain": "单一所有权加作用域生命周期正是 `unique_ptr` 的适用场景：没有额外分配、没有计数、所有权一眼可见；`shared_ptr` 会多一次控制块分配和原子增减，还让释放时机取决于最后一个持有者。引用计数原子只保护计数本身，对象的字段仍要自己加锁；`unique_ptr` 优化后与裸指针等价，换回裸指针只会丢掉析构保障；`weak_ptr` 不增加强引用计数，正是用来打破循环引用的。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c-adv",
+      "name": "进阶",
+      "goal": "能画出结构体的字节布局、说清一个 .c 从源码到可执行文件经历的四个阶段，并在模板与 STL 容器之间按访问模式正确选型——踩坑时能用 sizeof/offsetof、nm 与复杂度分析定位。",
+      "lessons": [
+        {
+          "id": "c-04",
+          "title": "结构体与内存布局：对齐、填充与缓存行",
+          "minutes": 45,
+          "lang": "c",
+          "content": "## 一、先看一个会出事的场景\n\n一个采集服务把每条样本写进管道，下游按「同样的结构体定义」读回来。换了一台机器重新编译之后，采到的数值全变成了天文数字：时间戳多了几位，序号永远是零。两边的代码一个字都没改。\n\n结构体长这样：\n\n```c\nstruct Sample {\n    uint8_t  kind;    /* 1 字节 */\n    uint32_t dev_id;  /* 4 字节 */\n    uint8_t  flags;   /* 1 字节 */\n    uint64_t ts;      /* 8 字节 */\n};\n```\n\n字段加起来 1 + 4 + 1 + 8 = 14，可 `sizeof(struct Sample)` 是 24。中间多出来的 10 个字节不是垃圾，是编译器按对齐要求插进去的填充（padding）。如果下游按「14 字节紧凑排列」去解析——比如那份协议文档是另一个人手写的——每个字段的起点都错了，读出来当然全是乱码。这个错误不报错、不崩溃，只让数据静默变形，排查时最费时间。\n\n第二个场景更隐蔽。一个结构体里放着两个被两个线程分别更新的计数器：\n\n```c\nstruct Counters {\n    uint64_t hits;    /* 线程 A 只写它 */\n    uint64_t misses;  /* 线程 B 只写它 */\n};\n```\n\n两个线程没有任何数据竞争，逻辑上完全独立，压测时吞吐却只有单线程的六成。因为这两个字段落在同一条 64 字节缓存行里：线程 A 写 hits 会让线程 B 手里的整行缓存失效，反过来也一样，这行缓存就在两颗核之间来回搬，每次写都变成一次总线事务。这叫伪共享（false sharing），是内存布局问题，不是锁的问题，加多少把锁都没用。\n\n第三类事故发生在读代码的时候：`sizeof` 被当成字段之和去算缓冲区长度、算数组步长、算序列化偏移。这类 bug 的共同点是写的时候看着完全正确，错在编译器在你没写的地方做了事。\n\n## 二、原理：地址必须是某个数的倍数\n\n对齐只需要一句话说清：**一个对象的地址必须是它对齐值的整数倍**。`uint32_t` 的对齐值是 4，地址只能是 0、4、8、12……；`uint64_t` 是 8。编译器在结构体里排字段时必须保证每个字段的偏移满足它自己的对齐要求，于是在字段之间插入若干字节填充。结构体整体的对齐值等于最大成员的对齐值，`sizeof` 再向上取整到这个值的倍数。两条规则合起来，就解释了 14 变成 24。\n\n为什么非这样不可？因为内存不是按字节搬的，是按字和缓存行搬的。CPU 读一个 4 字节整数，最省事的是从 4 的倍数地址一次取走；地址不对齐就要跨两个对齐单元，取两次再拼起来，慢，而且在 ARM 上可能直接触发异常。编译器用空间换这个确定性，代价就是填充。\n\n由此可以推出几个能直接用的结论。\n\n1. 结构体大小 = 最后一个字段结束的位置向上取整到对齐值，所以字段顺序会影响大小。\n2. 把对齐值大的字段排前面、小的排后面，填充最少。上面那个结构体改成 `uint64_t ts; uint32_t dev_id; uint8_t kind; uint8_t flags;` 就只要 16 字节。\n3. `offsetof(struct S, field)` 给的是字节偏移，`sizeof` 给的是整体大小，两者都不是字段之和。\n4. 填充字节的内容是**未指定的**：`malloc` 出来是脏的，`memcpy` 会连填充一起复制，逐字段赋值不会碰填充。所以「同样的值、不同的填充」是完全正常的状态。\n\n再说缓存行。x86-64 和主流 ARM 的缓存行是 64 字节，缓存一致性协议以行为单位授权写入。同一行里只要两个核各写各的字节，这行就在两个核之间来回迁移，谁写谁把对方踢掉，这就是伪共享。对策是把两个热字段用 `_Alignas(64)` 顶到不同行，或者干脆拆成两个结构体；代价是内存占用成倍增加，所以只在真正的热点上做。\n\n最后是 union 和位域这两个省空间的工具。union 的所有成员共享同一块内存，大小取最大成员再按对齐取整；用一个成员写、用另一个成员读叫类型双关（type punning）。C 标准把它归为实现定义，C++ 里除少数例外是未定义行为。想按位看一个浮点数，正确做法是 `memcpy` 到一个整数再打印，C++20 起可以用 `std::bit_cast`。位域的布局——谁占高位、能不能跨存储单元、`int` 位域有没有符号——同样是实现定义的，它只适合同一个编译器编出来的同一份代码内部使用，绝不能当协议字段。\n\n## 三、代码逐行\n\n同样四个字段，只改顺序，大小差 8 字节：\n\n```c\nstruct Bad  { uint8_t a; uint32_t b; uint8_t c; uint64_t d; };  /* sizeof = 24 */\nstruct Good { uint64_t d; uint32_t b; uint8_t a; uint8_t c; };  /* sizeof = 16 */\n\n/* 下面两行在编译期就能验证，谁改坏了布局就编不过 */\n_Static_assert(offsetof(struct Bad, d) == 16, \"Bad 里 d 的偏移变了\");\n_Static_assert(sizeof(struct Good) == 16, \"Good 必须是 16 字节\");\n```\n\n1. `struct Bad` 的字段顺序就是内存顺序。`a` 占偏移 0 的 1 字节，`b` 要求 4 对齐，所以 a 后面补 3 字节，b 落在偏移 4。\n2. `c` 落在偏移 8，接下来 `d` 要求 8 对齐，只能从 16 开始，中间又补 7 字节。于是 1+3+4+1+7+8 = 24。那 10 个填充字节一个字段都没装。\n3. `struct Good` 字段一个没少，只是把 `d` 提到最前：`d` 在 0，`b` 在 8，`a` 在 12，`c` 在 13，用到 14 字节，再向上取整到 8 的倍数得到 16。省下的 8 字节就是白捡的。\n4. `offsetof(struct Bad, d)` 的结果是 16 而不是 1+4+1=6，差的正好是填充。写序列化代码时用 `offsetof` 算偏移，比手数字段宽度可靠。\n5. `_Static_assert` 把「布局长什么样」变成编译期契约。删掉它，字段顺序被人调换也不会报警，只会在某天解析二进制时出错；留着它，改动当场编不过。C++17 里写成 `static_assert(..., \"...\")`。\n6. 如果加上 `#pragma pack(push, 1)`，`sizeof` 会变成 14，`d` 的偏移变成 6。省了 10 字节，代价是每次读写 `d` 都可能跨缓存行，在要求对齐的架构上直接 fault。\n7. `#pragma pack(pop)` 必须和 push 配对。只写 push 不写 pop，后面所有结构体都被压紧，bug 出现在离现场很远的地方。\n8. 取地址也有约束：位域不能取地址，`&s.bitfield` 编不过；`pack(1)` 结构体里的字段取地址拿到的是未对齐指针，传给要求对齐的函数是隐患。\n\n## 四、三个常见误区\n\n### 误区一：`sizeof(struct)` 就是字段大小之和\n\n现象：按 14 字节申请缓冲区，往里 `memcpy` 一个 24 字节的结构体，堆被写坏。原因：填充不属于任何字段，但确实占空间，`sizeof` 报的是含填充的总大小。正确做法是永远用 `sizeof` 而不是自己加，需要紧凑布局时显式重排字段，并用 `_Static_assert` 锁住结果。\n\n### 误区二：用 `memcmp` 判断两个结构体「相等」，或者直接 `fwrite` 结构体当协议\n\n现象：两份配置字段完全一样，`memcmp` 却不等于 0；跨机器传结构体，对端解出来是乱的。原因：填充字节的内容是未指定的，从网络或文件读进来的填充更是任意值；而且字节序、`long` 的宽度、位域布局都随平台变。正确做法是逐字段比较，或者写一对 `encode`/`decode` 函数，把每个字段按固定宽度写进字节缓冲区。\n\n### 误区三：位域能省空间，正好拿来当协议字段\n\n现象：本机测出来 3 字节的包头，换编译器后字段全串位。原因：位域的分配单位、位序、能否跨单元都是实现定义的，标准只保证「同一个实现内部自洽」。正确做法是协议里用固定宽度整数加手写的移位掩码，或者干脆每字段一字节；位域只用于本机内部的状态标记，并且不要对它取地址、不要假设它的二进制形态。\n\n## 五、边界与代价\n\n对齐是拿空间换速度，所以它的代价首先就是内存。一个含 `char` 和 `double` 的小结构体可能膨胀一倍；十万个这样的对象放在数组里，多出来的就是几 MB 和更差的缓存命中率。字段重排几乎总是免费的优化，但 `#pragma pack(1)` 不是：它把代价从内存转移到每次访存，热路径上可能慢一倍以上，原子操作和 SIMD 指令还要求对齐，未对齐可能直接崩溃。\n\n伪共享的对策同样有代价。给每个线程的计数器加 `_Alignas(64)`，十万个计数器就要 6.4MB，而紧凑排列只要 0.8MB；如果这些计数器不常写，加对齐纯属浪费缓存。判断标准是「是否高频写、是否多核同时写」，两个都成立才值得。\n\n反例：一个只在启动时读一次的历史配置文件，有人为了「省内存」把它 `pack(1)`，然后再逐字段访问。省下的是几十字节，付出的是每次读都跨缓存行，还埋下了换架构就崩的隐患。这种场景的正确做法是读进字节缓冲区后逐字段 `memcpy` 到对齐的结构体里，让「紧凑的线格式」和「好用的内存格式」各自独立。\n\n还有一处容易被忽略：`union` 的类型双关在开启严格别名优化（`-O2` 默认带 `-fstrict-aliasing`）时，编译器可以假设两个不同类型的指针不指向同一块内存，从而把你的「双关读法」优化掉。用 `memcpy` 或者 `std::bit_cast` 才是能过优化的写法。\n\n## 六、动手任务\n\n给下面这个结构体做一次布局优化，并证明优化有效：\n\n```c\nstruct Event {\n    uint8_t  type;\n    uint64_t timestamp;\n    uint16_t code;\n    uint8_t  flags;\n    uint32_t user_id;\n    uint8_t  source;\n};\n```\n\n要求与验收：\n\n1. 打印每个字段的 `offsetof` 和 `sizeof(struct Event)`，记下优化前的数字（应当是 32：`type` 后补 7 字节、`flags` 后补 1 字节、`source` 后补 7 字节）。\n2. 只调整字段顺序，不增删字段、不改类型，把 `sizeof` 压到 24，并把新的偏移写进 `_Static_assert`。\n3. 用 `#pragma pack(push, 1)` 再造一个紧凑版本，打印它的 `sizeof`（应当是 17）和每个字段偏移，说明为什么不能把它直接用于高频读写。\n4. 写一对 `event_encode` / `event_decode`，把结构体写成 17 字节的大端字节流再读回来，断言每个字段相等。这一步会逼你处理字节序，也是跨平台传输唯一靠谱的做法。\n\n## 七、一句话总结\n\n- 字段偏移必须是其对齐值的倍数，结构体大小向上取整到最大成员的对齐值，所以 `sizeof` 不是字段之和。\n- 按对齐值从大到小排字段，通常能白捡 20%–50% 的空间，并用 `_Static_assert` 锁住布局。\n- 填充字节内容未指定，`memcmp` 和 `fwrite` 整块结构体都不是可靠的比较或传输手段。\n- `#pragma pack(1)` 省空间但制造未对齐访问，热路径、原子操作、跨架构场景都不要用。\n- 缓存行是 64 字节，两个核写同一行的不同字段就是伪共享，对策是对齐隔离，代价是内存。",
+          "code": "/* c-04：对齐、填充、位域与布局验证（C11）\n *\n * 编译运行：\n *   cc -std=c11 -Wall -Wextra -O2 c04.c -o c04 && ./c04\n * 说明：下面的尺寸基于 x86-64 / wasm32 的 LP64 与 ILP32 布局，\n *       只用到固定宽度整数，不含指针，所以两种平台结果一致。\n */\n#include <stdalign.h>   /* alignof 宏；_Alignas 是 C11 关键字 */\n#include <stddef.h>     /* offsetof */\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>     /* memset / memcmp / memcpy */\n\n/* 1) 直觉写法：小字段夹在大字段中间，填充最多 */\nstruct BadOrder {\n    uint8_t  ver;\n    uint32_t seq;\n    uint8_t  flags;\n    uint64_t ts;\n};\n\n/* 2) 按对齐值从大到小排：同样四个字段，少 8 字节 */\nstruct GoodOrder {\n    uint64_t ts;\n    uint32_t seq;\n    uint8_t  ver;\n    uint8_t  flags;\n};\n\n/* 3) 去掉填充：省空间，但字段未对齐 */\n#pragma pack(push, 1)\nstruct Packed {\n    uint8_t  ver;\n    uint32_t seq;\n    uint8_t  flags;\n    uint64_t ts;\n};\n#pragma pack(pop)\n\n/* 4) 缓存行隔离：两个热字段各占一条 64 字节缓存行，避免伪共享 */\nstruct PaddedCounters {\n    _Alignas(64) uint64_t hits;\n    _Alignas(64) uint64_t misses;\n};\n\n/* 5) 联合体：所有成员共享首地址，大小取最大成员 */\nunion Word {\n    uint64_t u64;\n    uint32_t u32[2];\n    uint8_t  bytes[8];\n};\n\n/* 6) 编译期契约：布局一旦被改，编译就失败，而不是等线上解析错 */\n_Static_assert(offsetof(struct BadOrder, seq) == 4, \"seq 偏移变了，别动字段顺序\");\n_Static_assert(offsetof(struct BadOrder, ts) == 16, \"ts 偏移变了，填充规则也变了\");\n_Static_assert(sizeof(struct GoodOrder) == 16, \"GoodOrder 应当只占 16 字节\");\n_Static_assert(sizeof(struct Packed) == 14, \"pack(1) 之后应当没有填充\");\n_Static_assert(sizeof(struct PaddedCounters) == 128, \"两个字段各占一行\");\n\n/* 打印一个结构体的布局：字段名、偏移、大小 */\n#define SHOW_FIELD(T, f) \\\n    printf(\"  %-6s offset=%-3zu size=%zu\\n\", #f, offsetof(T, f), sizeof(((T *)0)->f))\n\nint main(void) {\n    printf(\"BadOrder  sizeof=%zu align=%zu\\n\",\n           sizeof(struct BadOrder), alignof(struct BadOrder));\n    SHOW_FIELD(struct BadOrder, ver);\n    SHOW_FIELD(struct BadOrder, seq);\n    SHOW_FIELD(struct BadOrder, flags);\n    SHOW_FIELD(struct BadOrder, ts);\n\n    printf(\"GoodOrder sizeof=%zu align=%zu\\n\",\n           sizeof(struct GoodOrder), alignof(struct GoodOrder));\n    SHOW_FIELD(struct GoodOrder, ts);\n    SHOW_FIELD(struct GoodOrder, seq);\n\n    printf(\"Packed    sizeof=%zu align=%zu\\n\",\n           sizeof(struct Packed), alignof(struct Packed));\n    SHOW_FIELD(struct Packed, ts);       /* 偏移 6：未对齐 */\n\n    printf(\"PaddedCounters sizeof=%zu（每字段独占 64 字节）\\n\",\n           sizeof(struct PaddedCounters));\n\n    /* 7) 填充字节：字段全等，memcmp 仍然不等 */\n    struct BadOrder a, b;\n    memset(&a, 0xAA, sizeof a);          /* 故意把填充写成 0xAA */\n    memset(&b, 0x00, sizeof b);\n    a.ver = b.ver = 1;\n    a.seq = b.seq = 2;\n    a.flags = b.flags = 3;\n    a.ts = b.ts = 4;\n    printf(\"字段全等 memcmp!=0 -> %d\\n\", memcmp(&a, &b, sizeof a) != 0);\n\n    /* 8) 整体 memcpy 会连填充一起复制，所以两边填充相同时 memcmp 才为 0 */\n    memcpy(&b, &a, sizeof a);\n    printf(\"memcpy 之后 memcmp -> %d\\n\", memcmp(&a, &b, sizeof a));\n\n    /* 9) 联合体：写 u64、读字节，结果依赖字节序 */\n    union Word w;\n    w.u64 = 0x0102030405060708ULL;\n    printf(\"word bytes =\");\n    for (size_t i = 0; i < sizeof w.bytes; i++) {\n        printf(\" %02x\", (unsigned)w.bytes[i]);\n    }\n    printf(\"（小端机器上是 08 07 06 05 04 03 02 01）\\n\");\n\n    /* 10) 位域：只在本机内部使用，不要取地址、不要假设二进制形态 */\n    struct Flags {\n        unsigned ready : 1;\n        unsigned mode  : 3;\n        unsigned retry : 4;\n    } fl = {0};\n    fl.ready = 1;\n    fl.mode  = 5;\n    fl.retry = 9;\n    printf(\"flags sizeof=%zu ready=%u mode=%u retry=%u\\n\",\n           sizeof(struct Flags), fl.ready, fl.mode, fl.retry);\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面代码在 x86-64 上输出什么？\n\n```c\nstruct A { uint8_t a; uint32_t b; uint8_t c; uint64_t d; };\nstruct B { uint64_t d; uint32_t b; uint8_t a; uint8_t c; };\nprintf(\"%zu %zu\\n\", sizeof(struct A), sizeof(struct B));\n```",
+              "options": [
+                "24 16",
+                "16 16",
+                "24 24",
+                "14 16"
+              ],
+              "answer": 0,
+              "explain": "A 里 a 占 1 字节后补 3 字节到偏移 4，b 占 4 字节，c 在偏移 8，d 要求 8 对齐只能从 16 开始，最后取整到 8 的倍数得到 24。B 把 d 放到最前，8+4+1+1=14 再向上取整到 16。选 16 16 的人漏了 A 的填充；选 24 24 的人以为 B 也要补齐到 24；选 14 16 的人把 B 的 14 当成了最终大小，忘了末尾还要取整。"
+            },
+            {
+              "q": "这段代码想判断收到的配置和本地配置是否一致，问题在哪？\n\n```c\nstruct Config { int retries; int timeout_ms; };\nstruct Config local = {3, 1000};\nstruct Config remote;\nrecv(fd, &remote, sizeof remote, 0);\nif (memcmp(&local, &remote, sizeof local) == 0) { /* 认为没变 */ }\n```",
+              "options": [
+                "memcmp 会连填充字节一起比，填充内容未指定，应逐字段比较",
+                "memcmp 不能用于结构体，因为结构体无法按字节访问",
+                "比较前应把两个结构体都 memset 成 0xff，这样填充就一致了",
+                "sizeof local 应改成 sizeof(struct Config *)，否则长度算错"
+              ],
+              "answer": 0,
+              "explain": "memcmp 按字节比，填充字节的内容是未指定的，对端发来的填充可能是任意值，于是字段相同也会判为不同。结构体当然可以按字节访问，改成指针大小反而只比了 4 或 8 字节；memset 成同一个值能碰巧让填充一致，但对方发来的填充你控制不了，而且会把字段也清掉。正确做法是逐字段比较，或者用显式的 encode/decode 处理线格式。"
+            },
+            {
+              "q": "关于结构体对齐，下面哪句是对的？",
+              "options": [
+                "结构体对齐值等于最大成员的对齐值，每个字段偏移是其对齐值的倍数，总大小向上取整",
+                "编译器按声明顺序紧密排列，只在结构体末尾补一次填充",
+                "对齐只影响访问速度，不影响 sizeof 的结果",
+                "同一个结构体在 32 位和 64 位平台上 sizeof 一定相同"
+              ],
+              "answer": 0,
+              "explain": "字段之间也会插填充，不只是末尾补一次，所以第二个选项错；对齐同时影响 sizeof，这也是本节所有坑的来源；32 位平台上指针和对齐要求不同，含指针或 long 的结构体大小会变。记住三条：字段偏移对齐、整体对齐取最大、大小向上取整。"
+            },
+            {
+              "q": "下面哪种场景最不该用 `#pragma pack(1)`？",
+              "options": [
+                "解析一个外部协议，字段逐个 memcpy 出来，只在请求入口读一次",
+                "热路径上每秒读写百万次的结构体字段，还要跨线程原子更新",
+                "启动时把一份历史二进制文件读进结构体，之后只读不写",
+                "内存极小的嵌入式设备上存一张只读配置表"
+              ],
+              "answer": 1,
+              "explain": "pack(1) 让字段偏移不再是自身对齐值的倍数，热路径上每次访问都可能跨缓存行、需要多条指令拼装，原子操作和 SIMD 还要求对齐，性能会明显下降甚至有崩溃风险。另外三种场景访问频率低或用 memcpy 逐字段搬运，压缩布局的代价可以接受，省下的内存反而有用。"
+            }
+          ]
+        },
+        {
+          "id": "c-05",
+          "title": "编译、链接与头文件：从预处理到符号解析",
+          "minutes": 48,
+          "lang": "c",
+          "content": "## 一、先看一个会出事的场景\n\n三个报错，几乎每个 C/C++ 项目都会撞上一次：\n\n```text\nundefined reference to `stats_avg'\nmultiple definition of `g_retries'\n```\n\n第一个通常发生在「代码明明写了」的时候：函数定义在 `stats.c` 里，`main.c` 也 `#include` 了 `stats.h`，编译每个文件都没问题，一到链接就找不到。第二个相反，每个文件都能单独编过，连起来链接器说同一个符号有两份定义。\n\n还有一类事故根本不报错。有人改了 `config.h` 里结构体的字段，`make` 只重编了改动过的那个 `.c`，另一个 `.o` 还是旧的。两个翻译单元对同一个结构体的 `sizeof` 理解不同：一个按 24 字节写，一个按 16 字节读，越界写进了相邻对象。程序跑了一周才在某个偶发路径上崩，栈里全是对的代码。\n\n这三件事指向同一条流水线：预处理、编译、汇编、链接。前三个阶段以「一个 `.c` 文件」为单位，彼此不知道对方存在；只有链接器才把一堆 `.o` 拼成一个程序。搞不清这条线，就会在错误的地方找 bug——改代码改一下午，其实只是链接命令里少了一个 `.o`。\n\n## 二、原理：四个阶段与一张符号表\n\n先说流水线，每一步都有确定的产物，这是排查的抓手。\n\n1. **预处理**（`cc -E`，产物 `.i`）：处理以 `#` 开头的行。`#include` 是纯文本插入——把头文件内容原样倒进来；`#define` 做记号替换；`#if` 决定哪段留下；注释被删掉。所以「头文件里放实现」意味着每个包含它的 `.c` 都要重新编译这段实现。\n2. **编译**（`cc -S`，产物 `.s`）：一个 `.c` 加上它包含的所有头文件，构成一个翻译单元（translation unit）。这一步做语法分析、类型检查、优化，生成汇编。绝大多数你会看到的报错在这一步。\n3. **汇编**（`cc -c`，产物 `.o`）：把汇编翻成机器码，同时生成两张表——符号表（这个文件定义了哪些符号、引用了哪些还没定义的符号）和重定位表（哪些指令里的地址要等链接时填）。\n4. **链接**（产物可执行文件或 `.so`）：把多个 `.o` 和库合并，给每个符号分配最终地址，解析引用，填重定位。`undefined reference` 和 `multiple definition` 都发生在这一步。\n\n理解符号表，两类链接错误就都清楚了。`nm c05.o` 里，`T` 表示已定义的全局代码，`t` 表示 `static` 的内部链接代码，`D`/`B` 是已初始化/未初始化的全局数据，`U` 是「本文件引用了但没定义」的符号。`U` 找不到人认领就是 `undefined reference`；同一个全局符号在两个 `.o` 里都是 `T`/`D`/`B`，就是 `multiple definition`。\n\n再说声明与定义的区别，这是头文件该放什么的全部依据。声明是「我保证有这么个东西」——`extern int g_retries;`、函数原型，不分配存储；定义是「它就在这里」——带初始化的全局变量、函数体，分配存储并生成符号。头文件会被多个翻译单元包含，所以头文件里只能放：类型定义、宏、`extern` 声明、`inline` 函数、模板。C 与 C++ 的单一定义规则都要求：一个具有外部链接的对象或函数，整个程序里只能有一份定义。\n\n`inline` 是这条规则的一个例外，值得单独说。C++ 里 `inline` 函数允许多个翻译单元各有一份完全相同的定义，链接器负责合并成一份；所以小函数写在头文件里必须加 `inline`，否则就是 `multiple definition`。C 里的规则更绕：`inline` 既建议内联，也改变链接语义——C99 规定一个 `inline` 定义不产生外部定义，如果所有用到它的翻译单元都只见到 `inline` 版本而没有 `extern` 定义，链接时就是 `undefined reference`。所以 C 头文件里的标准写法是 `static inline`：每个翻译单元各生成一份内部副本，链接器根本不管它。\n\n最后是库和编译选项。静态库 `.a` 是一堆 `.o` 的归档，链接器按命令行顺序扫描，只把「当前还有未定义符号能用到」的成员拉进来——所以 `-lstats` 必须写在用到它的 `.o` 后面，顺序反了就找不到。动态库 `.so` 不参与链接期的代码拷贝，只记录依赖，运行时由动态链接器加载；它的符号默认全部导出，工程上通常用 `-fvisibility=hidden` 加显式导出宏来控制 ABI 表面。选项方面：`-O2` 开优化（内联、向量化、把变量放进寄存器），`-g` 生成调试信息，`-Wall -Wextra` 打开常用警告，`-std=c11`/`-std=c++17` 固定语言版本，`-fsanitize=address,undefined` 在运行时抓越界和未定义行为，`-MMD -MP` 让 Makefile 自动记录「这个 `.o` 依赖哪些头文件」。\n\n## 三、代码逐行\n\n三个文件，是理解链接最小的完整例子：\n\n```c\n/* stats.h —— 只放声明、类型、inline，绝不放定义 */\n#ifndef STATS_H\n#define STATS_H\ntypedef struct { unsigned count; long long sum; } Stats;\nextern int g_verbose;                                  /* 声明：不分配存储 */\nstatic inline long long stats_avg(const Stats *s) {     /* 每个 TU 一份内部副本 */\n    return s->count ? s->sum / (long long)s->count : 0;\n}\n#endif\n\n/* stats.c —— 定义只在这一个地方出现 */\n#include \"stats.h\"\nint g_verbose = 0;                                      /* 定义：分配存储 */\n\n/* main.c */\n#include \"stats.h\"\nint main(void) { Stats s = {0, 0}; return (int)stats_avg(&s); }\n```\n\n1. `#ifndef STATS_H / #define STATS_H / #endif` 是头文件保护。它防的是「同一个翻译单元里被包含两次」——A 包含 B，B 又包含 A 这种环形包含。它**不防**跨翻译单元的重复定义，那是 `extern` 的职责。\n2. `extern int g_verbose;` 是声明。编译器知道「有这么个 int，别处有」，于是允许你读写它，但不在这里分配存储，`.o` 里只留一个 `U g_verbose`。\n3. `int g_verbose = 0;` 是定义，只出现在 `stats.c` 里。如果把这一行挪进头文件，两个 `.c` 各编译出一份定义（零初始化通常落在 `B` 段，`nm` 里显示 `B`），链接器立刻报 `multiple definition`。\n4. `static inline` 是 C 头文件放小函数的标准写法：`static` 给内部链接，`inline` 建议内联。去掉 `static` 只留 `inline`，在 C99 下可能得到 `undefined reference to stats_avg`——这是很多人第一次踩的坑。\n5. `typedef struct {...} Stats;` 放在头文件里是对的：类型定义不产生符号，多个翻译单元各有一份相同的类型声明是允许的。\n6. 改 `Stats` 的字段而不重编 `stats.c`，`main.c` 里的 `sizeof(Stats)` 和 `stats_avg` 里的偏移就会不一致。编译器不会报错，因为两个翻译单元各自都是自洽的——这就是「头文件依赖必须被构建系统跟踪」的原因。\n7. 链接命令里 `stats.o` 漏了，或者 `-lstats` 写在了 `main.o` 前面，报的都是 `undefined reference to stats_avg`，而不是「库没找到」。\n\n## 四、三个常见误区\n\n### 误区一：头文件里写定义，加个 `#pragma once` 就没事了\n\n现象：单个 `.c` 编得过，一加第二个 `.c` 就 `multiple definition of g_retries`。原因：`#pragma once` 和 include guard 只保证「同一个翻译单元里展开一次」，而链接器面对的是多个翻译单元各自的符号，头文件被包含几次就有几份定义。正确做法是头文件只写 `extern` 声明，定义放进唯一一个 `.c`；函数要么加 `inline`（C++）或 `static inline`（C），要么只留声明。\n\n### 误区二：改了头文件，只要代码能编过就不用重编\n\n现象：改了结构体字段、加了枚举值，`make` 只重编了直接改动的 `.c`，运行起来读到错位的数据、`switch` 走到不存在的分支。原因：`.o` 里存的是编译那一刻的布局和常量，头文件变了但 `.o` 没变，链接器照旧把它们拼在一起，两个翻译单元对同一份 ABI 的理解分叉。正确做法是让构建系统跟踪头文件依赖：`-MMD -MP` 生成 `.d` 文件，或者用 CMake 的 `target_sources` 与自动依赖；不确定时 `make clean` 全量重编一次。\n\n### 误区三：把 `undefined reference` 当成语法错误，去改代码\n\n现象：函数明明写了，改来改去还是同样的报错。原因：报错发生在链接阶段，说明「声明有了、定义没被链进来」，和函数体写得对不对无关。正确做法是先 `nm` 看那个符号在哪个 `.o` 里是 `U`、在哪个 `.o` 里是 `T`，再检查三件事：定义所在的目标文件有没有进链接命令、库的顺序对不对、C++ 里被 C 调用的函数有没有加 `extern \"C\"`（否则名字修饰（name mangling）会让 `stats_avg` 变成 `_Z9stats_avgPK5Stats`，C 那边永远找不到）。\n\n## 五、边界与代价\n\n头文件里放实现能换来「用起来方便」，代价是编译时间随包含次数线性增长。一个被 200 个翻译单元包含的 header-only 库，改一行实现就要重编 200 次；这也是为什么大型 C++ 项目强调「前置声明 + 编译防火墙（pimpl）」。`inline` 也不是越多越好：它会复制代码，函数体大了会让指令缓存命中率下降，反而更慢——只对十几行以内、调用频繁的函数有意义。\n\n优化与调试天然冲突。`-O2` 会把变量放进寄存器、把函数内联掉、重排语句，`gdb` 里就会出现 `optimized out`，断点也会跳行。定位线上问题用 `-O2 -g` 保留符号表（能还原调用栈），本地单步调试用 `-O0 -g` 或 `-Og`，两者不要混着用。\n\nSanitizer 是开发期工具，不是生产保护。`-fsanitize=address` 会让内存占用和耗时都涨到两三倍，还需要额外的影子内存；把它开在生产构建里，等于用容量换一个本可以在测试阶段发现的问题。同理，`-Werror` 在自有代码上是好习惯，但对第三方头文件要配 `-isystem`（它的警告会被抑制），否则升级一次依赖就编不过。\n\n静态库与动态库的取舍也不是纯技术问题：静态库部署简单、没有运行时找不到 `.so` 的风险，但每个进程各一份代码、修复要重新链接；动态库能共享内存页、能单独升级，代价是 ABI 兼容性、`LD_LIBRARY_PATH` 和符号冲突。反例：把一个内部小工具链接成动态库，只为了「显得工程化」，结果部署时忘了带 `.so`，线上直接 `error while loading shared libraries`。\n\n## 六、动手任务\n\n把上面的三文件例子真正跑一遍，并亲手制造、亲手修好两类链接错误：\n\n1. 建三个文件：`stats.h` 只写 `typedef`、`extern int g_verbose;` 和 `long long stats_avg(const Stats *s);` 的声明；`stats.c` 写 `g_verbose` 的定义和 `stats_avg` 的实现；`main.c` 把 0 到 7 累加进 `Stats` 并打印。`make` 通过后输出 `count=8 sum=28 avg=3`。\n2. 在 `stats.h` 里加一行 `int g_retries = 3;`，让 `main.c` 也引用它。记录链接器报的完整错误（应当是 `multiple definition of 'g_retries'`），然后改成 `extern int g_retries;` 并在 `stats.c` 里定义，验证通过。\n3. 把 `Makefile` 里的 `stats.o` 从链接命令中删掉，记录 `undefined reference` 的原文；再用 `nm main.o | grep stats` 确认 `stats_avg` 是 `U`，`nm stats.o | grep stats` 确认它是 `T`。验证完把 `stats.o` 加回去。\n4. 把 `stats_avg` 改成头文件里的 `static inline` 定义（删掉 `stats.c` 里的实现），用 `-O0` 重新 `make`，对比 `nm main.o`：符号从 `U` 变成 `t`，程序也不再依赖 `stats.o`。这一步就是「C 头文件为什么用 `static inline`」的实证。\n5. 给 `CFLAGS` 加上 `-MMD -MP`，在 `Makefile` 里 `-include $(DEPS)`。改一下 `stats.h` 里的字段名，确认 `make` 会重编两个 `.c` 而不是一个。\n\n验收标准：五步都能复现出预期现象，并且能对着 `nm` 的输出解释每个字母的含义。\n\n## 七、一句话总结\n\n- 预处理、编译、汇编都以单个翻译单元为单位，只有链接器知道「还有别的 `.o`」，所以符号问题一律在链接阶段暴露。\n- 头文件只放类型、宏、`extern` 声明和 `inline`（C 用 `static inline`），定义放进唯一的 `.c`，这是单一定义规则的直接推论。\n- `undefined reference` 查「定义有没有被链进来、库顺序对不对、名字修饰是否一致」，`multiple definition` 查「谁在头文件里写了定义」。\n- 头文件依赖必须交给构建系统（`-MMD -MP` 或 CMake），否则改布局不重编就是静默的 ABI 分叉。\n- `-O2` 换性能、`-g` 换可调试性、Sanitizer 换问题可见性，三者都有明确代价，别在不该开的场合开。",
+          "code": "/* c-05：一个翻译单元里，把「预处理 / 编译 / 汇编 / 链接」四层的痕迹都摆出来\n *\n * 构建与观察（单文件版本，可直接编译运行）：\n *   cc -std=c11 -Wall -Wextra -O0 -g c05.c -o c05 && ./c05\n * 逐阶段看产物：\n *   cc -std=c11 -E c05.c > c05.i    # 预处理：宏已展开、注释已删除、头文件已插入\n *   cc -std=c11 -S c05.c -o c05.s   # 编译：得到汇编\n *   cc -std=c11 -c c05.c -o c05.o   # 汇编：得到可重定位目标文件\n *   nm c05.o                        # 符号表：T 全局代码 / t 内部代码 / D 已初始化数据\n *                                   #         B 未初始化数据 / U 未定义（等链接器补）\n *   cc c05.o -o c05                 # 链接：解析 U，拼出可执行文件\n *\n * 注意：-O2 下 clamp 与 stats_avg 会被内联，nm 里连符号都不剩，\n *       这也是「优化后调试困难」的一个具体表现。\n */\n#include <stdint.h>\n#include <stdio.h>\n\n/* ---------- 1) 模拟一个 header 的全部内容：类型 + 宏 + extern 声明 + inline ---------- */\n#ifndef C05_STATS_H\n#define C05_STATS_H   /* 头文件保护：防同一翻译单元内重复展开，防不了跨 TU 重复定义 */\n\n#define STATS_MAX_SAMPLES 8   /* 宏：预处理期替换，没有类型检查，也没有地址 */\n\ntypedef struct {              /* 类型定义不产生符号，放头文件是安全的 */\n    uint32_t count;\n    int64_t  sum;\n} Stats;\n\nextern int g_verbose;         /* 声明：只告诉编译器「有这么个对象」，不分配存储 */\n\nstatic inline int64_t stats_avg(const Stats *s) {   /* static：内部链接，每个 TU 一份 */\n    return s->count ? s->sum / (int64_t)s->count : 0;\n}\n#endif /* C05_STATS_H */\n\n/* ---------- 2) 定义：真正分配存储的地方 ---------- */\nint g_verbose = 0;            /* 删掉这行，g_verbose 就只剩 U，链接时报 undefined reference */\n\n/* ---------- 3) static：内部链接，别的 .o 看不到，也不会和别人的同名函数冲突 ---------- */\nstatic int64_t clamp(int64_t v, int64_t lo, int64_t hi) {\n    if (v < lo) return lo;\n    if (v > hi) return hi;\n    return v;\n}\n\n/* ---------- 4) 宏 vs inline 函数：参数求值次数不一样 ---------- */\n#define SQUARE(x) ((x) * (x))          /* 不检查类型，参数写几次就求值几次 */\n\nstatic int64_t square(int64_t x) { return x * x; }   /* 参数只求值一次，有类型 */\n\nstatic int64_t probe(void) {           /* 用打印把「被调用几次」变成可见事实 */\n    printf(\"[probe]\");\n    return 3;\n}\n\n/* 编译期就能确定的事，别留到运行期：布局和语言版本都可以在这里钉死 */\n_Static_assert(sizeof(Stats) == 16, \"Stats 的布局变了，跨文件读写会错位\");\n\nint main(void) {\n    Stats s = {0, 0};\n    int i = 0;\n\n    for (i = 0; i < STATS_MAX_SAMPLES; i++) {\n        s.count++;\n        s.sum += i;\n    }\n    printf(\"count=%u sum=%lld avg=%lld\\n\",\n           s.count, (long long)s.sum, (long long)stats_avg(&s));\n\n    printf(\"SQUARE(probe())=%lld\\n\", (long long)SQUARE(probe()));  /* [probe][probe]9 */\n    printf(\"square(probe())=%lld\\n\", (long long)square(probe()));   /* [probe]9 */\n\n    g_verbose = 1;\n    if (g_verbose) {\n        printf(\"clamp(-5, 0, 10)=%lld\\n\", (long long)clamp(-5, 0, 10));\n    }\n\n    printf(\"sizeof(Stats)=%zu\\n\", sizeof(Stats));\n    printf(\"__STDC_VERSION__=%ld\\n\", (long)__STDC_VERSION__);  /* -std=c11 下为 201112 */\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```c\n#define TWICE(x) ((x) + (x))\nint probe(void) { printf(\"p\"); return 3; }\nint main(void) { printf(\"%d\\n\", TWICE(probe())); return 0; }\n```",
+              "options": [
+                "p6",
+                "pp6",
+                "pp3",
+                "6（只打印一个 p）"
+              ],
+              "answer": 1,
+              "explain": "宏是文本替换，TWICE(probe()) 展开成 ((probe()) + (probe()))，probe 被调用两次，各打印一个 p，返回值相加得 6，最后 printf 输出 pp6。选 p6 的人以为宏像函数一样只求值一次；选 pp3 的人把两个 3 当成了拼接；选最后一项的人忽略了宏体里 x 出现两次这个事实。"
+            },
+            {
+              "q": "下面这个头文件被 a.c 和 b.c 同时包含后链接失败，根因是什么？\n\n```c\n/* config.h */\n#pragma once\nint g_retries = 3;\n```",
+              "options": [
+                "这是定义不是声明，两个翻译单元各生成一份，链接时 multiple definition；应写 extern 并在一个 .c 里定义",
+                "int 不能作全局变量，全局变量必须是 static",
+                "缺少 include guard，只要加上 #ifndef 就能解决",
+                "g_retries 应声明为 const，const 全局变量默认是内部链接"
+              ],
+              "answer": 0,
+              "explain": "#pragma once 只保证同一翻译单元只展开一次，两个 .c 各自展开一次就有两份定义，链接器无法合并。static 能编过但每个文件各有一份副本，改一个不影响另一个，语义是错的；include guard 与 #pragma once 是同一类手段，解决不了跨 TU 重复；C 里 const 全局变量仍是外部链接，重复定义照样报错。"
+            },
+            {
+              "q": "链接时报 `undefined reference to 'stats_avg'`，下面的判断哪句对？",
+              "options": [
+                "发生在链接阶段：某个 .o 里该符号是 U，所有输入里都找不到定义",
+                "发生在预处理阶段：说明 #include 的头文件路径写错了",
+                "发生在编译阶段：说明 stats_avg 没有写函数原型",
+                "发生在运行阶段：说明动态库没装好，重装即可"
+              ],
+              "answer": 0,
+              "explain": "undefined reference 是链接器的措辞，它已经把每个 .o 的符号表收齐了，只是没人提供定义。头文件路径错误会在预处理阶段直接报找不到文件；缺原型在编译阶段报隐式声明或类型不匹配，不会拖到链接；运行阶段动态库缺失报的是 error while loading shared libraries，与符号未定义不是一回事。"
+            },
+            {
+              "q": "下面哪种构建配置最不合适？",
+              "options": [
+                "发布版同时带 -O2 和 -g，崩溃时用符号表还原调用栈",
+                "生产构建常开 -fsanitize=address，当作线上越界保护",
+                "用 -MMD -MP 让 Makefile 自动跟踪头文件依赖",
+                "第三方头文件用 -isystem 引入，避免它的警告打断 -Werror"
+              ],
+              "answer": 1,
+              "explain": "-fsanitize=address 需要影子内存和插桩，内存与耗时都会涨到两三倍，还会改变崩溃行为，只适合测试与灰度；把它当生产保护等于用容量换测试阶段就该发现的问题。-O2 配 -g 是发布版定位线上问题的标准做法；-MMD -MP 正是防「改头文件不重编」的手段；-isystem 把第三方头文件的警告降级，是 -Werror 工程里的常规操作。"
+            }
+          ]
+        },
+        {
+          "id": "c-06",
+          "title": "C++ 模板与 STL 容器：实例化、复杂度与迭代器失效",
+          "minutes": 50,
+          "lang": "cpp",
+          "content": "## 一、先看一个会出事的场景\n\n一个统计服务上线三天，内存曲线一路往上爬，最后被 OOM killer 干掉。代码里没有任何 `new`，只有一段看起来最普通的查询：\n\n```cpp\nstd::unordered_map<std::string, int> cache;\nint hits_of(const std::string &key) {\n    return cache[key];          /* 只是想读一下 */\n}\n```\n\n`operator[]` 在 key 不存在时会**插入一个默认值**。于是每来一个没命中过的 key，缓存就多一条 `{key, 0}`；上游传的是带时间戳的 key，几乎每个都不同，缓存无限膨胀。没有人写过「插入」，但每次「读」都在写。\n\n第二个场景更直接，程序偶发崩溃在 `push_back` 附近：\n\n```cpp\nfor (auto it = v.begin(); it != v.end(); ++it) {\n    if (*it % 2 == 1) v.push_back(*it);\n}\n```\n\n`push_back` 可能触发扩容：重新申请一块更大的内存，把元素搬过去，释放旧内存。此时 `it` 还指着已经释放的旧缓冲区，`*it` 是 use-after-free；`v.end()` 也变了，循环条件本身失效。这类 bug 在数据量小的时候跑一万次都不复现，一上量就崩。\n\n第三个场景是选型错误。有人把 10 万条记录塞进 `std::map` 当查找表，每次请求查一次，P99 从 8ms 涨到 40ms。换成 `std::unordered_map` 之后回到 9ms。同样叫「查找」，一个每次比较字符串、沿树指针跳 17 层，一个算一次哈希直接命中桶。\n\n第四类事故发生在编译期：模板函数写在 `.cpp` 里，调用方 `#include` 了头文件里的声明，编译全过，链接报 `undefined reference to 'int clamp_value<int>(int, int, int)'`。这不是「代码写错了」，而是模板的实例化机制决定的——后面会讲清楚为什么。\n\n## 二、原理：模板是编译期的代码生成规则\n\n模板本身不是代码，是一份「怎么生成代码」的规则。编译器看到 `clamp_value(5, 1, 3)` 时，用 `T = int` 把模板**实例化**成一份真正的函数，再编译它；看到 `clamp_value(2.5, 1.0, 3.0)` 时再实例化一份 `T = double`。这个过程完全发生在编译期，所以：\n\n- 实例化需要看到模板的**完整定义**，只看到声明不够。这就是「模板实现要放头文件」的全部原因，不是什么玄学。\n- 每个翻译单元各自实例化，链接器再把重复的弱符号合并成一份。所以模板代码会让编译时间和二进制体积同时膨胀。\n- 如果一定要把定义放 `.cpp`，可以用**显式实例化** `template int clamp_value<int>(int, int, int);` 在那个 `.cpp` 里生成一份，并在头文件里用 `extern template` 告诉其他翻译单元「别再自己生成了」。这是减少编译时间的常规手段。\n\n类模板还有特化。**全特化** `template <> struct TypeName<int>` 固定所有参数，只匹配 `int`；**偏特化** `template <typename T> struct TypeName<T *>` 只固定「是指针」这一件事，匹配所有 `T*`。注意函数模板只能全特化，不能偏特化——想对「指针」单独处理，正确做法是写重载，而不是特化。\n\n模板参数替换失败时的规则叫 SFINAE（substitution failure is not an error）：编译器在候选集里替换模板参数，如果某个候选替换失败，只把这个候选移出重载集，而不是让整个编译失败。`std::enable_if` 就是靠这条规则做条件编译的。C++17 的 `if constexpr` 把这件事变得直白：条件为假的分支**根本不会被实例化**，所以分支里可以写只对某些类型合法的代码。C++20 的 concepts 是同一需求的语法层收口，本质仍是「让不满足约束的候选安静退出」。\n\n容器方面，记住三张表就够了。\n\n| 容器 | 底层结构 | 查找 | 插入/删除 | 内存布局 |\n| --- | --- | --- | --- | --- |\n| `vector` | 连续数组 | 下标 O(1)，查找 O(n) | 尾部均摊 O(1)，中间 O(n) | 连续，缓存最友好 |\n| `map` | 红黑树 | O(log n) | O(log n) | 每节点一次堆分配，指针跳转 |\n| `unordered_map` | 哈希桶 + 链 | 平均 O(1)，最坏 O(n) | 平均 O(1) | 桶数组 + 节点，仍非连续 |\n\n迭代器失效规则是选型的另一半：`vector` 一旦扩容，所有迭代器、指针、引用全部失效；`erase` 让被删位置及之后的全部失效。`map` 插入不影响已有迭代器，`erase` 只失效被删的那个；`unordered_map` 的插入一般不失效，但一旦触发 rehash，所有迭代器都失效，而**引用和指针仍然有效**（标准明确保证），因为节点本身没有搬家，只是桶数组重排。`list` 只有被删的那个失效。记不住细节时记一句：连续存储的容器，扩容就全废；节点型容器，删谁废谁。\n\n## 三、代码逐行\n\n先看那个会崩的循环，以及修法：\n\n```cpp\nstd::vector<int> v{1, 2, 3, 4};\nfor (auto it = v.begin(); it != v.end(); ++it) {   /* 扩容后 it 与 end() 双双失效 */\n    if (*it % 2 == 1) v.push_back(*it);\n}\n\nstd::vector<int> out;                              /* 修法一：先收集，再追加 */\nfor (int x : v) if (x % 2 == 1) out.push_back(x);\nv.insert(v.end(), out.begin(), out.end());\n\nv.erase(std::remove_if(v.begin(), v.end(),         /* 修法二：删除用 erase-remove */\n                       [](int x) { return x % 2 == 0; }),\n        v.end());\n```\n\n1. `for (auto it = v.begin(); ...)` 里的 `it` 是指向缓冲区内部的裸指针包装。`push_back` 触发扩容后，旧缓冲区被 `free`，`it` 变成悬垂迭代器，`*it` 和 `++it` 都是未定义行为。\n2. `it != v.end()` 每次循环都会重新取 `end()`，看起来「自适应」，但扩容后 `end()` 指向新缓冲区，`it` 指向旧缓冲区，两个不同对象的指针比较本身就没有意义，循环可能立刻结束，也可能永远不结束。\n3. 修法一先遍历、把要追加的元素收进 `out`，遍历结束后再一次性 `insert`。此时没有任何迭代器在使用中，扩容无所谓。\n4. 修法二针对删除：在循环里逐个 `erase` 是 O(n²)（每次都要把后面的元素前移）；`std::remove_if` 把所有保留元素前移压实，返回新的逻辑结尾，再 `erase` 一次截断，整体 O(n)。\n5. `v.erase(remove_if(...), v.end())` 这一对是固定搭配，只写 `remove_if` 不会改变 `size()`，容器尾部会留下「被移走的空洞」，是另一个经典 bug。\n6. `out` 没有 `reserve`，追加过程中会扩容，但这里不持有任何指向它的迭代器，所以安全；如果对性能敏感，`out.reserve(v.size())` 能省掉几次搬家。\n\n## 四、三个常见误区\n\n### 误区一：模板定义放 `.cpp`，头文件只留声明\n\n现象：编译每个文件都通过，链接报 `undefined reference to 'void foo<int>(int)'`，而且报错里带着尖括号，看起来像编译器坏了。原因：实例化需要完整定义，调用方所在的翻译单元只看到声明，生成不出 `foo<int>` 的代码；定义所在的 `.cpp` 又没人调用它，编译器也不会主动实例化。正确做法是把定义放头文件；确实要藏起来时，在 `.cpp` 里显式实例化，并在头文件里用 `extern template` 抑制重复实例化。\n\n### 误区二：在 `vector` 里存指针或迭代器，跨 `push_back` 继续用\n\n现象：循环里偶尔读到垃圾值，或者崩溃在完全无关的代码行。原因：扩容时整块内存搬家，旧地址上的对象已经析构，指针、引用、迭代器全部悬垂。正确做法是提前 `reserve` 到已知规模、改用下标访问，或者换用引用稳定的容器（`std::deque` 在两端插入时引用稳定，`std::list` 完全不搬家）。注意 `reserve` 只是「一次性买够」，后续超过容量照样搬家。\n\n### 误区三：把 `operator[]` 当查询，或者无脑认为 `unordered_map` 一定更快\n\n现象：缓存越用越大，或者 `if (m[key] == 0)` 把「不存在」和「值为 0」混为一谈；另一头，几十条数据也用 `unordered_map`，反而比线性扫描慢。原因：`operator[]` 语义是「取或插入」，不存在就插入默认值；哈希表有建表、哈希计算、桶数组的内存开销，数据量小的时候这些固定成本超过线性扫描。正确做法是查询用 `find`/`count`（C++20 起还有 `contains`），小规模数据直接用 `vector` 加线性查找，需要有序遍历或范围查询才选 `map`。\n\n## 五、边界与代价\n\n模板的代价首先在编译期。每个实例化都是一份真实代码，`std::vector<int>`、`std::vector<std::string>`、`std::vector<MyType>` 是三份互不相干的实现；一个被几十处调用的模板函数，二进制里就有几十份副本。模板报错也是成本：一个类型不匹配可能展开成上百行「in instantiation of」，读错误要从最后一行往上找根因。工程上的对策是把与类型无关的逻辑抽成普通函数、把重活放进 `.cpp`，头文件里只留薄薄一层转发——这就是「不要在头文件里写无谓的模板实现细节」的实际含义。\n\n容器的代价在内存布局。`std::map` 每个节点要存左右子指针、颜色位和你的键值：一个 `{int, int}` 的节点，光树结构就占 32 字节，加上键值和分配器的块头，堆上通常要 48 字节左右，而 `vector` 里一个元素只要 8 字节。十万条数据，`map` 要 4.8MB 并且遍历时不断跳指针（每次跳转基本都是一次缓存未命中），`vector` 只要 0.8MB 且顺序扫描能跑满预取器。所以「需要有序遍历」不等于「必须用 map」：一次性排序一个 `vector` 再二分，往往比长期维护一棵树更快，这也是 LSM 类存储引擎的常见做法。\n\n`unordered_map` 的代价是哈希质量与最坏情况。哈希函数差、或者键被攻击者控制时，所有键落进同一个桶，查找退化成 O(n)；rehash 是一次性的大分配，会造成延迟毛刺，已知规模时用 `reserve` 提前定桶数。它也不支持范围查询和有序遍历，需要「按 key 排序输出」时还得再排一次。\n\n反例：一个只有 8 个配置项、每次请求查一遍的表，用 `std::unordered_map<std::string, int>` 存。建表要分配桶数组，每次查找要算字符串哈希，8 条数据线性扫一遍早就结束了。这种规模的正确写法是 `std::array<std::pair<std::string_view, int>, 8>` 加一个循环，或者干脆 `if/else`。\n\n## 六、动手任务\n\n实现一个词频统计，用三种容器各做一遍，并用同一份输入验证结果一致：\n\n输入（写在代码里即可）：\n\n```text\nthe quick brown fox jumps over the lazy dog the fox\n```\n\n要求与验收：\n\n1. 用 `std::map<std::string, int>` 统计，按 key 有序输出：`dog:1 fox:2 jumps:1 lazy:1 over:1 quick:1 the:3`。\n2. 用 `std::unordered_map<std::string, int>` 统计，把结果拷进 `vector` 再按次数降序、次数相同按字典序升序排序，输出前 3 名：`the:3 fox:2 dog:1`。\n3. 用「`vector<pair<string,int>>` + 排序 + 二分查找」实现同样的查询，对比三者在 100 万次随机查询下的耗时（用 `std::chrono::steady_clock` 粗测，不要求具体数字，只记录相对关系）。\n4. 故意写一个会失效的版本：在遍历 `vector` 的同时 `push_back`，用 `-D_GLIBCXX_DEBUG` 或 AddressSanitizer 跑一次，把报错原文记下来；再改成「先收集后追加」，确认不再报错。\n5. 把 `cache[key]` 改成 `cache.find(key)`，验证不再有「查询导致 size 增长」的现象。\n\n验收标准：三个版本结果完全一致，且你能解释为什么在 100 万次查询下 `vector + 二分` 有时能追上甚至超过 `map`。\n\n## 七、一句话总结\n\n- 模板是编译期的代码生成规则，实例化必须看到完整定义，所以实现放头文件；要藏实现就用显式实例化加 `extern template`。\n- 全特化固定全部参数，偏特化只固定一部分且只适用于类模板，函数模板的「偏特化」用重载代替。\n- `vector` 扩容会让所有迭代器、指针、引用失效；`map` 插入不影响已有迭代器；`unordered_map` 的 rehash 只失效迭代器、不失效引用。\n- 查询用 `find`/`count`，别用 `operator[]`——后者的语义是「取或插入」。\n- 选型看访问模式：连续遍历和随机下标用 `vector`，有序与范围查询用 `map`，纯等值高频查找用 `unordered_map`，数据量很小时线性扫描最快。",
+          "code": "// c-06：模板实例化、容器复杂度与迭代器失效（C++17）\n// 编译：g++ -std=c++17 -Wall -Wextra -O2 c06.cpp -o c06\n#include <algorithm>\n#include <iostream>\n#include <map>\n#include <string>\n#include <type_traits>\n#include <unordered_map>\n#include <vector>\n\n// 1) 函数模板：不是函数，是生成函数的规则；T 由调用点推导\ntemplate <typename T>\nT clamp_value(T v, T lo, T hi) {\n    return v < lo ? lo : (v > hi ? hi : v);\n}\n\n// 2) 类模板：主模板 + 全特化 + 偏特化\ntemplate <typename T>\nstruct TypeName {\n    static const char *get() { return \"other\"; }\n};\n\ntemplate <>\nstruct TypeName<int> {                 // 全特化：T 必须精确是 int\n    static const char *get() { return \"int\"; }\n};\n\ntemplate <typename T>\nstruct TypeName<T *> {                 // 偏特化：只固定「是指针」这一件事\n    static const char *get() { return \"pointer\"; }\n};\n\n// 3) if constexpr（C++17）：编译期分支，没走到的分支不会被实例化\ntemplate <typename T>\nstd::string describe(const T &v) {\n    if constexpr (std::is_integral<T>::value) {\n        return \"integral:\" + std::to_string(v);\n    } else {\n        return std::string(\"other:\") + v;   // T 非整数时才实例化这一支\n    }\n}\n\nint main() {\n    // 4) 两次调用生成两份 clamp_value，实例化发生在编译期\n    std::cout << clamp_value(5, 1, 3) << ' ' << clamp_value(2.5, 1.0, 3.0) << '\\n';\n\n    std::cout << TypeName<int>::get() << ' ' << TypeName<int *>::get() << ' '\n              << TypeName<double>::get() << '\\n';\n\n    std::cout << describe(42) << ' ' << describe(std::string(\"abc\")) << '\\n';\n\n    // 5) vector：连续内存，push_back 超过容量就搬家，之前的指针全部悬空\n    std::vector<int> v;\n    v.reserve(4);\n    for (int i = 0; i < 4; ++i) v.push_back(i);\n    const int *p = v.data();\n    v.push_back(4);                    // 第 5 个元素触发扩容（4 -> 8）\n    std::cout << \"size=\" << v.size() << \" cap=\" << v.capacity()\n              << \" moved=\" << (v.data() != p) << '\\n';   // moved=1：p 已悬空\n\n    // 6) 先按最终规模 reserve，指针才稳定\n    std::vector<int> w;\n    w.reserve(8);\n    for (int i = 0; i < 5; ++i) w.push_back(i);\n    int *q = w.data();\n    w.push_back(5);                    // 容量还够，不搬家\n    std::cout << \"same=\" << (w.data() == q) << \" cap=\" << w.capacity() << '\\n';\n\n    // 7) 删除元素用 erase-remove（C++20 起可以直接 std::erase_if）\n    w.erase(std::remove_if(w.begin(), w.end(), [](int x) { return x % 2 == 0; }),\n            w.end());\n    std::cout << \"after erase:\";\n    for (int x : w) std::cout << ' ' << x;\n    std::cout << '\\n';\n\n    // 8) map 有序、O(log n)；unordered_map 平均 O(1)，rehash 不失效引用\n    std::map<std::string, int> ordered;\n    std::unordered_map<std::string, int> hashed;\n    ordered[\"a\"] = 1;\n    hashed[\"a\"] = 1;\n    const int &ref = hashed[\"a\"];\n    for (int i = 0; i < 1000; ++i) hashed[\"k\" + std::to_string(i)] = i;\n    std::cout << \"hashed size=\" << hashed.size() << \" ref_ok=\" << (ref == 1) << '\\n';\n\n    // 9) operator[] 会插入默认值：查询请用 find / count / contains\n    std::cout << \"find b: \" << (ordered.find(\"b\") == ordered.end() ? \"缺\" : \"有\");\n    ordered[\"b\"];                      // 悄悄插入 {b, 0}\n    std::cout << \" 之后 size=\" << ordered.size() << '\\n';\n\n    // 10) 有序容器才能做范围查询：unordered_map 只有等值查找\n    ordered[\"c\"] = 3;\n    const auto it = ordered.lower_bound(\"b\");\n    std::cout << \"lower_bound(b)=\" << (it != ordered.end() ? it->first : std::string(\"none\"))\n              << '\\n';\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```cpp\ntemplate <typename T> struct S { static int v() { return 1; } };\ntemplate <typename T> struct S<T *> { static int v() { return 2; } };\ntemplate <> struct S<int> { static int v() { return 3; } };\nstd::cout << S<int>::v() << S<int *>::v() << S<double *>::v();\n```",
+              "options": [
+                "322",
+                "323",
+                "313",
+                "123"
+              ],
+              "answer": 0,
+              "explain": "S<int> 命中全特化，返回 3；S<int*> 的全特化是 S<int>，参数必须精确等于 int，int* 不匹配，于是落到偏特化 S<T*>，返回 2；S<double*> 同样走偏特化，返回 2，合起来是 322。选 323 的人以为 S<int*> 也匹配 S<int>；选 313 的人以为偏特化对 int* 也返回 3；选 123 的人把全特化与偏特化的优先级弄反了。"
+            },
+            {
+              "q": "下面这段代码的问题是什么？\n\n```cpp\nstd::vector<int> v{1, 2, 3};\nfor (auto it = v.begin(); it != v.end(); ++it) {\n    if (*it % 2 == 1) v.push_back(*it);\n}\n```",
+              "options": [
+                "push_back 可能扩容使 it 与 end() 失效，再用就是未定义行为；应先收集再追加",
+                "v.end() 每次循环都重新计算，所以这个循环一定能正常结束",
+                "push_back 只接受临时对象，而 *it 是左值，参数类型不匹配",
+                "只要把 auto 改成 const_iterator，问题就消失了"
+              ],
+              "answer": 0,
+              "explain": "扩容会把元素搬到新缓冲区并释放旧内存，迭代器还指着旧地址，解引用和自增都是未定义行为，表现为崩溃或死循环。end() 重算反而更糟：it 在旧缓冲区、end() 在新缓冲区，两者比较没有意义。push_back 接受左值（拷贝）也接受右值（移动），与这里无关；const_iterator 只是不能改元素，同样会失效。"
+            },
+            {
+              "q": "为什么函数模板的定义通常要放在头文件里？",
+              "options": [
+                "实例化发生在编译期，编译器在调用点必须看到完整定义才能生成代码",
+                "头文件里的代码会被编译器特殊优化，运行更快",
+                "模板不能参与链接，放 .cpp 一定编译不过，而不是链接失败",
+                "链接器只合并头文件里出现的符号，所以定义必须在头文件里"
+              ],
+              "answer": 0,
+              "explain": "模板本身不产生代码，编译器要用具体类型把定义展开成函数或类才有目标码，因此在调用点必须能看到完整定义。放 .cpp 的后果是编译通过、链接时报 undefined reference，而不是编译不过；显式实例化可以让定义留在 .cpp，再用 extern template 抑制重复实例化。运行速度与放在哪个文件无关；链接器合并的是符号，不是头文件文本。"
+            },
+            {
+              "q": "下面哪种场景用 `std::map` 比 `std::unordered_map` 更合适？",
+              "options": [
+                "需要按 key 有序遍历，或频繁做 [lo, hi) 这样的范围查询",
+                "只做等值查找，key 是短字符串，查询量很大",
+                "记录数固定且很小，只关心内存占用",
+                "key 的哈希函数计算很贵，且完全不能接受 rehash 抖动"
+              ],
+              "answer": 0,
+              "explain": "map 的有序性是 unordered_map 给不了的：范围查询、按 key 顺序输出、找前驱后继都依赖有序结构，这是它存在的理由。高频等值查找正是 unordered_map 的主场；记录数很小时两者都无所谓，但 map 每节点要存三个指针加颜色位，内存上并不占优；哈希贵确实会让 unordered_map 变慢，但 rehash 可以靠 reserve 规避，这时仍要先测量，而不是直接换成 map。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c-pro",
+      "name": "实战",
+      "goal": "能独立定位一次线上内存崩溃、用数据说明一处性能瓶颈，并把一个小型 C/C++ 工程搭成可构建、可测试、可复现的样子。",
+      "lessons": [
+        {
+          "id": "c-07",
+          "title": "内存 bug 排查：段错误与内存泄漏",
+          "minutes": 45,
+          "lang": "c",
+          "content": "## 一、先看一个会出事的场景\n\n凌晨两点，一个跑了六小时的数据服务挂掉，日志最后一行是普通得不能再普通的统计输出，再往后什么都没有。运维从 core_pattern 指定的目录翻出 core 文件，用 gdb 打开：\n\n```text\n(gdb) bt\n#0  __strlen_avx2 () at ../sysdeps/x86_64/multiarch/strlen-avx2.S:65\n#1  0x000055d3c1a2f4e1 in report_item (it=0x55d3c2e0a2a0) at item.c:88\n#2  0x000055d3c1a2f6b2 in main () at item.c:131\n```\n\n第 88 行是 `printf(\"%s\\n\", it->name)`，而 `it->name` 指向的堆块在十分钟前就被 `free` 了。崩溃现场和肇事现场隔了十万八千里，这行代码单看没有任何毛病。\n\n再看两个同族症状：批量导入任务里偶发 `free(): double free detected in tcache 2`，进程直接 abort；另一个服务 RSS 每小时涨 8 MB，重启就归零，跑三天把 2 GB 吃光，被 OOM killer 干掉。\n\n三个现象分别是释放后使用（use-after-free）、重复释放（double free）、内存泄漏。它们的共同点不是某个函数写错了，而是**出错的地点和症状出现的地点不在一起**。内存就是这样一种资源：你对它的错误操作不会当场被抓住，只会在一段不确定的时间之后，以另一个函数的名义崩掉。\n\n所以内存 bug 的排查不是更仔细地读代码，而是换一种运行方式，让错误在发生的那一行立刻暴露。这就是 Sanitizer 存在的全部理由。\n\n## 二、原理：它到底怎么运作\n\n先把段错误这三个字拆开。CPU 访问一个虚拟地址时，MMU 查页表：没有映射、或者权限不符（比如往只读页写），就产生页错误；内核的缺页处理程序如果发现这个地址不属于该进程的合法映射，无法修复，于是向进程投递 SIGSEGV。进程默认动作是终止，并按 core_pattern 落 core。所以**段错误的本质是这个地址现在不可访问，不是这个指针等于 NULL**。已释放又归还给内核的页、越界到未映射区域的地址、被写坏的函数返回地址，都会走到同一个信号，gdb 的栈顶可能停在 strlen、memcpy 甚至 malloc 内部。\n\n再理解堆管理器。glibc 的 malloc 在每个用户块前面放一块头部，记录大小和状态；free 做的事情是把块挂回对应的 bin（tcache、fastbin、smallbin），**不清零用户数据，也不修改你手里的指针**。这意味着 free 之后立刻读，内容往往还在，程序看着正常；等这块被重新分配给别人，你读到的就是别人的数据；如果这块被合并、被交还给内核，同一个地址可能整页不可访问，于是段错误。UAF 的随机性完全来自这里：你读到什么，取决于这十分钟里分配器做了什么。\n\nASan（AddressSanitizer）把这个窗口关掉。它在编译期给每次内存访问插桩：先查影子内存（shadow memory，1 字节影子对应 8 字节用户内存）里这段地址是否可访问，不可访问就立刻报错退出。分配时在用户块两侧放红区（redzone），越界一字节就踩红区；free 时块不立即归还，而是进入隔离区（quarantine），过一段时间才真正复用，于是 UAF 在 free 之后的下一次访问就必现。代价是内存约翻倍、运行时间约两倍、必须重新编译，换来的是准确的出错地址和行号。\n\n泄漏的判据要说清楚：不是代码里有没有 free，而是从根集合（栈、全局变量、寄存器）出发，还有没有一条可达路径能到这个块。LeakSanitizer 在进程退出时做一次可达性扫描，报 Direct leak 与 Indirect leak。由此推出它的边界：全局缓存里越攒越多的对象因为从全局变量可达，它不报泄漏；不退出的常驻服务，它也等不到扫描时机。这两点后面还会回来。\n\n最后是 core dump。内核在致命信号时把整个地址空间写到磁盘，gdb 用可执行文件加 core 还原现场。前提是可执行文件和 core 必须来自同一次构建，并且带 `-g`，否则你只有地址没有行号。优化构建下内联和指令重排会让行号漂移，这不是 gdb 的错。\n\n## 三、代码逐行\n\n完整程序在 `code` 里，两个构建命令的差别就是本节的全部：\n\n```bash\ncc -std=c11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer c07_demo.c -o c07_asan\ncc -std=c11 -g -O0 c07_demo.c -o c07_plain\n```\n\n1. `item *grown = realloc(c->data, cap * sizeof *grown);` —— 用 `sizeof *grown` 而不是 `sizeof(item)`，以后换元素类型不会静默算错。更关键的是不能写 `c->data = realloc(c->data, ...)`：realloc 失败返回 NULL 时，原块地址就永久丢了，这是最经典的泄漏写法。\n2. `char *copy = malloc(n + 1);` —— 加一是给结尾的 `\\0`。少写这个 1，`memcpy` 就会在堆上多写一字节，ASan 报 heap-buffer-overflow；而普通构建里这一字节很可能落在分配器的对齐填充里，跑一年都不崩，这才是它危险的地方。分配后必须判空，否则下一步就是往 NULL 写。\n3. `static const char *cart_last_name(const cart *c)` —— 返回内部指针，签名里没有任何信息告诉调用者这个指针的生命周期跟着 cart 走。注释里的 borrowed 不是装饰：调用方一旦把它存下来、过一会儿再用，就是 UAF。要么返回拷贝并写明调用者负责 free，要么让调用方把缓冲区传进来。\n4. `item last = c->data[--c->len];` —— 先把 len 减一再取，取到的永远是最后一个有效元素。若写成先取 `c->data[c->len - 1]` 再自减，功能一样，但空 cart 时下标会下溢成 SIZE_MAX，变成越界读。函数开头那句 `if (c->len == 0) return;` 是这条不变量的守卫。\n5. `free(last.name);` —— 先取出结构体副本再释放，因为 name 指向的堆块需要单独释放。只减 len 而不 free 就是泄漏；free 完还继续读 `last.name` 就是 UAF。这两条边界正好卡在同一行上。\n6. `const char *name = cart_last_name(&c);` 加 `cart_drop_last(&c);` 加 `printf` 三行，构成完整肇事链。ASan 在 printf 内部读红区时报告 heap-use-after-free，栈里能看到 printf 和 main，并额外打印这块内存第几行被 free、第几行被分配的两段栈，直接给出肇事点和分配点。\n7. `free(c.data);` —— 只释放了数组本体。每个 item 的 name 都是独立分配，一个都没释放，所以进程正常退出时 LSan 会报两条 Direct leak，每条带分配点栈。正确的收尾是先遍历 free 每个 name，再 free 数组本体；顺序反过来，那些 name 指针就随数组一起没了。\n8. 返回 0 之前不释放也不算错，进程退出时操作系统会回收全部地址空间。但库代码和长生命周期服务没有退出这个时机，必须自己还。\n\n预期结果：plain 版很可能打印一行 `last was pear` 并正常退出，退出码 0，什么错都看不出来；ASan 版会打印一份报告并以退出码 1 结束。这个反差就是本节的核心：**同样的代码，普通构建判它无罪**。\n\n## 四、三个常见误区\n\n### 误区一：段错误就是空指针，加个 if 判断就好\n\n现象：崩溃栈停在 strlen，你回头给指针加上 `if (p != NULL)`，崩溃照旧。\n\n为什么错：判空只挡住地址 0。UAF 的地址非 0、野指针的地址非 0、越界地址也非 0，它们都不可访问。判空解决的是指针没初始化，解决不了指针指向的东西已经没了。\n\n正确做法：用 ASan 或 core 加 gdb 找出地址的来源，问这块内存的生命周期由谁负责、在哪个点结束，而不是给每个指针套 if。\n\n### 误区二：free 之后把指针置 NULL 就安全了\n\n现象：`free(p); p = NULL;` 写得很规范，线上仍然 double free 或 UAF。\n\n为什么错：置空只改了一个变量。堆块可能还有别的别名：`q = p`、结构体里的副本、回调里捕获的指针，它们仍然是原地址；`p = NULL` 也拦不住通过 q 的第二次 free。置空的价值是让本指针误用时立刻崩在 NULL 上，而不是延后崩在别处，仅此而已。\n\n正确做法：从所有权上解决——一块内存只有一个所有者，函数参数表达借用用 `const T *`，C++ 里用 unique_ptr 表达独占。所有权清楚，就不需要靠置空兜底。\n\n### 误区三：Valgrind 跑过没报错，就认为没有内存问题\n\n现象：CI 里加了 Valgrind 步骤，全绿；上线后依然段错误。\n\n为什么错：memcheck 检查的是非法读写、未初始化读和泄漏，它不检查栈上数组越界，不理解容器语义，而且只在被执行到的路径上有效。更现实的问题是速度：二十到五十倍的减速让人只敢在一两个小用例上跑，覆盖率极低。ASan 快得多，但同样要求那条路径被走到。\n\n正确做法：把 `-fsanitize=address,undefined` 加进 CI 的常规单测构建，让每个 PR 都跑，而不是发布前跑一次；Valgrind 留给装不上 ASan 的环境和需要精确分配栈的疑难案例。这是覆盖率问题，不是工具好坏问题。\n\n## 五、边界与代价\n\n- ASan 不能常开在生产：内存约两倍、CPU 约两倍，隔离区还会额外占用。折中是预发全开、生产按需灰度，或者用 `ASAN_OPTIONS=quarantine_size_mb=32` 压低开销。\n- 泄漏检测只发生在进程退出。常驻服务要么周期性调用 `__lsan_do_leak_check()`（需要链接 LSan），要么用 heaptrack、massif 看增长曲线。跑一晚上没报泄漏证明不了什么。\n- core 文件可能含密钥、令牌和用户数据。core_pattern 落到共享目录前要想清楚权限；容器里默认可能根本不出 core，因为 ulimit -c 是 0。\n- 优化构建下 core 的行号会漂：内联、尾调用、指令重排都会让栈帧指向调用者的下一行。定位时临时用 `-O0 -g` 复现，再回 `-O2` 验证修复。\n- 反例：为了零泄漏，在每次 malloc 时把指针登记进一张全局表，退出时统一 free。析构顺序不确定，很容易把已被库释放的块再 free 一次，制造出比泄漏更难查的 double free。进程级资源交给操作系统回收是正确的，不是偷懒。\n\n## 六、动手任务\n\n1. 把 `code` 存成 `c07_demo.c`，用上面两条命令各编一次，分别运行并记录退出码。预期 plain 为 0，ASan 为 1 且报告里有 heap-use-after-free。\n2. 把 `cart_drop_last` 里的 `free(last.name)` 注释掉再跑 ASan：UAF 消失，但退出时会多出泄漏报告。把报告里的分配栈抄下来，指出它对应源码第几行。\n3. 修三处并让 ASan 全绿：`cart_last_name` 改成返回拷贝并注明调用者 free；`cart_push` 在 malloc 失败时回滚已经写入的 len；补一个 `cart_destroy` 逐个释放 name。\n4. 把 `n + 1` 改回 `n`，先用 plain 构建跑，再用 ASan 跑。写下两边结果的差异，并解释为什么 plain 版可能通过。\n\n## 七、一句话总结\n\n- SIGSEGV 是地址不可访问，不是指针为 NULL；判空挡不住 UAF 和越界。\n- free 只把块挂回分配器，不清数据也不改指针；UAF 能正常跑只是因为块还没被复用。\n- ASan 用红区、影子内存和隔离区把 UAF 与越界变成必现错误，代价是约两倍内存和时间，且必须重新编译。\n- 泄漏的判据是从根是否可达，所以全局缓存和常驻服务是它的盲区。\n- 修复的验收标准不是这次没崩，而是 ASan 下零错误零泄漏，并有回归用例覆盖那条路径。",
+          "code": "/* c07_demo.c — 购物车的三处内存 bug：UAF、越界隐患、泄漏\n * 构建（Linux / macOS，clang 或 gcc）：\n *   cc -std=c11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer c07_demo.c -o c07_asan\n *   cc -std=c11 -g -O0 c07_demo.c -o c07_plain\n * 运行：\n *   ./c07_plain   # 很可能打印 \"last was pear\" 并以 0 退出：看不出问题\n *   ./c07_asan    # 打印 heap-use-after-free 报告，退出码 1\n * Windows 下用 clang（MSVC 的 ASan 支持有限）：\n *   clang -std=c11 -g -O1 -fsanitize=address c07_demo.c -o c07_asan.exe\n */\n#include <stddef.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\ntypedef struct {\n    char *name;\n    int   weight;\n} item;\n\ntypedef struct {\n    item  *data;\n    size_t len;\n    size_t cap;\n} cart;\n\nstatic int cart_push(cart *c, const char *name, int weight)\n{\n    if (c->len == c->cap) {\n        size_t cap = c->cap ? c->cap * 2 : 4;\n        item *grown = realloc(c->data, cap * sizeof *grown);\n        if (!grown) {\n            return -1;                       /* 失败时 c->data 仍有效，不会泄漏 */\n        }\n        c->data = grown;\n        c->cap  = cap;\n    }\n\n    size_t n = strlen(name);\n    char *copy = malloc(n + 1);              /* +1 给结尾的 '\\0'，漏了就多写一字节 */\n    if (!copy) {\n        return -1;\n    }\n    memcpy(copy, name, n + 1);\n\n    c->data[c->len].name   = copy;\n    c->data[c->len].weight = weight;\n    c->len++;\n    return 0;\n}\n\n/* 返回内部指针（borrowed）：生命周期跟着 cart，调用方不得保存、不得 free */\nstatic const char *cart_last_name(const cart *c)\n{\n    return c->len ? c->data[c->len - 1].name : NULL;\n}\n\nstatic void cart_drop_last(cart *c)\n{\n    if (c->len == 0) {\n        return;                              /* 没有这行，--c->len 会下溢成 SIZE_MAX */\n    }\n    item last = c->data[--c->len];\n    printf(\"drop %s (%d g)\\n\", last.name, last.weight);\n    free(last.name);\n}\n\nint main(void)\n{\n    cart c = {0};\n    if (cart_push(&c, \"apple\", 120) != 0 || cart_push(&c, \"pear\", 200) != 0) {\n        free(c.data);\n        return 1;\n    }\n\n    const char *name = cart_last_name(&c);   /* 借到 pear 那块堆内存的地址 */\n    cart_drop_last(&c);                      /* 这里把它 free 了 */\n    printf(\"last was %s\\n\", name);           /* UAF：ASan 在 strlen 内部报错 */\n\n    free(c.data);                            /* 只释放数组本体，name 全部泄漏 */\n    return 0;\n}",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```c\nint *p = malloc(sizeof *p);\n*p = 42;\nint *q = p;\nfree(p);\np = NULL;\nprintf(\"%d\", q == NULL);\n```",
+              "options": [
+                "1",
+                "0",
+                "42",
+                "未定义行为，结果不确定"
+              ],
+              "answer": 1,
+              "explain": "free 只把块还给分配器，不改写 q 的值；p = NULL 只影响 p 自己。q 仍持有原地址，与 NULL 比较是合法操作且结果为假，所以打印 0。只有在 free 之后解引用 q 才是 UAF，那才属于未定义行为；42 是块里残留的内容，和这个比较无关。"
+            },
+            {
+              "q": "下面这个函数在 realloc 失败时会出什么问题？\n\n```c\nchar *grow(char *buf, size_t need)\n{\n    buf = realloc(buf, need);\n    return buf;\n}\n```",
+              "options": [
+                "realloc 失败时会自动释放旧块，所以不会有任何问题",
+                "没问题，realloc 失败时会返回旧地址，buf 仍然有效",
+                "失败返回 NULL 被直接赋给 buf，旧指针丢失，既不能用也释放不了",
+                "应该先 free(buf) 再 realloc，这样失败时才安全"
+              ],
+              "answer": 2,
+              "explain": "realloc 失败时返回 NULL 并保留原块不动，但赋值已经让 buf 指向 NULL，原块地址再也拿不到，这就是泄漏。先 free 再 realloc 更糟：一旦失败，数据已经没了。前两项把失败语义说反了，realloc 不会替你收尾。"
+            },
+            {
+              "q": "ASan 为什么能让 use-after-free 在 free 之后的下一次访问就暴露？",
+              "options": [
+                "free 后块进入隔离区不立即复用，分配时两侧加红区，每次访问先查影子内存",
+                "free 时把内存清零，并自动把所有指向它的指针改成 NULL",
+                "在链接期替换 malloc 与 free，退出时统计还有多少块没释放",
+                "free 时立即 munmap 整页，让这块地址永远不可访问"
+              ],
+              "answer": 0,
+              "explain": "隔离区让刚释放的块不被马上复用，红区让越界立刻踩到，影子内存让每次读写都先做一次可访问性检查，三者合起来把概率问题变成必现问题。free 不会清零也不会改指针，自动置空在 C 里做不到；链接期统计是泄漏检测的思路，查不到访问；立即 munmap 会让任何残留访问都变成段错误，粒度太粗且开销极大，不是 ASan 的做法。"
+            },
+            {
+              "q": "下面哪种情况不适合把 AddressSanitizer 常开？",
+              "options": [
+                "任何 C 程序都应该常开，它的开销可以忽略",
+                "只有使用 new 与 delete 的 C++ 程序才值得开，纯 C 用不到",
+                "只要开了 ASan 就不必再写回归测试，它能覆盖所有输入",
+                "高并发常驻服务的生产环境，内存和 CPU 近似翻倍，应放在 CI 或预发"
+              ],
+              "answer": 3,
+              "explain": "ASan 的代价是内存约两倍、CPU 约两倍，还要预留隔离区，生产常开通常不可接受，合理位置是 CI 单测与预发环境。它的插桩与语言无关，纯 C 同样适用；工具只覆盖被执行到的路径，永远替代不了回归测试；开销显然不是可以忽略的。"
+            }
+          ]
+        },
+        {
+          "id": "c-08",
+          "title": "性能：缓存友好与移动语义",
+          "minutes": 45,
+          "lang": "cpp",
+          "content": "## 一、先看一个会出事的场景\n\n同一份报表导出逻辑，三万行数据。第一版用 `std::vector<Row>`，耗时 35 毫秒；同事 A 看到链表插入是 O(1)，换成 `std::list<Row>`，耗时变成 620 毫秒，慢了十七倍，而数据量、算法、输出一个字都没改。同事 B 在 `return rows;` 前面加了 `std::move(rows)` 想避免拷贝，结果基准里移动次数从 0 变成 1，编译器还给了个 pessimizing-move 的警告。\n\n还有一类更隐蔽：结构体数组按行存（AoS），每个元素几十字节，遍历时只读其中一个字段，性能却比预期差三倍。因为你每次只用到 4 字节，缓存行剩下的六十字节全被浪费了。\n\n这些都不是算法复杂度问题。它们的复杂度一模一样，差的是**数据在内存里怎么放，以及编译器能不能省掉一次构造**。这一节讲两件事：缓存友好的数据布局，和移动语义到底移动了什么。\n\n## 二、原理：它到底怎么运作\n\n先给数量级（x86-64，具体值随 CPU 变）：L1 命中约 4 个周期，L2 约 12 个周期，L3 约 40 个周期，主存约 200 到 300 个周期。CPU 每次从主存取的不是一个变量，而是一整条缓存行，64 字节。所以访问一个 int 的真实成本，取决于它旁边的六十字节有没有被一起用上。\n\n顺序访问之所以快，不只是因为连续，而是因为硬件预取器能识别步长，提前把后面的行搬进来，访问延迟被重叠掉了。链表的每个节点是一次独立的 malloc，地址由分配器决定，遍历时每次取 next 都要等一次完整的主存延迟，而且无法预取，这叫指针追逐（pointer chasing）。节点越多、元素越小，链表越吃亏。\n\n`std::vector` 是三个字段：指针、size、capacity，元素连续存放；push_back 在容量满时按倍数扩容，均摊 O(1)。它的遍历是一条直线，缓存行利用率接近百分之百。这就是为什么绝大多数场景下 vector 比 list 快，即使理论复杂度更差。\n\n再补一个容易忽略的算术。假设 Row 是 96 字节，遍历时只读其中的 id 字段（4 字节）。每次取一条记录要搬 64 字节的缓存行，实际只用到 4 字节，利用率不到百分之七；L1 只有几十 KB，几万条记录一路刷过去，几乎每次都在等主存。把热字段单独拆成一个数组（SoA），同样一次缓存行能装十六个 id，这就是三倍差距的来源。\n\n再说移动语义。先纠正一个说法：`std::move(x)` **不移动任何东西**，它等价于把表达式转成右值（xvalue），让重载决议去选移动构造或移动赋值。真正搬东西的是移动构造：对 vector 来说就是把三个字段拷过去、把源置空，O(1)，完全不碰元素。\n\nRVO 和 NRVO 是另一条线。C++17 起，用纯右值初始化对象时复制消除是**强制**的：`return Buffer(1024);` 或者用函数返回值初始化变量，那个临时对象直接构造在目标存储上，即使拷贝构造有副作用也不会被调用。NRVO 指返回具名局部变量时的消除，标准允许但不强制，主流编译器在 -O1 以上都会做。关键点在这里：`return std::move(local);` 把 local 变成 xvalue，**NRVO 的前提（操作数是具名变量）就不成立了**，于是退化成一次移动构造。这就是加了 move 反而多一次移动的全部原因。它不会慢很多，因为移动是 O(1)，但它是纯负收益。\n\n实际代码里移动语义最常见的落点是容器操作：`v.push_back(s)` 拷贝一份，`v.push_back(std::move(s))` 把 s 的堆缓冲交出去；`emplace_back(args...)` 更进一步，直接在 vector 的存储上构造，连临时对象都不产生。三者的差别在 string、vector 这类持有堆内存的元素上是数量级的，对 int 没有意义。\n\n## 三、代码逐行\n\n```bash\nc++ -std=c++17 -O2 -DNDEBUG c08_demo.cpp -o c08_demo\nc++ -std=c++17 -O0 c08_demo.cpp -o c08_demo_dbg\n```\n\n1. `explicit Buffer(std::size_t n) : data(n, 7) {}` —— 成员在初始化列表里直接构造，不是先默认构造再赋值；explicit 挡住 `Buffer b = 1024;` 这种隐式转换。\n2. `Buffer(Buffer &&o) noexcept : data(std::move(o.data)) { ++moves; }` —— 移动构造偷走 vector 的堆指针。noexcept 不是装饰：vector 扩容时，只有当元素的移动构造声明了 noexcept，它才会用移动；否则为了保证强异常安全（扩容失败要能回滚），它宁可退回复制。\n3. `Buffer make_nrvo(void) { Buffer b(1024); return b; }` —— 返回具名局部变量，主流编译器都会让 NRVO 生效，拷贝零次、移动零次。这三行是什么都不做的最优写法。\n4. `Buffer make_move(void) { Buffer b(1024); return std::move(b); }` —— 同一份代码只多了 std::move，NRVO 失效，发生一次移动。基准里 moves=1 就是它贡献的。\n5. `Buffer make_prvalue(void) { return Buffer(1024); }` —— C++17 强制消除，零次移动；这条在 -O0 下也成立，因为它由语言规则保证，不靠优化器。\n6. `for (const auto &v : s) acc += v;` —— 对 vector 是顺序读，对 list 是逐节点追指针；const& 避免元素拷贝，泛型代码里是硬要求（对 int 无所谓，对 Row 就是几万次拷贝）。\n7. 计时只包住 `sum()`，不包 `std::list` 的构造 —— 二十万个节点的构造本身就是二十万次分配，算进去你测到的是分配器而不是遍历。测量必须只包含要比较的那一段。\n\n## 四、三个常见误区\n\n### 误区一：std::move 会把对象搬走\n\n现象：`auto s = std::move(str);` 之后继续用 str，有时正常、有时得到空串。\n\n为什么错：move 只做类型转换，真正的搬运在移动构造或移动赋值里。搬完之后源对象处于有效但未指定（valid but unspecified）状态，标准不保证它是空的，只保证可以安全析构和重新赋值。对 const 对象 move 得到的是 const 右值引用，重载决议仍然选拷贝构造，于是静默退化成拷贝。\n\n正确做法：把 move 当成我承诺不再需要这个值的标记，只在确实要交出所有权时写；不要在 return 局部变量时写，不要对 const 对象写。\n\n### 误区二：链表插入 O(1)，所以数据量大时更快\n\n现象：把 vector 换成 list，插入没见快多少，遍历慢了十几倍。\n\n为什么错：插入 O(1) 的前提是你**已经持有插入位置的迭代器**；按值查找仍然是 O(n)。而且每个节点一次分配（分配器还可能加锁）、内存不连续、缓存行利用率低。元素越大、插入删除越少，list 越亏。\n\n正确做法：默认选 vector；需要按 key 查找用 unordered_map（哈希）或 map（有序）；只有元素很大、频繁在中间插入删除、并且已经持有迭代器这三条同时成立，才考虑 list。\n\n### 误区三：跑一次 chrono 就是基准测试\n\n现象：同一份代码跑两次，一次 35 毫秒一次 90 毫秒，于是认定这次改动让性能退化了。\n\n为什么错：单次测量混入了 CPU 频率调节、缓存冷热、其他进程和首次缺页。第一次跑必然更慢，因为页还没映射、指令缓存还没热、分配器还没长起来。\n\n正确做法：固定 `-O2 -DNDEBUG`，至少预热一轮，重复五到十次取中位数或最小值；用 perf stat 看 cycles、cache-misses、branch-misses，确认变化来自缓存而不是噪声；对比时只改一个变量。\n\n还有一个更隐蔽的版本：编译器可能把整个求和循环优化掉，或者把多次调用合并，于是你测到的是空循环。基准代码里要有真实副作用（累加到 volatile、或者把结果输出），并确认反汇编里那段循环仍然存在。\n\n## 五、边界与代价\n\n- 优化顺序不能颠倒：先算法与数据结构，再内存布局，最后才是指令级微调。把平方复杂度改成 n log n 的收益，远大于把 35 毫秒压到 30 毫秒。\n- 缓存友好的布局（AoS 拆成 SoA、分块处理）会明显牺牲可读性和接口的自然度：`struct { x[], y[] }` 让取一个点变成两次索引，封装边界要重画。只在 perf 证明的热点路径上做。\n- 移动语义不是免费的午餐：每个移动构造都要维护，移动后对象处于未指定状态，容易被误用；对小对象（几个 int）移动和拷贝成本一样，写它纯属增加维护面。优先 Rule of 0，让成员自己管好自己，编译器生成的版本通常就是对的。\n- 对象池和自定义分配器适合大量同尺寸、生命周期一致的对象；不适合变长对象，也不适合长短期混杂，因为池会被长期对象卡住，内存无法归还给系统。它还会让 Sanitizer 的调用栈变难读。\n- 还有一条纪律：没有 profile 数据就不动手。先跑 perf record 看热点落在哪个函数，再决定是换容器、改布局还是减少分配；凭直觉改布局，最常见的结局是把可读性换掉、性能却没动。\n- 反例：给一个只有三个 int 的配置结构体写移动构造；给每秒调用两次的函数做 SoA 重构；为了减少拷贝给所有返回加 std::move。这三件事都只增加复杂度。\n\n## 六、动手任务\n\n1. 编译两份（-O2 与 -O0），各跑五次，记录 copies、moves 和两个耗时。`make_prvalue` 那一行由语言规则保证零移动，任何优化级别都一样；NRVO 只是标准允许而非强制，记录它在你所用编译器上的实际行为。\n2. 把 `make_nrvo` 改成 `return std::move(b);`，重新编译，观察 moves 是否变成 2。再加 `-Wpessimizing-move`（GCC、Clang 支持）看编译器是否直接警告。\n3. 把 N 从二十万改成两百万，重跑，记录 vector 与 list 的耗时比值。在 Linux 上用 `perf stat -e cache-misses,cycles ./c08_demo` 对比两者的 cache-misses；Windows 上没有 perf，改看耗时趋势。\n4. 把 `std::list<int>` 换成 `std::deque<int>`，解释为什么耗时回到和 vector 同一量级（分段连续，块内仍可预取）。\n\n## 七、一句话总结\n\n- 复杂度相同不等于速度相同：缓存行 64 字节，顺序访问能预取，链表只能一次次等主存。\n- 默认用 vector；list 只在元素大、中间增删频繁、且已持迭代器时才有理由。\n- std::move 只是类型转换，不搬运数据；搬运发生在移动构造里。\n- `return std::move(local)` 会禁用 NRVO，是纯负收益；直接 `return local;`。\n- 性能结论必须来自预热、多次测量和硬件计数器，单次 chrono 只能当噪声。",
+          "code": "// c08_demo.cpp — 移动语义计数 + vector/list 遍历对比（C++17）\n// 构建：\n//   c++ -std=c++17 -O2 -DNDEBUG c08_demo.cpp -o c08_demo\n//   c++ -std=c++17 -O0 c08_demo.cpp -o c08_demo_dbg\n// 运行：./c08_demo\n// 预期（GCC、Clang、MSVC 在 -O0 下也会做 NRVO；标准不强制，若你的编译器不做则 copies=1）：\n//   copies=0 moves=1\n//   sizes=1024 1024 1024\n//   耗时随机器变化，vector 通常比 list 快 5 到 15 倍；ratio 那一行会浮动\n#include <chrono>\n#include <cstddef>\n#include <cstdio>\n#include <list>\n#include <utility>\n#include <vector>\n\nstruct Buffer {\n    static int copies;\n    static int moves;\n\n    std::vector<int> data;\n\n    explicit Buffer(std::size_t n) : data(n, 7) {}\n    Buffer(const Buffer &o) : data(o.data) { ++copies; }\n    Buffer(Buffer &&o) noexcept : data(std::move(o.data)) { ++moves; }\n    Buffer &operator=(const Buffer &) = default;\n    Buffer &operator=(Buffer &&) noexcept = default;\n};\n\nint Buffer::copies = 0;\nint Buffer::moves  = 0;\n\nBuffer make_nrvo(void) { Buffer b(1024); return b; }             // NRVO：0 拷贝 0 移动\nBuffer make_move(void) { Buffer b(1024); return std::move(b); }  // 禁用 NRVO：1 次移动\nBuffer make_prvalue(void) { return Buffer(1024); }               // C++17 强制消除：0 次\n\ntemplate <class Seq>\nlong long sum(const Seq &s)\n{\n    long long acc = 0;\n    for (const auto &v : s) {\n        acc += v;\n    }\n    return acc;\n}\n\nint main(void)\n{\n    Buffer a = make_nrvo();\n    Buffer b = make_move();\n    Buffer c = make_prvalue();\n    std::printf(\"copies=%d moves=%d\\n\", Buffer::copies, Buffer::moves);\n    std::printf(\"sizes=%zu %zu %zu\\n\", a.data.size(), b.data.size(), c.data.size());\n\n    constexpr std::size_t N = 200000;\n    std::vector<int> vec(N);\n    for (std::size_t i = 0; i < N; ++i) {\n        vec[i] = static_cast<int>(i);\n    }\n    std::list<int> lst(vec.begin(), vec.end());  // 计时之外：20 万次节点分配\n\n    const auto t0 = std::chrono::steady_clock::now();\n    volatile long long s1 = sum(vec);            // volatile：防止整个循环被优化掉\n    const auto t1 = std::chrono::steady_clock::now();\n    volatile long long s2 = sum(lst);\n    const auto t2 = std::chrono::steady_clock::now();\n\n    auto us = [](std::chrono::steady_clock::duration d) {\n        return std::chrono::duration<double, std::micro>(d).count();\n    };\n    std::printf(\"vector: %.1f us (sum=%lld)\\n\", us(t1 - t0), static_cast<long long>(s1));\n    std::printf(\"list:   %.1f us (sum=%lld)\\n\", us(t2 - t1), static_cast<long long>(s2));\n    std::printf(\"ratio:  %.1fx\\n\", us(t2 - t1) / us(t1 - t0));\n    return 0;\n}",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```cpp\nstruct S {\n    static int moves;\n    S() = default;\n    S(const S &) = default;\n    S(S &&) noexcept { ++moves; }\n};\nint S::moves = 0;\nS make() { return S(); }\nS bad()  { S s; return std::move(s); }\nint main() { S a = make(); S b = bad(); std::printf(\"%d\", S::moves); }\n```",
+              "options": [
+                "0",
+                "1",
+                "2",
+                "编译失败，因为自定义移动构造会删除拷贝构造"
+              ],
+              "answer": 1,
+              "explain": "make 返回纯右值，C++17 保证复制消除，连移动构造都不调用；bad 里的 std::move 把具名变量变成右值，NRVO 不再适用，走一次移动构造，所以 moves 是 1。2 只有在两处都发生移动时才成立；拷贝构造在这里被显式 default 了，不会被移动构造删除。"
+            },
+            {
+              "q": "下面循环的主要性能问题是什么？\n\n```cpp\nstd::vector<std::string> names = load();\nstd::string joined;\nfor (auto n : names) {\n    joined += n + \";\";\n}\n```",
+              "options": [
+                "joined 没有 reserve，所以一定会越界写",
+                "n + \";\" 产生的临时对象会在 += 之前析构，造成悬垂引用",
+                "auto n 每轮拷贝一个 string，元素多或字符串长时是纯浪费，应写 const auto &",
+                "vector 的范围 for 在扩容后迭代器必然失效，必须改成下标循环"
+              ],
+              "answer": 2,
+              "explain": "按值遍历会对每个元素调用一次拷贝构造，字符串长时是一次堆分配加一次 memcpy。reserve 只影响重新分配次数，和越界无关；临时对象活到整个表达式结束，不会在 += 之前析构；这段循环里 vector 没有扩容，迭代器不存在失效问题。"
+            },
+            {
+              "q": "std::move(x) 到底做了什么？",
+              "options": [
+                "把 x 的内存搬到新地址，并把 x 清零",
+                "把表达式转成右值引用，让重载决议选移动构造；真正的搬运发生在移动构造里",
+                "直接调用 x 的移动构造函数并返回一个新对象",
+                "告诉编译器可以跳过所有拷贝，由编译器决定是否真的移动"
+              ],
+              "answer": 1,
+              "explain": "std::move 等价于一次到右值引用的类型转换，本身不碰数据；搬指针、把源置空这些动作写在移动构造或移动赋值里。它不分配新对象，也不清零内存；跳过拷贝是 RVO 与复制消除的职责，和 move 是两套机制。"
+            },
+            {
+              "q": "下面哪种场景才真的该考虑 std::list？",
+              "options": [
+                "元素很大、需要在中间频繁插入删除、并且已经持有插入位置的迭代器",
+                "元素是小整数、只需要从头到尾顺序遍历一遍",
+                "需要按序号随机访问第 n 个元素，并且经常这样访问",
+                "数据量超过一万条时，链表一定比 vector 快"
+              ],
+              "answer": 0,
+              "explain": "链表的优势只在已有迭代器的中间插入删除，且要同时满足元素大、避免搬移成本这两个条件。小整数顺序遍历恰好是链表最吃亏的场景，每个节点一次指针追逐；随机访问第 n 个元素是链表 O(n) 的短板；数据量变大只会放大缓存不友好的劣势，不会让链表反超。"
+            }
+          ]
+        },
+        {
+          "id": "c-12",
+          "title": "工程化：CMake、测试与跨平台",
+          "minutes": 50,
+          "lang": "text",
+          "content": "## 一、先看一个会出事的场景\n\n三个真实场景。\n\n第一，本地 `g++ main.cpp -o app` 一切正常，推到 CI，CMake 构建报 `undefined reference to cart::Cart::total_cents() const`。原因不是代码，而是 CMakeLists 里 `add_executable(app src/main.cpp)` 漏了 `src/cart.cpp`。本地之所以能过，是因为有人手动把两个源文件一起传给了 g++。\n\n第二，有人在 CMake 里写 `include_directories(include)` 加 `file(GLOB SRCS src/*.cpp)`。新加的文件不重新 configure 就不进构建，表现为我明明改了、跑起来还是旧行为；等某天重新 configure，又多编进了几个带 main 的文件，链接器报 `multiple definition of main`。\n\n第三，Debug 构建正常，Release 构建偶发崩溃。因为 Release 定义了 NDEBUG 关掉 assert，而 -O2 让一处未定义行为真的崩了——Debug 下那块内存恰好可读。\n\n三个场景的共同点是：**构建系统不是编译命令的别名，它是依赖关系的唯一真相源**。哪里没写对，错误就会在别人的机器、别人的配置上出现，而且报错信息指向的位置往往和真正的原因无关。\n\n## 二、原理：它到底怎么运作\n\nCMake 分两个阶段：configure 阶段读 CMakeLists，生成一套原生构建文件（Ninja、Makefile 或 Visual Studio 工程）；build 阶段调用编译器。所以改了 CMakeLists 没生效，通常是没重新 configure。而 `file(GLOB)` 的坑在于 CMake 只在 configure 时展开通配符，新增文件不会触发重新 configure；`CONFIGURE_DEPENDS` 可以缓解，但有性能代价，也不是所有生成器都可靠。\n\nCMake 的核心抽象是 target（目标），不是目录。`add_library` 和 `add_executable` 创建节点，`target_link_libraries` 建立有向边。一个 target 携带四类使用要求（usage requirements）：包含目录、编译定义、编译选项、链接库。这些要求会沿着依赖边**传递**给消费者，这正是现代 CMake 与全局变量式 CMake 的分水岭。\n\n依赖图必须是有向无环的。如果 A 库的源文件 include 了 B 的头文件，B 又反过来 include A，CMake 不会报错，它会照样建出两条边，然后在链接期或运行期以奇怪的方式失败；更常见的是两个库互相 target_link_libraries，静态库场景下链接顺序会让符号时有时无。发现循环依赖时，正确做法是抽出第三个 target 放公共部分，而不是反复调链接顺序。\n\n可见性三档决定传递规则：PRIVATE 只作用于自己；PUBLIC 作用于自己和消费者；INTERFACE 只作用于消费者（header-only 库用它）。把 `include/` 写成 PRIVATE，库自己能编，但任何链接它的可执行文件都找不到头文件——这是最常见的库能编、app 编不过。\n\nDebug 和 Release 不是两个开关，而是两套配置：单配置生成器看 `CMAKE_BUILD_TYPE`，多配置生成器看 `--config`。它们决定优化级别与宏定义，Release 通常带 `-O3 -DNDEBUG`，Debug 是 `-g`。两者行为不同是设计使然，不是 bug；但如果代码依赖 assert 做参数校验，Release 下等于没校验。\n\n跨平台差异里最容易被忽略的是类型宽度：long 在 LP64（Linux、macOS 64 位）是 8 字节，在 LLP64（Windows 64 位）是 4 字节；char 在 x86 上默认有符号，在很多 ARM 平台上默认无符号；字节序只在多字节整数落盘或上网时才有影响。结论很朴素：要固定宽度的整数就用 cstdint 里的 std::int64_t，要处理字节序就显式转换，而不是把指针强转成另一种类型去读。\n\n可复现构建是最后一层：同样的源码、同样的编译器版本、同样的依赖版本，产出同样的二进制。它要求固定标准（`CMAKE_CXX_STANDARD 17` 加 `CXX_EXTENSIONS OFF`，避免 gnu++17 的扩展）、固定依赖（锁 tag 而不是分支）、去掉路径与时间戳。\n\n## 三、代码逐行\n\n构建与运行：\n\n```bash\ncmake -S . -B build -DCMAKE_BUILD_TYPE=Debug\ncmake --build build --config Debug\nctest --test-dir build --output-on-failure\n```\n\n1. `cmake_minimum_required(VERSION 3.20)` —— 声明策略版本。写低了会沿用旧策略（比如某些 option 的历史行为），写高了在旧 CMake 上直接报错。3.20 是 FetchContent 与生成器表达式都比较完整的起点。\n2. `project(cart LANGUAGES CXX)` —— 只声明 C++。不写 C 就不会去找 C 编译器，跨平台时少一个依赖。\n3. `set(CMAKE_CXX_STANDARD 17)` 加 `CXX_STANDARD_REQUIRED ON` 加 `CXX_EXTENSIONS OFF` —— 三行缺一不可：第一行只是希望，第二行拒绝降级（编译器不支持就报错，而不是悄悄用 C++14），第三行用 `-std=c++17` 而不是 `-std=gnu++17`，避免 GCC 扩展混进来导致 MSVC 编不过。\n4. `add_library(cart src/cart.cpp)` —— 一个 target 就是一个构建单元。显式列出源文件，不用通配符：新增文件时构建系统立刻知道，不会出现改了没生效。\n5. `target_include_directories(cart PUBLIC include PRIVATE src)` —— PUBLIC 的 include 让消费者自动获得头文件路径；PRIVATE 的 src 只给自己用，外部看不到实现目录。写反了就是实现细节泄漏。\n6. 编译选项那几行用生成器表达式按编译器分支：MSVC 给 `/W4` 与 `/permissive-`，其他编译器给 `-Wall -Wextra -Wpedantic`。注意条件写作 `$<NOT:$<CXX_COMPILER_ID:MSVC>>`，而不是在 if 里手写两套；另外每个选项单独一条表达式，不要把多个选项塞进同一个 genex——没加引号的空格会被 CMake 当成参数分隔。\n7. `FetchContent_Declare(Catch2 ... GIT_TAG v3.16.1)` —— 用 tag 而不是 main：分支会随时间漂移，可复现构建就没了。网络受限时用 `-DFETCHCONTENT_SOURCE_DIR_CATCH2=<本地路径>` 指向离线副本。\n8. `target_link_libraries(cart_tests PRIVATE cart Catch2::Catch2WithMain)` —— 测试只链接 cart，就自动拿到 include 目录；如果这里还要额外写 include 路径，说明第 5 步的可见性写错了。\n9. `add_test(NAME cart COMMAND cart_tests)` —— 把可执行文件注册成 CTest 用例。`ctest --output-on-failure` 才会在失败时打印断言输出，否则你只看到一行失败。\n10. 测试里的 `REQUIRE(c.total_cents() == 800)` —— REQUIRE 失败即中止当前用例，CHECK 会继续跑完。后续断言依赖前面结果时必须用 REQUIRE，否则一次失败会带出一串误导性的连锁错误。\n\n## 四、三个常见误区\n\n### 误区一：include_directories 一把梭，能编过就行\n\n现象：`include_directories(include)` 写一次全项目生效，新模块加头文件自动就能用。半年后这个库被另一个项目复用，对方怎么都编不过——因为它的头文件依赖一个没人声明的 include 路径。\n\n为什么错：全局 include 路径抹掉了依赖关系。A 用了 B 的头文件，但构建系统里没有任何一条边记录这件事；换目标、换目录、换构建顺序就断。它还会掩盖循环依赖，让拆分永远做不了。\n\n正确做法：每个 target 用 `target_include_directories` 声明自己的接口，依赖通过 `target_link_libraries` 传递。判断标准是：把这个库单独拎出去，除了链接它之外不需要任何额外配置就能编。\n\n### 误区二：Debug 能跑 Release 崩，是编译器优化有 bug\n\n现象：-O0 正常，-O2 崩溃或者结果不对，于是把 Release 的优化级别调低\"修复\"。\n\n为什么错：绝大多数情况是代码里有未定义行为，比如越界、有符号溢出、未初始化读、严格别名违规。优化器有权假设 UB 不会发生，于是删掉不可能的分支、把变量放进寄存器、把读操作提前。Debug 下的内存布局与执行顺序恰好让它看起来正常。\n\n正确做法：先用 `-fsanitize=address,undefined` 在 Debug 下跑一遍，再用 -O2 复核。要修的是 UB，不是优化级别。把 Release 改成 -O0 只是把 bug 藏回去。\n\n### 误区三：单元测试等功能稳定了再补\n\n现象：项目上线半年想加测试，发现每个函数都要连数据库、读全局配置、依赖单例，写一个测试要起半个服务。\n\n为什么错：可测试性是被设计出来的，不是事后补的。测试写不进去，通常说明依赖是隐式的（全局单例、函数内直接读环境变量），而这本身就是设计缺陷；target 模型治的是同一类病——依赖没有显式声明。\n\n正确做法：第一天就给核心逻辑（纯计算、无 IO）建一个测试 target，哪怕只有三个用例；IO 和全局状态留在边界层。Catch2 的最小接入只有三步：拉依赖、`add_executable`、`target_link_libraries(... Catch2::Catch2WithMain)`。\n\n## 五、边界与代价\n\n- CMake 不是唯一选择，也不总是正确选择：一个两百行的单文件工具，`cc tool.c -o tool` 就够了。引入 CMake 的代价是目录层级、configure 步骤、跨平台脚本维护，以及新人第一次构建要读 README。判断依据是有没有第二个平台、第二个消费者、第二个构建配置。\n- target 模型写严格了前期会慢：每个库都要想清楚 PUBLIC 还是 PRIVATE，头文件要分 include（公开）与 src（私有）。小项目里这是纯开销。\n- FetchContent 让构建即下载，代价是网络依赖和 configure 变慢；离线环境、审计要求高的场景应该 vendor 依赖或指向内部镜像，并锁 hash。\n- 测试不是越多越好：测实现细节的用例会在重构时成批失效，维护成本高于收益。优先测契约（输入输出、边界、错误码），不测私有函数。\n- 可复现构建也有代价：固定编译器版本意味着 CI 镜像要跟着升级，重定位路径参数会让调试路径变形。它的收益是能证明两个二进制来自同一份源码，而不是构建更快。\n- 增量构建的体验也取决于 target 的切分：一个巨型 target 意味着改一行头文件就重编整个项目，按模块拆开能把重编范围压到局部。ccache 之类的工具能缓存编译产物，但缓存的键是编译命令的哈希，编译选项一变就全部失效，这也是选项应当集中声明、不要散落各处的原因。\n- 反例：给一个只跑一次的迁移脚本搭 CMake 加 Catch2 加 CI。它需要的只是一个能读懂的 main 和一段注释。\n\n## 六、动手任务\n\n1. 按 `code` 建出目录：include/cart.hpp、src/cart.cpp、tests/test_cart.cpp、CMakeLists.txt。用三条命令构建并跑测试，确认输出百分百通过。\n2. 把 `target_include_directories(cart PUBLIC include PRIVATE src)` 里的 PUBLIC 改成 PRIVATE，重新 configure 再 build。记录 cart_tests 的报错原文，并解释为什么 cart 自己仍然能编译。\n3. 给 Cart 加一个 `void clear()` 清空 items，在测试里加一个用例验证 clear 之后 size 为 0 且 total_cents 为 0。确认不需要改 CMakeLists——因为源文件是显式列出的，只有新增文件才需要改。\n4. 用 `-DCMAKE_BUILD_TYPE=Release` 再构建一次，对比两次 CMakeCache.txt 里 `CMAKE_CXX_FLAGS_RELEASE` 的值；然后故意写一个越界读，分别在 Debug 与 Release 下运行，记录行为差异。\n\n## 七、一句话总结\n\n- CMake 的真相源是 target 和它携带的依赖边，不是全局 include 路径。\n- PUBLIC、PRIVATE、INTERFACE 决定谁能看到，写错的表现是库能编、app 编不过。\n- 显式列源文件不用通配符，新增文件让构建系统立刻知道。\n- 固定标准、固定依赖 tag、固定编译器，才有可复现构建。\n- 测试从第一天写，测契约不测实现；写不进去说明依赖没显式化。",
+          "code": "# ============================================================\n# CMakeLists.txt\n# 构建与测试（三条命令）：\n#   cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug\n#   cmake --build build --config Debug\n#   ctest --test-dir build --output-on-failure\n# 离线环境（已下载 Catch2 源码）：\n#   cmake -S . -B build -DFETCHCONTENT_SOURCE_DIR_CATCH2=/path/to/Catch2\n# ============================================================\ncmake_minimum_required(VERSION 3.20)\nproject(cart LANGUAGES CXX)\n\nset(CMAKE_CXX_STANDARD 17)\nset(CMAKE_CXX_STANDARD_REQUIRED ON)\nset(CMAKE_CXX_EXTENSIONS OFF)\n\nadd_library(cart src/cart.cpp)\ntarget_include_directories(cart PUBLIC include PRIVATE src)\ntarget_compile_options(cart PRIVATE\n    $<$<CXX_COMPILER_ID:MSVC>:/W4>\n    $<$<CXX_COMPILER_ID:MSVC>:/permissive->\n    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall>\n    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wextra>\n    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wpedantic>)\n\ninclude(CTest)\nif(BUILD_TESTING)\n    include(FetchContent)\n    FetchContent_Declare(Catch2\n        GIT_REPOSITORY https://github.com/catchorg/Catch2.git\n        GIT_TAG v3.16.1)\n    FetchContent_MakeAvailable(Catch2)\n\n    add_executable(cart_tests tests/test_cart.cpp)\n    target_link_libraries(cart_tests PRIVATE cart Catch2::Catch2WithMain)\n    add_test(NAME cart COMMAND cart_tests)\nendif()\n\n# ============================================================\n# include/cart.hpp\n# ============================================================\n#pragma once\n\n#include <cstddef>\n#include <cstdint>\n#include <vector>\n\nnamespace cart {\n\nstruct Item {\n    std::int64_t price_cents;\n    int qty;\n};\n\nclass Cart {\npublic:\n    void add(Item it);\n    void clear() noexcept;\n    std::size_t size() const noexcept;\n    std::int64_t total_cents() const noexcept;\n\nprivate:\n    std::vector<Item> items_;\n};\n\n}  // namespace cart\n\n# ============================================================\n# src/cart.cpp\n# ============================================================\n#include \"cart.hpp\"\n\nnamespace cart {\n\nvoid Cart::add(Item it) { items_.push_back(it); }\n\nvoid Cart::clear() noexcept { items_.clear(); }\n\nstd::size_t Cart::size() const noexcept { return items_.size(); }\n\nstd::int64_t Cart::total_cents() const noexcept\n{\n    std::int64_t sum = 0;\n    for (const auto &it : items_) {\n        // 先转 64 位再乘：price_cents 已经是 int64，qty 是 int，不会溢出\n        sum += it.price_cents * static_cast<std::int64_t>(it.qty);\n    }\n    return sum;\n}\n\n}  // namespace cart\n\n# ============================================================\n# tests/test_cart.cpp\n# ============================================================\n#include <catch2/catch_test_macros.hpp>\n\n#include \"cart.hpp\"   // 能直接 include，靠的是 cart 的 PUBLIC include\n\nTEST_CASE(\"空购物车总价为 0\", \"[cart]\")\n{\n    cart::Cart c;\n    REQUIRE(c.size() == 0);\n    REQUIRE(c.total_cents() == 0);\n}\n\nTEST_CASE(\"金额乘以数量后相加\", \"[cart]\")\n{\n    cart::Cart c;\n    c.add({250, 2});\n    c.add({100, 3});\n    REQUIRE(c.size() == 2);\n    REQUIRE(c.total_cents() == 800);\n}\n\nTEST_CASE(\"clear 之后归零\", \"[cart]\")\n{\n    cart::Cart c;\n    c.add({999, 1});\n    c.clear();\n    REQUIRE(c.size() == 0);\n    REQUIRE(c.total_cents() == 0);\n}",
+          "quiz": [
+            {
+              "q": "下面代码在 64 位 Windows（MSVC）与 64 位 Linux（GCC）上分别编译，两次输出是？\n\n```cpp\n#include <cstdio>\n#include <cstdint>\nint main() {\n    std::printf(\"%zu %zu\", sizeof(long), sizeof(std::int64_t));\n}\n```",
+              "options": [
+                "Windows 是 4 8，Linux 是 8 8",
+                "两边都是 8 8",
+                "Windows 是 4 8，Linux 也是 4 8",
+                "Windows 是 8 4，Linux 是 8 8"
+              ],
+              "answer": 0,
+              "explain": "Windows 64 位是 LLP64，long 仍然是 4 字节；Linux 与 macOS 64 位是 LP64，long 是 8 字节；int64_t 在所有平台都保证 8 字节，所以每组的第二个数都是 8。两边都 8 8 是把 LP64 当成通用规则；说 Linux 的 long 是 4 字节混淆了 ILP32；Windows 上 int64_t 不可能是 4 字节。"
+            },
+            {
+              "q": "库这样声明头文件目录，可执行文件 app 链接了 cart 却编不过 `#include \"cart.hpp\"`，原因是？\n\n```text\ntarget_include_directories(cart PRIVATE include)\ntarget_link_libraries(app PRIVATE cart)\n```",
+              "options": [
+                "因为 app 没有对 cart 调用 target_link_libraries，依赖不会建立",
+                "因为 PRIVATE 只影响编译选项，不影响头文件搜索路径",
+                "因为 app 必须再用全局 include_directories 把 include 加一遍",
+                "因为 PRIVATE 的包含目录不传递给消费者，app 拿不到 cart.hpp；应改成 PUBLIC include"
+              ],
+              "answer": 3,
+              "explain": "包含目录属于使用要求，PRIVATE 意味着只给 cart 自己用，链接 cart 的 app 不会继承这条路径。app 确实链接了 cart，边是存在的；PRIVATE 影响的正是使用要求的传递，不只是编译选项；用全局 include_directories 能绕过但会把依赖关系重新抹掉，是错误示范。"
+            },
+            {
+              "q": "target_link_libraries(app PRIVATE lib) 会传递哪些东西？",
+              "options": [
+                "只传递链接库本身，包含目录和编译定义必须各自再写一遍",
+                "把 lib 的 PUBLIC 与 INTERFACE 使用要求传给 app，PRIVATE 的只留给 lib 自己",
+                "把 lib 的全部编译选项原样复制给 app，包括 PRIVATE 的那些",
+                "只在同一目录下生效，跨目录时必须重新声明一遍"
+              ],
+              "answer": 1,
+              "explain": "target 是一条带属性的依赖边：PUBLIC 与 INTERFACE 的包含目录、编译定义、链接库会流向消费者，PRIVATE 的不会。这正是显式依赖的核心，所以第一项说只传库是错的；PRIVATE 选项不会外泄，第三项说反了；target 的名字是全局的，不按目录划分作用域。"
+            },
+            {
+              "q": "下面哪种项目不该引入 CMake、Catch2 这一整套？",
+              "options": [
+                "需要同时支持 Windows、Linux、macOS 三套构建的项目",
+                "要被多个项目通过 find_package 复用的库",
+                "一个两百行、只在一个平台跑一次的单文件工具",
+                "需要 Debug 与 Release 两套配置并接入 CI 的项目"
+              ],
+              "answer": 2,
+              "explain": "单文件一次性工具用 cc tool.c -o tool 就够，引入 CMake 换来的是目录层级、configure 步骤和新人上手成本，收益接近零。多平台、被复用的库、多配置加 CI 这三种情况恰好是 CMake 的强项：它们都需要一份可复现的依赖与配置描述。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c-expert",
+      "name": "精通",
+      "goal": "能指出一段 C/C++ 代码里哪一行是未定义行为并用工具把它变成可复现的报错，能说清一次多线程读写靠什么建立先后关系并写出无数据竞争的同步代码，能判断一次头文件或结构体改动是否会破坏二进制兼容并设计出稳定的库边界。",
+      "lessons": [
+        {
+          "id": "c-09",
+          "title": "未定义行为与可移植性：编译器为什么敢删掉你的检查",
+          "minutes": 45,
+          "lang": "c",
+          "content": "## 一、先看一个会出事的场景\n\n某次迭代把一个有序数组的二分查找从测试环境搬到线上，数据量变大之后，服务在凌晨开始随机崩溃。代码本身只有一行值得怀疑：\n\n```c\nint mid = (lo + hi) / 2;   /* lo、hi 都接近 INT_MAX 时，lo + hi 已经溢出 */\n```\n\n开发者第一反应是「溢出了大不了回绕成负数，最多查错一次」。但这里的 `lo + hi` 是有符号加法，结果超出 `int` 范围属于未定义行为（undefined behavior，下文简称 UB），编译器没有义务按补码回绕。在 `-O2` 下它可以把溢出后的值当作不存在，把 `mid` 的符号推断成「必定非负」，进而删掉下面对负下标的检查，最后 `a[mid]` 落在一段完全无关的内存上。于是现象不是「查不到」，而是段错误。\n\n第二段代码更能说明问题：\n\n```c\nint deref(int *p) {\n    int v = *p;          /* 这里已经解引用 */\n    return p ? v : 0;    /* 于是编译器推断 p 一定非空 */\n}\n```\n\n编译器看到 `*p` 时就已经假定 `p` 不为空——否则程序在上一行就已经是 UB，而 UB 之后的任何代码都没有意义。所以它把三元表达式折叠成 `return v;`。调用方传 `NULL` 时不再得到 0，而是直接崩。这个崩溃不是编译器「优化错了」，而是标准允许它这么做。\n\n第三个现象是「检查被吃掉」：\n\n```c\nif (x + 1 < x) {  /* 想检测有符号溢出 */\n    puts(\"overflow\");\n}\n```\n\n用 `cc -O2` 编译，整段分支经常直接消失，因为「`x + 1` 溢出」被假定不会发生，于是 `x + 1 < x` 恒假。加 `-Wall` 有时会提示这个比较恒为假，但很多时候你只看到行为变了。\n\n这三件事的共同点：Debug 构建对、Release 构建错；本机对、CI 错；加一行 `printf` 就「好了」。因为它们依赖的不是代码，而是这次编译时优化器做出的选择。\n\n## 二、原理：它到底怎么运作\n\n标准对 UB 的措辞是「no requirements」：一旦执行到，整个程序的行为都不再有保证，包括 UB 之前已经打印出来的输出。注意它和另外两个概念的区别。实现定义行为（implementation-defined）有确定的合法结果集合，只是由实现选一个并写进文档，例如 `char` 是否有符号、`int` 多少位；未指定行为（unspecified）也不唯一，但仍在合法集合内，例如函数实参的求值顺序。UB 是第三个档次：不在合法集合里，结果随便。\n\n优化器之所以敢动手，是因为它在中间表示上给运算打了标记。LLVM 把「不会溢出」的加法标成 `nsw`（no signed wrap）、把「不会越界」的指针运算标成 `inbounds`。有了这些标记，它就能做代数变换：把 `x + 1 > x` 化简为真，把循环归纳变量改写成闭式，把「不可能发生」的检查分支判定为不可达并整段删除。这不是编译器在钻空子，而是 C 和 C++ 的性能模型本身：语言把「不产生 UB」的责任交给程序员，换来优化器不必为每种边界都保留运行时检查。\n\n最高频的来源就那么几类：有符号整数溢出；数组越界或指针算术越出同一数组对象（`p + 1` 最多只能指到数组尾后一位）；读取未初始化的自动变量（值不确定，读它就是 UB，`unsigned char` 有一点点豁免）；严格别名违规，用 `float *` 去读一个 `int` 对象；解引用空指针或已释放的指针；有符号左移溢出、除以零；以及同一表达式中对同一对象多次写而没有序列点。\n\n还有一类不是 UB、但同样会让人算错的东西：整型提升与常规算术转换。`int` 和 `unsigned` 混算时 `int` 会被转成 `unsigned`，所以 `-1 < 1u` 是假，`for (int i = 0; i < v.size(); ++i)` 里 `i` 与无符号的 `size()` 比较时负值会变成巨大的正数。这些规则定义良好，只是反直觉，和 UB 要分开记：前者可以靠 `-Wsign-compare` 提前发现，后者必须靠工具在运行时抓。\n\n把 UB 变成可见错误的手段是 Sanitizer。`-fsanitize=undefined` 会在可能出问题的运算前插入检查，命中时打印 `runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'` 并以非零码退出；`-fsanitize=address` 负责越界、use-after-free 与重复释放。再配合 `-Wall -Wextra -Wconversion`，大部分低级错误在编译期就能拦下。前提是这些路径真的被执行过：Sanitizer 不是静态证明，它只检查跑到的代码。\n\n## 三、代码逐行\n\n下面这个文件把四类常见的边界都写成「先判断、再运算」的形式，可以直接用 `cc -std=c11 -O2 -Wall -Wextra -fsanitize=undefined` 编译运行。\n\n```c\n/* ub.c —— 编译：cc -std=c11 -O2 -Wall -Wextra -fsanitize=undefined ub.c -o ub */\n#include <limits.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n\n/* 1. 饱和加法：先判边界，绝不执行会溢出的加法 */\nstatic int sat_add(int a, int b)\n{\n    if (b > 0 && a > INT_MAX - b) return INT_MAX;\n    if (b < 0 && a < INT_MIN - b) return INT_MIN;\n    return a + b;\n}\n\n/* 2. 无符号回绕是定义良好的，正好用来做哈希 */\nstatic uint32_t fnv1a(const char *s)\n{\n    uint32_t h = 2166136261u;\n    for (; *s; ++s) {\n        h ^= (unsigned char)*s;\n        h *= 16777619u;\n    }\n    return h;\n}\n\n/* 3. 用 memcpy 观察对象表示，而不是 *(uint32_t *)&f */\nstatic uint32_t bits_of(float f)\n{\n    uint32_t u;\n    memcpy(&u, &f, sizeof u);\n    return u;\n}\n\n/* 4. 位移前先检查位宽 */\nstatic uint32_t mask_low(unsigned n)\n{\n    if (n >= 32) return UINT32_MAX;\n    return (1u << n) - 1u;\n}\n\nint main(void)\n{\n    printf(\"%d %d %d\\n\", sat_add(INT_MAX, 1), sat_add(INT_MIN, -1), sat_add(2, 3));\n    printf(\"%08x\\n\", (unsigned)fnv1a(\"notelab\"));\n    printf(\"%08x\\n\", (unsigned)bits_of(1.0f));\n    printf(\"%08x %08x\\n\", (unsigned)mask_low(8), (unsigned)mask_low(40));\n    return 0;\n}\n/* 输出：\n   2147483647 -2147483648 5\n   066f762c\n   3f800000\n   000000ff ffffffff */\n```\n\n第一行 `if (b > 0 && a > INT_MAX - b)`：先按 `b` 的符号分方向，再判断边界。所有参与运算的值都在可表示范围内，`INT_MAX - b` 不会溢出。如果写成 `if (a + b > INT_MAX)`，检查和被检查的是同一次加法，检查本身就已经是 UB，工具都抓不到「意图」。\n\n第二行 `return a + b;` 只有在两个分支都没触发时才执行，此时加法数学上一定不溢出。这个顺序不能反：先算后查是无效的，先查后算才成立。\n\n`h *= 16777619u;` 依赖的是无符号整数的模运算：溢出按 2 的 32 次方回绕，标准明确保证，FNV 哈希的正确性就建立在这条保证上。把 `h` 换成 `int`，同样的代码就是 UB，`-O2` 下结果可能与 `-O0` 不同。\n\n`h ^= (unsigned char)*s;` 里的强制转换不能省。`char` 在 x86 Linux 上是有符号的，遇到大于等于 0x80 的字节会符号扩展成负数，异或进 `uint32_t` 后得到不同的哈希值。同一份 UTF-8 数据在 x86 与 ARM 上算出两个哈希，是典型的可移植性事故。\n\n`memcpy(&u, &f, sizeof u);` 是标准认可的「按字节观察对象表示」的通道，也是唯一能安全做类型双关的写法。现代编译器会把它优化成一条寄存器移动，成本为零；而 `*(uint32_t *)&f` 违反严格别名规则，`-O2` 下可能读到过期值。\n\n`if (n >= 32) return UINT32_MAX;` 挡的是移位位数不小于类型宽度，`1u << 32` 是 UB，在 x86 上硬件会把移位量按 32 取模得到一个看似合理的 1，在 ARM 上则可能得到 0，这种「两台机器结果不同」最难查。\n\n最后一行 `printf(\"%08x\", (unsigned)fnv1a(...))`：`%x` 要求的是 `unsigned int`，`uint32_t` 在多数平台正好是它，显式转换是为了在任何平台上都不依赖默认实参提升的细节，属于花零成本买确定性。\n\n## 四、三个常见误区\n\n### 误区一：本机跑通了，说明代码是对的\n\n现象：同一份代码在开发机上跑一年没事，换 CI 的编译器或开 `-O2` 就出错。为什么错：你验证的是「这一版编译器这一次的选择」，不是标准。UB 的实现自由度大到可以今天删分支、明天生成陷阱指令。正确做法是把 Sanitizer 构建加进 CI，并且在不同优化级别下各跑一次测试。\n\n### 误区二：UB 只在执行到那一行时才发作\n\n现象：有人认为「只要输入不会触发溢出，那个溢出分支就是死代码，无所谓」。为什么错：优化器会基于「UB 不会发生」重写它上游的代码，可能把循环改成无限循环、把后面的检查删掉，甚至让 UB 之前的输出都不出现。正确做法是把 UB 当成「整段函数都不可信」来处理，而不是「那一行有问题」。\n\n### 误区三：全局加 `-fwrapv -fno-strict-aliasing` 就安全了\n\n现象：团队为了「稳定」在构建脚本里全局关掉这两类优化。为什么错：这相当于换了一门语言方言，只对当前编译器成立，代价是循环归纳变量优化、别名优化等一整类优化失效；更关键的是它掩盖了真正的问题——你依然不知道哪一行会溢出，只是让它安静地回绕。正确做法是在输入边界处显式检查，只在确有需要的翻译单元上局部关闭优化。\n\n## 五、边界与代价\n\nSanitizer 不是免费的：ASan 通常让程序慢 2 倍左右、内存占用翻倍甚至更多，UBSan 便宜一些但同样插入分支，两者都不该进发布构建。它们还只覆盖执行到的路径，一次「Sanitizer 全绿」的测试不能证明没有 UB，只能证明这批用例没踩到。\n\n严格别名优化在数值计算里收益明显，全局关掉会让一部分热循环失去向量化机会，具体幅度依代码而定，但不该作为默认选项。反过来，逐元素做饱和检查也有成本：分支可预测时几乎免费，在每帧百万次的内层循环里则会明显拖慢。合适的做法是外层校验一次长度与范围，内层走不检查的快路径。\n\n反例：给一个启动时读一次配置的函数加满边界检查完全没问题，但如果在一个向量加法内核里逐元素判断 `INT_MAX`，性能会塌，而正确做法是调用方在进入内核前一次性验证长度与取值范围。判断标准是「这段代码被调用多少次」和「坏数据从哪来」，而不是「检查越多越安全」。\n\n## 六、动手任务\n\n写一个可移植的乘法溢出检测 `int mul_overflow(int a, int b, int *out)`：不允许真正执行 `a * b`，可表示时写入结果并返回 0，否则返回 -1。要求不用 `__builtin_mul_overflow`，只用 `INT_MAX / INT_MIN` 与符号判断实现。\n\n用这张表验证：`(2,3)` 得到 `0:6`，`(INT_MAX,2)` 得到 `-1`，`(INT_MIN,-1)` 得到 `-1`，`(0,INT_MIN)` 得到 `0:0`，`(-7,6)` 得到 `0:-42`。再写一个对照版本，函数体直接 `*out = a * b; return 0;`，用 `-fsanitize=undefined` 编译，确认它在 `(INT_MAX,2)` 上打印 `runtime error: signed integer overflow` 并以非零码退出。两个版本行为一致才算做对；把你的 `mul_overflow` 也接上 Sanitizer 跑一遍，确认零报告。\n\n## 七、一句话总结\n\n- UB 不是「结果不可预测」，而是标准不给任何保证，优化器可以据此删掉整段代码。\n- 有符号溢出、越界、未初始化读、严格别名是四个最高频来源；无符号回绕是合法的，别一起禁。\n- 检查必须在运算之前，先算后查等于没查。\n- `-fwrapv` 是改语言语义的止痛药，边界检查才是解法。\n- Sanitizer 把隐形 UB 变成可复现的报错，但它只检查跑到的路径。\n",
+          "code": "/* ub.c —— 未定义行为与可移植性：先判边界，再运算\n * 编译：cc -std=c11 -O2 -Wall -Wextra -fsanitize=undefined,address ub.c -o ub\n *   或：clang -std=c11 -O2 -Wall -Wextra -fsanitize=undefined,address ub.c -o ub\n * 去掉 -fsanitize 即为发布构建；加 -DNDEBUG 也不影响本文件的正确性。\n */\n#include <limits.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n\n/* 饱和加法：任何时刻都不执行会溢出的加法 */\nstatic int sat_add(int a, int b)\n{\n    if (b > 0 && a > INT_MAX - b) return INT_MAX;   /* 正溢出边界 */\n    if (b < 0 && a < INT_MIN - b) return INT_MIN;   /* 负溢出边界 */\n    return a + b;                                   /* 到这里数学上一定可表示 */\n}\n\n/* FNV-1a 32 位：依赖无符号乘法的模 2^32 回绕（标准保证） */\nstatic uint32_t fnv1a(const char *s)\n{\n    uint32_t h = 2166136261u;\n    for (; *s; ++s) {\n        h ^= (unsigned char)*s;   /* 不转 unsigned char 会符号扩展，跨平台结果不同 */\n        h *= 16777619u;           /* 换成 int 就是 UB */\n    }\n    return h;\n}\n\n/* 按字节观察 float 的对象表示：memcpy 是标准认可的通道 */\nstatic uint32_t bits_of(float f)\n{\n    uint32_t u;\n    memcpy(&u, &f, sizeof u);    /* 优化后就是一条寄存器移动 */\n    return u;\n}\n\n/* 低位掩码：移位位数必须先检查，1u << 32 是 UB */\nstatic uint32_t mask_low(unsigned n)\n{\n    if (n >= 32) return UINT32_MAX;\n    return (1u << n) - 1u;\n}\n\n/* 无符号版本的「加一并检测回绕」，用于对比：这里回绕是合法行为 */\nstatic unsigned uadd_wrap(unsigned a, unsigned b)\n{\n    return a + b;                /* 模 2^32，可以放心依赖 */\n}\n\nint main(void)\n{\n    printf(\"sat: %d %d %d\\n\",\n           sat_add(INT_MAX, 1),        /* 2147483647 */\n           sat_add(INT_MIN, -1),       /* -2147483648 */\n           sat_add(2, 3));             /* 5 */\n\n    printf(\"fnv1a(notelab)=%08x\\n\", (unsigned)fnv1a(\"notelab\"));   /* 066f762c */\n    printf(\"bits(1.0f)=%08x\\n\", (unsigned)bits_of(1.0f));          /* 3f800000 */\n\n    printf(\"mask(8)=%08x mask(40)=%08x\\n\",\n           (unsigned)mask_low(8),      /* 000000ff */\n           (unsigned)mask_low(40));    /* ffffffff */\n\n    printf(\"wrap=%u\\n\", uadd_wrap(UINT_MAX, 1u));                  /* 0 */\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```c\nunsigned u = 1;\nint i = -1;\nprintf(\"%d\\n\", i < u);\n```",
+              "options": [
+                "`-1`，比较结果按有符号输出",
+                "结果不确定，这是未定义行为",
+                "`0`，因为 `i` 被转换成 `unsigned` 后等于 `UINT_MAX`",
+                "`1`，因为 -1 小于 1"
+              ],
+              "answer": 2,
+              "explain": "`int` 与 `unsigned` 混合运算时发生常规算术转换，`int` 转成 `unsigned`，-1 变成 `UINT_MAX`，所以比较为假，输出 0。选 1 是没考虑转换；选 -1 是把布尔结果当成了减法；选「未定义行为」是把「反直觉但定义良好」和 UB 混为一谈——真实 UB 是 `i < sizeof(x)` 那类之外的越界，而不是这条有明确答案的转换规则。"
+            },
+            {
+              "q": "下面这个求绝对值的函数，输入 `INT_MIN` 时的问题是什么？\n\n```c\nint abs_int(int x)\n{\n    return x < 0 ? -x : x;\n}\n```",
+              "options": [
+                "没有问题，`-INT_MIN` 会回绕成 `INT_MIN`，结果仍然正确",
+                "应当把条件改成 `x <= 0` 即可修复",
+                "把返回类型改成 `long` 就能修复",
+                "`-INT_MIN` 无法用 `int` 表示，是有符号溢出 UB，应先判断再返回饱和值"
+              ],
+              "answer": 3,
+              "explain": "`INT_MIN` 的相反数比 `INT_MAX` 大 1，`int` 表示不了，这条取负就是有符号溢出 UB。虽然多数机器上会回绕回 `INT_MIN`，但那是实现细节，优化器有权假设它不发生。改条件只是改变走到取负的入口，不改变取负本身的 UB；把返回类型改成 `long` 也没用，因为 `-x` 仍然在 `int` 上求值，溢出发生在转换之前。"
+            },
+            {
+              "q": "为什么 `-O2` 下 `if (x + 1 < x) puts(\"overflow\");` 这段分支经常被整段删掉？",
+              "options": [
+                "因为 `-O2` 默认开启了 `-fwrapv`，回绕后条件确实为假",
+                "编译器假定 `x + 1` 不会溢出（UB），于是推断该条件恒假",
+                "编译器把加法自动换成了无符号加法",
+                "因为 `puts` 的返回值没有被使用，属于无副作用调用"
+              ],
+              "answer": 1,
+              "explain": "有符号溢出是 UB，优化器据此可以认为 `x + 1` 的数学值一定落在 `int` 范围内，于是 `x + 1 > x` 恒真、条件恒假。它并没有把加法换成无符号；`puts` 有副作用，不会被当成无用调用；`-fwrapv` 恰恰是关闭这种假设的选项，默认并不开启。"
+            },
+            {
+              "q": "下面哪种做法是真正减少未定义行为，而不是把它藏起来？",
+              "options": [
+                "把所有 `int` 全部换成 `long long`",
+                "给所有变量加上 `volatile`，阻止编译器优化",
+                "在可能溢出的运算之前做边界检查，并让 CI 用 UBSan/ASan 跑一遍测试",
+                "全局加 `-fwrapv -fno-strict-aliasing`，让行为退回补码语义"
+              ],
+              "answer": 2,
+              "explain": "边界检查消除了 UB 的成因，Sanitizer 让残余问题在测试期暴露，两者配合才是解法。全局改语义只对当前编译器成立，且掩盖了「哪一行会溢出」这个事实；`long long` 同样会溢出，只是把边界推远；`volatile` 管的是访问不能被省略，既不提供原子性也不阻止有符号溢出的 UB。"
+            }
+          ]
+        },
+        {
+          "id": "c-10",
+          "title": "并发与内存模型：数据竞争、原子操作与可见性",
+          "minutes": 50,
+          "lang": "cpp",
+          "content": "## 一、先看一个会出事的场景\n\n一个统计任务开了四个线程，每个线程把同一个全局计数器加一百万次，跑完之后打印出来是 3812447，不是 4000000。差的那十几万次不是「少算了」，而是被覆盖掉了：`++counter` 在机器层面是三条指令——把值从内存读到寄存器、寄存器加一、写回内存。两个线程可能同时读到 100，各自算出 101，再先后写回 101，两次更新只留下一次。更糟的是，因为 `counter` 不是 `std::atomic`，编译器完全可以把整个循环的累加提到寄存器里，只在最后写回一次，结果只剩一百万。\n\n第二类现象更隐蔽。一个线程这样发布数据：\n\n```cpp\ncfg.port = 8080;     /* 普通写 */\ncfg.ready = true;    /* 普通写，另一个线程轮询它 */\n```\n\n读线程等到 `ready == true` 再去读 `port`，偶尔拿到 0。因为这两次普通写之间没有同步关系，CPU 可以把 `ready` 先写出去、把 `port` 留在 store buffer 里；读线程看到 `ready` 为真时，`port` 可能还是旧值。有人试过加 `volatile`，发现只是让编译器不再把变量放进寄存器，问题照旧——`volatile` 不建立任何跨线程的先后关系。\n\n这两件事指向同一个结论：多线程下「代码按顺序执行」这件事，只有在你显式建立了先后关系之后才成立。\n\n## 二、原理：它到底怎么运作\n\n先给定义：两个线程访问同一个内存位置，至少有一个是写，并且这两个访问之间没有 happens-before 关系，就叫数据竞争（data race）。从 C++11 起，数据竞争是未定义行为，和上一节的越界、溢出属于同一档——不是「读到旧值」这么温和，而是优化器可以据此做任何事。\n\nhappens-before 只有两个来源。第一个是同一线程内的 sequenced-before，也就是程序顺序。第二个是跨线程的 synchronizes-with：对一个 `std::atomic` 做 release 写，另一个线程对同一对象做 acquire 读并读到了这个值；mutex 的 unlock 与随后的 lock；`std::thread` 构造完成与子线程开始执行、子线程结束与 `join` 返回；条件变量的 notify 与 wait 返回（借助 mutex 传递）。只要这条链建立起来，写方在 release 之前的全部写，对读方在 acquire 之后都可见。\n\n要区分三件事：原子性、可见性、顺序。`std::atomic` 的默认内存序是 `seq_cst`，三者都保证，代价是全局单一总序，编译器不能随意重排。`relaxed` 只保证「不会读到写了一半的值」以及「同一个原子对象在所有线程眼里有唯一一致的修改顺序」，不建立任何跨变量的先后关系，也不能用来发布数据。\n\n四档内存序的实用分工：`relaxed` 给纯计数、统计、序号发号；`release` 给写方的最后一步发布，`acquire` 给读方的第一步获取，两者配对就是发布-订阅；`acq_rel` 给 `fetch_add`、`exchange` 这类读改写操作；`seq_cst` 是默认值，不确定时就用它，正确性优先于那一点点性能。\n\nmutex 是最省心的同步原语：lock 与 unlock 天然建立 happens-before，临界区里的普通读写全部受保护。用 `std::lock_guard` 或 `std::unique_lock` 把解锁交给析构，异常路径也不会漏解锁；需要中途解锁、或者配合条件变量时必须用 `unique_lock`。临界区只放真正需要互斥的部分，绝不要在持锁时调用来源不明的回调——回调里可能再次加同一把非递归锁，直接死锁。\n\n条件变量有三个必须记住的点。第一，它必须配谓词：`wait(lk, pred)` 展开后就是 `while (!pred()) wait(lk);`，因为标准允许虚假唤醒，而且通知可能发生在你进入 wait 之前。第二，通知最好放在解锁之后，否则被唤醒的线程醒来第一件事是抢一把你还持有的锁，白等一轮。第三，`notify_one` 在没有等待者时是一次空操作，所以「先通知、后改状态」会让等待者永久睡下去。\n\ndefault 情况下还有一种看不见的争用：两个线程各自写自己的变量，但这两个变量落在同一条 64 字节的 cache line 上，每次写都会让对方的缓存行失效，缓存一致性流量随核数上升，扩展性直接归零，这叫伪共享（false sharing）。把一个结构体 `alignas(64)`，或者给每个线程的计数器加填充，就能让它们各占一行。\n\n死锁的四个必要条件——互斥、持有并等待、不可剥夺、循环等待——破坏任意一个即可。工程上最省事的是破坏循环等待：全局约定加锁顺序，或者用 C++17 的 `std::scoped_lock` 一次锁住多个互斥量，它内部用避免死锁的算法。\n\n## 三、代码逐行\n\n下面这个程序把三件事放在一起：relaxed 计数、mutex 加条件变量的有界队列、以及用对齐消除伪共享。用 `g++ -std=c++17 -O2 -pthread` 编译。\n\n```cpp\n#include <atomic>\n#include <condition_variable>\n#include <cstddef>\n#include <cstdio>\n#include <mutex>\n#include <queue>\n#include <thread>\n#include <vector>\n\nstatic std::atomic<long> g_ops{0};\n\nclass BoundedQueue {\npublic:\n    explicit BoundedQueue(std::size_t cap) : cap_(cap) {}\n    void push(int v) {\n        std::unique_lock<std::mutex> lk(m_);\n        not_full_.wait(lk, [this] { return q_.size() < cap_ || closed_; });\n        if (closed_) return;\n        q_.push(v);\n        lk.unlock();\n        not_empty_.notify_one();\n    }\n    bool pop(int &out) {\n        std::unique_lock<std::mutex> lk(m_);\n        not_empty_.wait(lk, [this] { return !q_.empty() || closed_; });\n        if (q_.empty()) return false;\n        out = q_.front();\n        q_.pop();\n        lk.unlock();\n        not_full_.notify_one();\n        return true;\n    }\n    void close() {\n        { std::lock_guard<std::mutex> lk(m_); closed_ = true; }\n        not_empty_.notify_all();\n        not_full_.notify_all();\n    }\nprivate:\n    std::mutex m_;\n    std::condition_variable not_empty_, not_full_;\n    std::queue<int> q_;\n    std::size_t cap_;\n    bool closed_ = false;\n};\n\nstruct alignas(64) PaddedCounter { std::atomic<long> v{0}; };\n```\n\n`g_ops.fetch_add(1, std::memory_order_relaxed)`：这里只要「不丢更新」，不需要把别的写一起发布，所以用 relaxed。它在 x86 上编译成一条 `lock add`，比 `seq_cst` 需要的完整屏障便宜；换成 `seq_cst` 结果同样正确，只是多付了屏障的钱。\n\n`not_full_.wait(lk, [this] { return q_.size() < cap_ || closed_; })`：谓词版本，被唤醒后先检查条件再决定是否继续睡。`lk` 在等待期间被原子地释放，返回前重新加锁——这就是为什么必须传 `unique_lock` 而不是 `lock_guard`。\n\n`if (closed_) return;` 关闭之后 push 直接丢弃，避免往一个再也不会被消费的队列里塞数据；这一行和上面的 `|| closed_` 配合，保证 close 时所有阻塞的 push 都能退出。\n\n`lk.unlock(); not_empty_.notify_one();` 先解锁再通知。如果持锁通知，被唤醒的消费者会立刻在 `lk` 上阻塞，等于白唤醒一次，高竞争下这部分开销很可观。\n\n`if (q_.empty()) return false;` 被唤醒不等于有数据：`close()` 也会唤醒所有等待者，而队列可能是空的。这一行是「唤醒是提示，条件才是事实」的落地。\n\n`struct alignas(64) PaddedCounter`：把对齐拉到 cache line 大小，两个计数器就不会共享同一条缓存行。去掉 `alignas(64)`，两个线程的写会互相使对方的行失效，性能可能差几倍，但结果依然正确——这类问题只能靠测量发现。\n\n## 四、三个常见误区\n\n### 误区一：`volatile` 可以当同步用\n\n现象：给共享标志加 `volatile`，认为「编译器每次都去内存读」就安全了。为什么错：`volatile` 只保证这次访问不被优化掉，既不提供原子性（`long` 在 32 位平台上仍可能撕裂），也不建立 happens-before，CPU 与编译器照样可以重排它周围的普通访问。正确做法是 `std::atomic` 配 acquire/release，或者直接用 mutex。\n\n### 误区二：变量是 atomic，组合操作就安全了\n\n现象：`if (!inited) { init(); inited = true; }`，其中 `inited` 是 `std::atomic<bool>`，两个线程仍然都执行了 `init()`。为什么错：原子性只作用于单次操作，读和写之间的空隙依然存在，两个线程可以同时读到 false。正确做法是用 `compare_exchange_strong` 做一次原子的「抢占」，或者干脆用 `std::call_once` / 静态局部变量。\n\n### 误区三：内存序只是性能开关，全部 relaxed 最快\n\n现象：把所有原子操作都改成 relaxed，压测通过，线上偶尔读到半初始化的对象。为什么错：relaxed 放弃了跨变量的顺序保证，写方「填好数据再置标志」这个顺序对读方不再成立。正确做法是只在确实不承担同步职责的地方（计数、统计）用 relaxed，发布数据必须 release/acquire 配对。\n\n## 五、边界与代价\n\n原子操作不是免费的。x86 上 acquire/release 基本不产生额外指令，但 `seq_cst` 的 store 需要 `xchg` 或 `mfence`，在热点上能测出差别；ARM 上 acquire/release 才真正体现为专用指令。反过来说，在 x86 上测不出差别，不代表代码在 ARM 服务器上也没问题——不要用「我这台机器上没差」来选内存序。\n\n无锁也不等于更快。CAS 循环在竞争激烈时重试次数暴涨，往往比一把 mutex 慢，还要额外处理 ABA 问题；无锁队列的正确性证明难度远高于加锁版本。合理的默认是「先用锁，测出瓶颈再考虑无锁」，而且要先确认瓶颈真的在锁上。\n\nThreadSanitizer 的时间开销通常是 5 到 15 倍、内存数倍，只能进 CI 或调试构建；它只报告实际执行到的竞争，没跑到的代码路径依旧沉默；对死锁它依赖锁图分析，只能覆盖一部分模式。所以 TSan 通过是「这批用例没发现竞争」，不是「没有竞争」。\n\n反例：一张启动时初始化、之后只读的配置表，不需要 atomic 也不需要锁。用 `const` 对象、或者「初始化完成后不再修改」的约定就够了；给每次读都套一个 atomic 反而阻碍优化，还会误导后来的维护者以为「这样改就是线程安全的」。不可变（immutable after init）是成本最低的并发策略。\n\n## 六、动手任务\n\n第一步，把开头的丢更新程序补全成可运行版本：四个线程、每个一百万次、普通 `long` 计数器，用 `-O2` 跑，记录一次偏小的结果。第二步，把计数器换成 `std::atomic<long>` 并用 `fetch_add(1, std::memory_order_relaxed)`，跑 20 次确认每次都打印 4000000。\n\n第三步，用 `g++ -std=c++17 -O1 -g -fsanitize=thread -pthread` 编译第一版，运行后记录 TSan 报告的第一行（应为 `WARNING: ThreadSanitizer: data race`）以及它给出的两个栈顶函数名。\n\n第四步，把队列里的 `not_empty_.wait(lk, [this]{ return !q_.empty() || closed_; })` 改成 `if (q_.empty()) not_empty_.wait(lk);`，用 `timeout 5 ./a.out` 运行，观察它是挂起还是提前返回，并解释为什么「谓词」这一层不能省。做完这四步，你应该能不看笔记说清：数据竞争的定义、happens-before 的三条来源、以及 relaxed 为什么不能用来发布数据。\n\n## 七、一句话总结\n\n- 数据竞争是「同一位置、至少一个写、没有 happens-before」，它在 C++11 之后是 UB，不只是读到旧值。\n- 原子性、可见性、顺序是三件事；`relaxed` 只给第一件，发布数据必须 release/acquire 配对。\n- mutex 的 unlock→lock 天然建立先后关系，RAII 负责异常路径也不漏解锁。\n- 条件变量必须配谓词循环，`notify` 是提示、条件才是事实。\n- 伪共享不改变正确性，只吞掉扩展性；它和死锁一样，只能靠测量与工具发现。\n",
+          "code": "// concurrency.cpp —— 数据竞争、mutex + 条件变量、伪共享\n// 编译：g++ -std=c++17 -O2 -pthread concurrency.cpp -o concurrency\n// 竞争检测：g++ -std=c++17 -O1 -g -fsanitize=thread -pthread concurrency.cpp -o concurrency_tsan\n#include <atomic>\n#include <condition_variable>\n#include <cstddef>\n#include <cstdio>\n#include <mutex>\n#include <queue>\n#include <thread>\n#include <vector>\n\n// 1. 纯计数：只需要原子性，不需要跨变量顺序，relaxed 足够\nstatic std::atomic<long> g_ops{0};\n\n// 2. 有界阻塞队列：mutex 保护不变式，条件变量只负责通知\nclass BoundedQueue {\npublic:\n    explicit BoundedQueue(std::size_t cap) : cap_(cap) {}\n\n    void push(int v)\n    {\n        std::unique_lock<std::mutex> lk(m_);\n        // 谓词版 wait：虚假唤醒会重新检查，close 也能把它叫醒\n        not_full_.wait(lk, [this] { return q_.size() < cap_ || closed_; });\n        if (closed_) return;          // 关闭后静默丢弃\n        q_.push(v);\n        lk.unlock();                  // 先解锁再通知，避免唤醒后立刻又阻塞\n        not_empty_.notify_one();\n    }\n\n    bool pop(int &out)\n    {\n        std::unique_lock<std::mutex> lk(m_);\n        not_empty_.wait(lk, [this] { return !q_.empty() || closed_; });\n        if (q_.empty()) return false;  // 被唤醒不等于有数据：可能只是 close\n        out = q_.front();\n        q_.pop();\n        lk.unlock();\n        not_full_.notify_one();\n        return true;\n    }\n\n    void close()\n    {\n        {\n            std::lock_guard<std::mutex> lk(m_);   // 缩小锁作用域\n            closed_ = true;\n        }\n        not_empty_.notify_all();      // 叫醒所有消费者\n        not_full_.notify_all();       // 也叫醒所有生产者\n    }\n\nprivate:\n    std::mutex m_;\n    std::condition_variable not_empty_;\n    std::condition_variable not_full_;\n    std::queue<int> q_;\n    std::size_t cap_;\n    bool closed_ = false;\n};\n\n// 3. 每个计数器独占一条 64 字节 cache line，消除伪共享\nstruct alignas(64) PaddedCounter {\n    std::atomic<long> v{0};\n};\n\nconstexpr int kThreads = 4;\nconstexpr int kPerThread = 100000;   /* 文件作用域：无捕获的 lambda 也能直接用 */\n\nint main()\n{\n    // 四个线程各自 fetch_add：单次操作原子，计数不会丢\n    std::vector<std::thread> workers;\n    workers.reserve(kThreads);\n    for (int t = 0; t < kThreads; ++t) {\n        workers.emplace_back([] {\n            for (int i = 0; i < kPerThread; ++i)\n                g_ops.fetch_add(1, std::memory_order_relaxed);\n        });\n    }\n    for (auto &w : workers) w.join();\n    std::printf(\"ops=%ld\\n\", g_ops.load(std::memory_order_relaxed));   // ops=400000\n\n    // 生产者-消费者：容量 2，生产 5 个，主线程边生产边消费\n    BoundedQueue q(2);\n    std::thread producer([&q] {\n        for (int i = 1; i <= 5; ++i) q.push(i);\n        q.close();\n    });\n\n    int sum = 0, n = 0, v = 0;\n    while (q.pop(v)) { sum += v; ++n; }\n    producer.join();\n    std::printf(\"n=%d sum=%d\\n\", n, sum);                            // n=5 sum=15\n\n    // 两个被对齐隔开的计数器：正确性一样，扩展性不同\n    PaddedCounter c1, c2;\n    std::thread t1([&c1] {\n        for (int i = 0; i < kPerThread; ++i)\n            c1.v.fetch_add(1, std::memory_order_relaxed);\n    });\n    std::thread t2([&c2] {\n        for (int i = 0; i < kPerThread; ++i)\n            c2.v.fetch_add(1, std::memory_order_relaxed);\n    });\n    t1.join();\n    t2.join();\n    std::printf(\"c1=%ld c2=%ld\\n\",\n                c1.v.load(std::memory_order_relaxed),\n                c2.v.load(std::memory_order_relaxed));                // c1=100000 c2=100000\n    return 0;\n}\n",
+          "quiz": [
+            {
+              "q": "下面代码的 `x` 最终是多少？\n\n```cpp\nint x = 0;\nauto f = [&] { for (int i = 0; i < 1000; ++i) ++x; };\nstd::thread a(f), b(f);\na.join(); b.join();\nprintf(\"%d\\n\", x);\n```",
+              "options": [
+                "一定是 2000，两个线程各加 1000 次",
+                "一定是 1000，因为同一个 lambda 只能被一个线程执行",
+                "编译失败，lambda 不能按值传给两个线程",
+                "不确定，通常小于 2000：`++x` 是读-改-写三步，存在数据竞争"
+              ],
+              "answer": 3,
+              "explain": "`++x` 不是原子操作，两个线程可能读到同一个旧值再各自写回，更新被覆盖，所以结果通常小于 2000 且每次不同；按 C++ 标准这是数据竞争（UB），不是「偶尔少一点」。选 2000 是把并发当成了串行；选 1000 误解了 lambda 的拷贝——`f` 被拷贝进两个线程，两个副本都引用同一个 `x`；编译本身是合法的。"
+            },
+            {
+              "q": "下面这段等待有什么问题？\n\n```cpp\nstd::unique_lock<std::mutex> lk(m);\nif (q.empty()) cv.wait(lk);\nint v = q.front();\n```",
+              "options": [
+                "应当把 `notify_one` 换成 `notify_all` 即可解决",
+                "`q` 需要声明为 `std::atomic` 才能配条件变量",
+                "应改成 `while (q.empty()) cv.wait(lk);` 或谓词版 `cv.wait(lk, pred)`，否则虚假唤醒会读到空队列",
+                "`cv.wait` 必须在持有锁之前调用"
+              ],
+              "answer": 2,
+              "explain": "条件变量的标准用法是循环检查谓词：可能被虚假唤醒，也可能在 notify 之后、进入 wait 之前错过通知，单次 `if` 判断不足以保证队列非空，`q.front()` 就落在空队列上。`wait` 必须持有锁（这正是 `unique_lock` 的用途）；`notify_all` 解决的是「多个等待者中该叫谁」，不是谓词缺失；容器本身不需要 atomic，互斥量已经保护它。"
+            },
+            {
+              "q": "`std::memory_order_relaxed` 到底保证了什么？",
+              "options": [
+                "不保证任何东西，等价于普通变量的读写",
+                "保证对该原子的操作不可分割、且有单一修改顺序，但不建立跨变量的先后关系",
+                "保证所有线程看到完全一致的全局写入顺序",
+                "保证读操作一定看到其他线程最近一次写入"
+              ],
+              "answer": 1,
+              "explain": "relaxed 只提供原子性（不会读到撕裂的值）与同一原子对象上的一致性修改顺序，不建立 happens-before，因此不能用来发布「先填数据、再置标志」这类组合状态。全局一致顺序是 `seq_cst` 才有的；「一定看到最近一次写入」也不是任何内存序能保证的措辞，同步只保证「看到 release 之前的写」；「等价于普通变量」更不对，普通变量的并发读写是数据竞争。"
+            },
+            {
+              "q": "两个线程各自频繁地 `fetch_add` 自己的计数器，程序结果正确但多核扩展性很差，最可能的原因和修法是什么？",
+              "options": [
+                "线程数太少，应该增加到超过核数",
+                "mutex 竞争太激烈，应把 mutex 换成递归锁",
+                "两个计数器落在同一条 cache line 上产生伪共享，用 `alignas(64)` 或填充把它们分开",
+                "缺 `memory_order_seq_cst`，改成顺序一致就能恢复扩展性"
+              ],
+              "answer": 2,
+              "explain": "两个独立的原子变量若共享一条缓存行，每次写都会让另一个核的副本失效，缓存一致性流量随核数上升，这就是伪共享；把各自对齐到 64 字节即可。换 seq_cst 只会更慢，因为它加强了顺序约束，而伪共享与顺序无关；加线程只会加剧争用；示例里根本没有 mutex，递归锁也不能解决缓存行问题。"
+            }
+          ]
+        },
+        {
+          "id": "c-11",
+          "title": "ABI、二进制兼容与构建系统：换一个动态库为什么就崩",
+          "minutes": 45,
+          "lang": "cpp",
+          "content": "## 一、先看一个会出事的场景\n\n一个桌面程序用了自家的 `libnote.so`。某次只改了一个内部字段、重新编译了库，客户端一行代码没动、也没有重新编译，运维把新库放上去，程序启动就崩，报错是 `free(): invalid pointer`。原因很朴素：客户端按旧头文件里的 `sizeof(Config)` 在栈上分配对象、按旧偏移写字段，库按新的布局读，析构时又把一个「按旧布局算出来的地址」交给 `free`，glibc 立刻发现它不是堆块起点。\n\n第二个现象发生在链接期：`undefined reference to 'std::__cxx11::basic_string<char, ...>::~basic_string()'`。函数签名看起来完全一致，但库是用 `_GLIBCXX_USE_CXX11_ABI=1` 编的，客户端还在用旧 ABI，两边对 `std::string` 这个类型的内部结构理解不同，符号名也就不同。\n\n第三个是运行时才炸：`dlopen` 报 `undefined symbol: _ZN3lib4ImplC1Ev`，把这个名字拿去做反修饰（`c++filt`），才知道是 `lib::Impl::Impl()` 的构造函数——库的作者忘了给它加导出标记。\n\n这三件事都属于同一个知识点：ABI。它不像语法错误那样在编译期拦住你，而是等到「编译产物之间对接」的那一刻才发作。\n\n## 二、原理：它到底怎么运作\n\nABI（application binary interface）是一组只有编译产物之间才对得上的约定，至少包含五部分。调用约定：前几个整型或浮点参数分别放进哪些寄存器，超出的怎么压栈，栈在调用点是否要 16 字节对齐，返回值放在哪，谁负责清理。名字修饰：命名空间、重载、模板参数全部编进符号名。类型布局：`sizeof`、`alignof`、每个成员的偏移、虚函数表里槽位的顺序、虚基类的偏移、位域的排布。异常与 RTTI 的实现方式。运行时库：libstdc++、libc++、MSVC STL 三者互不兼容，同一家的不同大版本也未必兼容。\n\n关键在于：语言标准只规定源码语义，完全不规定 ABI。Itanium C++ ABI 被 GCC 与 Clang 在 Linux、macOS 上共同遵循，MSVC 有自己的一套，所以同一份源码在不同编译器下产出的动态库不能互换。`_GLIBCXX_USE_CXX11_ABI` 这个宏就是 libstdc++ 当年换掉 `std::string` 实现时留下的开关，它直接改变了类型的布局与符号名。\n\n名字修饰值得单独看一眼。`int note_push(note_ctx*, const char*)` 在 Itanium ABI 下被修饰成 `_Z9note_pushP8note_ctxPKc`，长度、类型、命名空间都在里面。`extern \"C\"` 的作用是关闭修饰，让符号名就等于函数名——这是 C 与其它语言、以及跨编译器接口的公共语言。要注意它只影响语言链接（名字与调用约定按 C 的规则），不改变参数类型检查，也不改变结构体布局，所以光加 `extern \"C\"` 并不能让一个带 `std::string` 成员的类变得 ABI 稳定。\n\n动态链接这一层：ELF 的 `.dynamic` 段里，`DT_SONAME` 记录库的逻辑名（比如 `libnote.so.1`），`DT_NEEDED` 记录依赖；运行时链接器按 `RPATH`、`LD_LIBRARY_PATH`、`ld.so.cache` 的顺序查找，再按符号名解析。符号版本（`GLIBC_2.34`、`LIBFOO_1.2`）允许同一个符号的多个版本共存，老二进制继续绑定它当年链接的那个版本，这是发行版能在不重编所有程序的前提下升级 glibc 的基础。\n\n然后是最容易混的一对概念。源码兼容只看头文件能否编译通过；二进制兼容要求已经编译好的调用方，在不重新编译的情况下仍然正确工作。结构体加成员、改成员顺序、改字段宽度、在虚函数表中间插入虚函数、改基类、改枚举的底层类型、改 inline 函数体或模板定义、换标准库——这些全都源码兼容，却都会破坏二进制兼容。反过来，加一个非虚成员函数、加一个新的导出符号、改函数内部实现（只要不是 inline），是二进制安全的。\n\n工程上的解法有三件套。第一是不透明句柄：头文件里只写 `struct note_ctx;`，调用方永远只拿指针，布局藏在实现文件里，加字段对它完全透明。第二是版本化结构体：首字段放 `struct_size`，被调方按调用方给的长度裁剪写入，老客户端读到的是前缀，新字段被安全截断。第三是 pimpl：C++ 类里只放一个指向实现的指针，头文件不暴露任何成员。再配合 `-fvisibility=hidden` 只导出显式标记的符号，一条稳定的库边界就成型了。\n\n## 三、代码逐行\n\n下面这个文件既能编成可执行程序，也能编成动态库：加 `-DNOTE_NO_MAIN -shared -fPIC -fvisibility=hidden` 就编成动态库，源码其余部分一行都不用改。\n\n```cpp\n#define NOTE_API __attribute__((visibility(\"default\")))\n\nstruct note_ctx;   /* 不透明：调用方不能 sizeof，也不能访问成员 */\n\nextern \"C\" {\nNOTE_API struct note_ctx *note_open(int cap);\nNOTE_API void note_close(struct note_ctx *ctx);\nNOTE_API int note_push(struct note_ctx *ctx, const char *s);\nNOTE_API const char *note_version(void);\nNOTE_API std::size_t note_stats(const struct note_ctx *ctx, void *out, std::size_t out_size);\n}\n\nstruct note_stats_v1 {\n    std::uint32_t struct_size;   /* 调用方声明的长度，被调方按它裁剪 */\n    std::uint32_t abi_version;\n    std::uint64_t bytes;\n};\nstatic_assert(sizeof(note_stats_v1) == 16, \"layout is part of the ABI\");\n```\n\n`#define NOTE_API __attribute__((visibility(\"default\")))`：配合 `-fvisibility=hidden`，只有标了它的符号进动态符号表。漏标一个导出函数，症状不是链接错误，而是运行期 `dlopen` 报 undefined symbol，因为 `-shared` 允许未定义符号存在。\n\n`struct note_ctx;` 这行前置声明是整个设计的支点：调用方只能持有指针，既不能 `sizeof` 它，也不能访问成员。库内部随意加字段、换容器，客户端二进制不受影响——因为客户端从来没有把这些信息编进自己的代码。\n\n`extern \"C\" { ... }` 把这一组函数的名字修饰关掉，`nm -D` 里看到的就是 `note_open`、`note_push` 这些干净的名字。这样一来 C、Rust、Python 的 ctypes 都能直接按名字找到它们，不需要知道修饰规则。\n\n`static_assert(sizeof(note_stats_v1) == 16, ...)` 把布局写进编译期断言，类型名里的 `_v1` 则是给结构体自己留的版本号——将来要扩展就新增 `_v2` 让两代并存。某天有人给结构体加了一个字段、忘了更新 `abi_version`，这里会立刻编译失败，而不是等客户现场崩溃再回来查。\n\n`if (out == nullptr || out_size < 8) return 0;`：所有跨边界的函数都不信任调用方。长度不够就干脆不写，而不是「先写再说」——这正是 `strcpy` 与 `snprintf` 的分界线。\n\n`const std::size_t n = out_size < sizeof buf ? out_size : sizeof buf;` 加上随后的 `memcpy`：只按调用方声明的长度写。老客户端传 8 字节的旧结构体，就只拿到前 8 字节，`bytes` 字段被截断而不是越界覆盖它的栈。\n\n最后 `note_open` 用 `new (std::nothrow)` 并在失败时返回空指针，而不是让 `std::bad_alloc` 穿过 C 边界。异常跨 `.so` 传播需要两边运行时完全一致，跨语言边界更是未定义行为，所以「错误码 + 空指针」是库边界上更稳的约定。\n\n## 四、三个常见误区\n\n### 误区一：源码能编译通过，就说明二进制兼容\n\n现象：改完结构体，客户端重新编译一次没问题，于是认为「兼容」。为什么错：客户端根本没重编。它按旧布局分配、按旧偏移访问，库按新布局解释，双方对同一块内存的理解不同。正确做法是每次发布前用 `abidiff` 之类工具对比新旧库，或者干脆用不透明句柄把布局藏起来。\n\n### 误区二：只改了头文件里的 inline 函数或模板，客户端不用重编\n\n现象：在一个头文件里的 inline 函数中修了个 bug，只重编了库。为什么错：inline 函数和模板会被编进每一个使用它的翻译单元，客户端里已经存了一份旧实现。改了却不重编，就违反 ODR（单一定义规则），链接器只保留一份，最终执行哪一份取决于链接顺序和优化决策，行为可能随机。正确做法是把这类改动当成「必须全量重编」的变更，并使用 `-Wodr` 或 LTO 来暴露不一致。\n\n### 误区三：直接把 C++ 类导出当接口最省事\n\n现象：头文件里写 `class NoteApi { std::string name; std::vector<Item> items; ... };`，客户端直接 `new`/`delete`。为什么错：这把编译器、标准库实现、`_GLIBCXX_USE_CXX11_ABI`、异常模型、甚至编译选项全部锁死成同一个组合；任何一项不同，轻则 undefined symbol，重则运行期释放错位的指针。正确做法是边界上用 C 接口加不透明句柄，C++ 的便利留在库内部。\n\n## 五、边界与代价\n\n稳定 ABI 不是免费的。pimpl 让每次访问多一次指针跳转、构造多一次堆分配，热路径上能测出来，而且对象不能内联展开；C 接口失去重载、模板与类型安全，得手写 `_create`/`_destroy`，还要自己防句柄泄漏与重复释放。这些成本换来的是「客户端不重编也能升级」，值不值取决于你有多少你控制不了的调用方。\n\n反例：一个单仓库、每次发布都把整个依赖树重编一遍的内部服务，强行加一层 ABI 稳定接口就是过度设计——多一层间接、多一套生命周期管理，收益是零。判断标准很具体：是否存在「你不能要求它重新编译」的二进制消费者，比如第三方插件、系统包管理器里的下游、或者客户手里已经发出去的安装包。\n\n`-fvisibility=hidden` 也有它的坑：默认隐藏能减少符号冲突、加快加载、缩小符号表，但会把忘记标记的导出函数一并藏起来，而症状出现在运行期而不是链接期，排查成本更高。所以导出宏要在头文件里统一用，别在实现文件里手写。\n\n验证工具是这条链上的必需品：`nm -D --defined-only lib.so` 看导出了什么，`nm -D -C` 看反修饰后的名字，`readelf -d lib.so | grep SONAME` 看逻辑名，`objdump -T` 看动态符号表，`abidiff` 或 `abi-compliance-checker` 在发版前做新旧版本对比。这些命令应该进 CI，而不是等出事再手敲。\n\n## 六、动手任务\n\n建一个临时目录，把示例拆成三个文件：`note.h` 只放前置声明、`NOTE_API` 宏与函数原型；`note.cpp` 放实现并用 `-DNOTE_NO_MAIN` 编译成 `libnote.so.1`；`client.cpp` 只 include 头文件，依次调用 `note_open`、两次 `note_push`、`note_stats`、`note_close`，打印 `version`、`size`、`written`、`struct_size`。\n\n第一步，用 `LD_LIBRARY_PATH=. ./client` 跑通，预期输出里有 `version=1.0.0`、`push=0,0 size=2`、`written=16 struct_size=16`。第二步，给 `note_ctx` 加一个字段、只重编库不重编客户端，再跑一次，确认输出不变——这是不透明句柄的价值。第三步，去掉 `note_push` 声明上的 `NOTE_API`，仍然用 `-fvisibility=hidden` 只重编库、不重编客户端，再运行一次，记录加载期的报错原文——它会是一条 `undefined symbol: note_push`，而不是链接错误；用 `nm -D --defined-only libnote.so.1 | grep note_` 对比两次的导出表，解释这个错误为什么只能在运行期暴露。第四步，用 `readelf -d libnote.so.1 | grep SONAME` 确认逻辑名，并说明为什么升级时应该换 `libnote.so.2` 而不是原地覆盖 `.so.1`。\n\n## 七、一句话总结\n\n- ABI 是编译产物之间的约定：调用约定、名字修饰、类型布局、异常模型、运行时库。\n- 标准只管源码语义，不管 ABI；跨编译器、跨标准库的二进制不能互换。\n- 源码兼容不等于二进制兼容，加字段、改顺序、插虚函数都会让不重编的客户端崩。\n- 稳定边界的做法是不透明句柄加 C 接口，再配版本化结构体与显式导出。\n- 是否值得做 ABI 稳定，取决于有没有你无法要求重编的调用方。\n",
+          "code": "// abi.cpp —— 稳定 ABI 边界：不透明句柄 + C 接口 + 版本化结构体\n// 可执行版：g++ -std=c++17 -O2 abi.cpp -o abi\n// 动态库版：g++ -std=c++17 -O2 -fPIC -shared -fvisibility=hidden -DNOTE_NO_MAIN abi.cpp -o libnote.so.1\n#include <cstddef>\n#include <cstdint>\n#include <cstdio>\n#include <cstring>\n#include <new>\n#include <string>\n#include <vector>\n\n#if defined(_WIN32)\n#  define NOTE_API __declspec(dllexport)\n#else\n#  define NOTE_API __attribute__((visibility(\"default\")))\n#endif\n\n#define NOTE_ABI_VERSION 1u\n\nextern \"C\" {\nstruct note_ctx;                  /* 不透明句柄：调用方只能持有指针 */\n\nNOTE_API struct note_ctx *note_open(int cap);\nNOTE_API void note_close(struct note_ctx *ctx);\nNOTE_API int note_push(struct note_ctx *ctx, const char *s);\nNOTE_API std::size_t note_size(const struct note_ctx *ctx);\nNOTE_API const char *note_version(void);\nNOTE_API std::size_t note_stats(const struct note_ctx *ctx, void *out, std::size_t out_size);\n}\n\n/* 布局本身就是 ABI 的一部分，用编译期断言钉住 */\nstruct note_stats_v1 {\n    std::uint32_t struct_size;    /* 调用方声明的长度，被调方按它裁剪写入 */\n    std::uint32_t abi_version;\n    std::uint64_t bytes;          /* 所有字符串内容的总字节数 */\n};\nstatic_assert(sizeof(note_stats_v1) == 16, \"layout is part of the ABI\");\n\n/* 真实布局只存在于实现里：加字段不会影响任何已编译的客户端 */\nstruct note_ctx {\n    explicit note_ctx(int c) : cap(c) {}\n    std::vector<std::string> items;   /* 容器绝不跨边界 */\n    int cap;\n};\n\nextern \"C\" note_ctx *note_open(int cap)\n{\n    if (cap <= 0) return nullptr;\n    /* 失败返回空指针，而不是让 bad_alloc 穿过 C 边界 */\n    return new (std::nothrow) note_ctx(cap);\n}\n\nextern \"C\" void note_close(note_ctx *ctx)\n{\n    delete ctx;                   /* delete nullptr 是合法的空操作 */\n}\n\nextern \"C\" int note_push(note_ctx *ctx, const char *s)\n{\n    if (ctx == nullptr || s == nullptr) return -1;\n    if (ctx->items.size() >= static_cast<std::size_t>(ctx->cap)) return -2;   /* 满 */\n    ctx->items.emplace_back(s);\n    return 0;\n}\n\nextern \"C\" std::size_t note_size(const note_ctx *ctx)\n{\n    return ctx != nullptr ? ctx->items.size() : 0;   /* 边界函数不信任调用方 */\n}\n\nextern \"C\" const char *note_version(void)\n{\n    return \"1.0.0\";               /* 返回静态字符串，所有权不转移 */\n}\n\nextern \"C\" std::size_t note_stats(const note_ctx *ctx, void *out, std::size_t out_size)\n{\n    if (out == nullptr || out_size < 8) return 0;   /* 长度不够就干脆不写 */\n\n    note_stats_v1 buf{};\n    buf.struct_size = static_cast<std::uint32_t>(sizeof(note_stats_v1));\n    buf.abi_version = NOTE_ABI_VERSION;\n    if (ctx != nullptr)\n        for (const auto &s : ctx->items) buf.bytes += s.size();\n\n    const std::size_t n = out_size < sizeof buf ? out_size : sizeof buf;\n    std::memcpy(out, &buf, n);     /* 只写调用方声明的长度，老客户端读到前缀 */\n    return n;\n}\n\n#ifndef NOTE_NO_MAIN\nint main(void)\n{\n    note_ctx *ctx = note_open(4);\n    if (ctx == nullptr) return 1;\n\n    std::printf(\"version=%s abi=%u\\n\", note_version(), NOTE_ABI_VERSION);  /* version=1.0.0 abi=1 */\n\n    const int r1 = note_push(ctx, \"ab\");\n    const int r2 = note_push(ctx, \"cde\");\n    std::printf(\"push=%d,%d size=%zu\\n\", r1, r2, note_size(ctx));         /* push=0,0 size=2 */\n\n    note_stats_v1 st{};\n    std::size_t n = note_stats(ctx, &st, sizeof st);\n    std::printf(\"written=%zu struct_size=%u version=%u bytes=%llu\\n\",\n                n, st.struct_size, st.abi_version,\n                static_cast<unsigned long long>(st.bytes));\n    /* written=16 struct_size=16 version=1 bytes=5 */\n\n    /* 模拟只认识前 8 字节的旧客户端：多出来的字段被安全截断 */\n    struct { std::uint32_t struct_size; std::uint32_t abi_version; } old_client{};\n    n = note_stats(ctx, &old_client, sizeof old_client);\n    std::printf(\"old written=%zu struct_size=%u version=%u\\n\",\n                n, old_client.struct_size, old_client.abi_version);\n    /* old written=8 struct_size=16 version=1 */\n\n    note_close(ctx);\n    return 0;\n}\n#endif\n",
+          "quiz": [
+            {
+              "q": "下面哪种改动，会让「按旧头文件编译、没有重新编译」的客户端在运行时出错？",
+              "options": [
+                "修改一个非 inline 函数的内部实现",
+                "在 `struct Config` 的中间插入一个新字段",
+                "给 `Config` 增加一个非虚成员函数",
+                "新增一个导出函数 `config_dump()`"
+              ],
+              "answer": 1,
+              "explain": "插入字段会改变后续成员的偏移与 `sizeof`，客户端仍按旧偏移读写，库按新布局解释，于是越界或读到错位数据。加非虚成员函数不改变布局与虚表；加新的导出符号只是往符号表里添一项；改非 inline 函数的实现根本不在客户端里，这三者都不破坏二进制兼容。"
+            },
+            {
+              "q": "编译客户端时出现 `undefined reference to 'std::__cxx11::basic_string<...>::~basic_string()'`，最可能的原因是什么？",
+              "options": [
+                "客户端忘记 `#include <string>`",
+                "链接时把 `-lstdc++` 写在了目标文件前面",
+                "`std::string` 的析构函数被声明成了 `private`",
+                "库与客户端使用了不同的 `_GLIBCXX_USE_CXX11_ABI`，两边对 `std::string` 的布局和符号名不一致"
+              ],
+              "answer": 3,
+              "explain": "`__cxx11` 这个命名空间标记就是新 ABI 的 `std::string` 实现，两边宏设置不同时，一边引用的符号另一边根本不存在。忘 include 会在编译期报未声明而不是链接错误；链接顺序错通常表现为其它符号缺失且可通过调整顺序修复，不会专挑 `__cxx11` 符号；析构函数为 private 会在编译期报访问错误。"
+            },
+            {
+              "q": "`extern \"C\"` 对一个导出函数做了什么？",
+              "options": [
+                "保证函数的参数布局与结构体布局在编译器之间一致",
+                "让函数可以被内联到调用方，从而避免链接",
+                "关闭 C++ 名字修饰，让符号名就是函数名，并按平台采用 C 的调用约定",
+                "让函数体按 C 的语义编译，禁掉引用与异常"
+              ],
+              "answer": 2,
+              "explain": "`extern \"C\"` 影响的是语言链接：名字修饰与调用约定。它不改变函数体的编译语义（C++ 特性照常可用），也不改变任何结构体的布局——布局仍由编译器与平台决定；它更不保证内联，是否内联由优化器决定。所以光加 `extern \"C\"` 并不能让带 `std::string` 的接口变得 ABI 稳定。"
+            },
+            {
+              "q": "什么情况下**不该**为库设计一层 ABI 稳定边界（不透明句柄、pimpl 之类）？",
+              "options": [
+                "库要同时被 C、Python 与 Rust 调用",
+                "单仓库内部服务，每次发布都会把整个依赖树全量重编，没有第三方二进制消费者",
+                "库要被第三方插件在运行期 `dlopen` 加载",
+                "库要随系统包管理器分发给无法控制的下游"
+              ],
+              "answer": 1,
+              "explain": "ABI 稳定层的收益来自「调用方不重编也能升级」，如果所有调用方每次发布都重编，这层间接只带来指针跳转、额外分配和句柄生命周期管理的成本。另外三种情况恰恰是它最该存在的场景：插件、系统级分发、跨语言调用都需要一个不依赖编译器细节的二进制契约。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

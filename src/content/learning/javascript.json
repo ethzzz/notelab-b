@@ -1,0 +1,685 @@
+{
+  "code": "javascript",
+  "name": "JavaScript",
+  "icon": "🟨",
+  "desc": "从值、作用域、异步到事件循环与渲染性能：不只教你写得出，还要说清为什么。",
+  "runner": "worker",
+  "stages": [
+    {
+      "id": "js-basic",
+      "name": "入门",
+      "goal": "能说清值、引用、闭包捕获与数组遍历的机制，写出不靠猜的 JavaScript，并在 code review 时指出别人代码里的转换、作用域和遍历陷阱。",
+      "lessons": [
+        {
+          "id": "js-01",
+          "title": "变量与类型：值、引用与类型转换",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n先摆三个线上真实现象，分别关于值怎么存、怎么转、什么时候能用。\n\n第一个是「备份数据反而把数据改坏了」：\n\n```js\nconst draft = order\ndraft.status = 'saved'   // 只想改草稿\n// 结果 order.status 也变成了 saved\n```\n\n`order` 和 `draft` 是同一个对象的两个名字，改哪个都是改它。团队里最常见的翻车现场是：把接口返回的数据「复制一份」再加工，结果原数据被污染，列表页和详情页同时错乱，刷新后才恢复——因为内存里的对象被改过。\n\n第二个是类型转换。表单读出来的价格是字符串，三件商品用 `5 + '3'` 得到 `'53'`，再拼一次变 `'533'`，页面显示「合计 ¥533」，实际只该是 11 元。金额还会遇到 `0.1 + 0.2 === 0.30000000000000004`，用 `===` 和 `0.3` 比永远为 false。\n\n第三个是最直接的报错：\n\n```js\nconsole.log(total)       // ReferenceError: Cannot access 'total' before initialization\nlet total = 0\n```\n\n这三类问题都不是「不会写语法」，而是不知道值在内存里怎么放、什么时候被转换。\n\n## 二、原理：它到底怎么运作\n\n一句话版本：变量槽里存的是「值」或「地址」，类型转换是一条固定的流水线。\n\n先说值。JS 有 7 种原始类型：`undefined`、`null`、`boolean`、`number`、`string`、`bigint`、`symbol`，剩下的都是对象（数组、函数、`Date`、`Map` 都是对象）。原始值直接存在变量的槽位里；对象本身在堆上，槽位里放的是指向它的地址。所以赋值、传参、比较，对原始值是复制和比较那一位数据，对对象是复制和比较地址。这就是 `{ n: 1 } === { n: 1 }` 为 false 的原因：两份内容相同的内存，地址当然不同。\n\n`const` 约束的是绑定：不允许这个变量名再指向别的值。它不冻结对象，`const list = [1]` 仍然可以 `list.push(2)`。要真不可变，得靠 `Object.freeze`（只冻第一层）或者干脆不写可变操作。\n\n还要说清声明的位置。`let` 和 `const` 会被提升，但执行到声明那一行之前处于暂时性死区（TDZ），读它直接抛 `ReferenceError: Cannot access 'total' before initialization`，连 `typeof` 都会抛；`var` 的提升会把变量初始化为 `undefined`，所以 `typeof missing` 得到 `'undefined'` 而不报错。函数声明整体提升，可以在定义之前调用，函数表达式和箭头函数不行。这个差异决定了「变量从哪一行起才能用」。\n\n再说转换。任何值转原始值都走 `ToPrimitive(input, hint)`：先看有没有 `Symbol.toPrimitive`，没有就按提示选方法——提示是 `string` 时先 `toString` 再 `valueOf`，是 `number` 或 `default` 时反过来。`+` 的提示是 `default`（`Date` 例外，它的 `default` 按 `string` 处理），所以对象参与 `+` 时基本是 `valueOf` 先被调用；模板字符串要的是字符串，于是 `toString` 先被调用。`+` 的最终规则只有一条：两边转完原始值后，只要有一边是字符串就拼接，否则按数字相加；`bigint` 和 `number` 混着加直接抛 `TypeError`。\n\n`==` 是一张转换表，不是「智能比较」：`null` 只和 `undefined` 相等；布尔先转数字；字符串和数字比较时字符串转数字；对象先转原始值再比。所以 `'' == 0` 是 true，`'0' == false` 也是 true，而 `null == 0` 是 false。\n\n顺带区分 `Number()` 与 `parseInt`：`Number('')` 是 0，`parseInt('')` 是 NaN；`Number('12px')` 是 NaN，`parseInt('12px')` 是 12。前者要求整个字符串都是数字，后者从左往右读到非法字符就停。校验输入用前者，解析样式里的 `12px` 用后者。\n\n`==` 的宽松比较在比较接口返回的 `id` 时天天遇到：它可能是字符串也可能是数字，`==` 让「同一个 id」意外通过，可后续用 `Map` 或 `Set` 时又按 SameValueZero 比较，`'1'` 和 `1` 是两个键，于是出现「判断相等但查不到」的组合 bug。\n\n最后两个细节。`NaN` 是唯一不等于自身的值，判断要用 `Number.isNaN`，它不做类型转换，`Number.isNaN('abc')` 是 false。全局 `isNaN` 会先把参数转成数字，所以 `isNaN('abc')` 是 true，这是历史包袱。`Object.is` 用的是 SameValue 算法，等于 `===` 但修了两个坑：`NaN` 与自身相等，`+0` 与 `-0` 不相等。\n\n## 三、代码逐行\n\n先看一段只差一行的对照，它不在 `code` 里：\n\n```js\nfunction update(config) {\n  config.retry = 3      // 顺手补个默认值\n  return config\n}\nupdate(options)        // options.retry 也被写进去了\n```\n\n`config` 和 `options` 是同一个对象的两个名字，函数里的「顺手一改」就是改调用方的数据。正确写法是先复制：`const next = { ...config }`，或者不改入参、直接返回新对象。\n\n现在对着 `code` 逐行看。\n\n`const alias = box` 之后执行 `alias.n = 2`：`alias` 拿到的是地址，`alias.n = 2` 顺着地址改堆上的对象，`box.n` 自然是 2。换成 `const alias = { ...box }`，`box.n` 就还是 1。注意这是浅拷贝：只有第一层属性被复制，嵌套对象仍然共享。\n\n`list.push(3)`：合法。`const` 只禁止 `list = []` 这种重新赋值，后者抛 `TypeError: Assignment to constant variable.`。想让内容也不可变就用 `Object.freeze(list)`，但冻结后再 `push` 在严格模式下抛 `TypeError`、非严格模式静默失败，所以别把它当运行时校验。\n\n`mutate(num, box)` 里的 `x = 99` 和 `y.n = 99`：前者只改形参 `x` 的槽位，函数返回后 `num` 还是 1；后者顺着引用改了同一个对象，`box.n` 变 99。这是「传参是值传递」最容易被误解的地方：JS 永远按值传递，只是对象的值恰好是地址。\n\n`price + 1` 与模板字符串里的 `price`：`+` 走 `default` 提示，先问 `valueOf` 得到 10，于是 11；模板字符串走 `string` 提示，先问 `toString` 得到 `'10元'`。同一个对象两种结果，取决于使用场景要什么类型。去掉 `valueOf` 后 `price + 1` 会变成 `'10元1'`，因为退到 `toString` 后有一边成了字符串。\n\n`[] + {}` 得到 `'[object Object]'`：空数组的 `toString` 是 `''`，普通对象是 `'[object Object]'`，拼接就完了。这类结果不必背，但要知道它来自同一条流水线，不是特例。\n\n`1 + 2 + '3'` 得到 `'33'`：`+` 从左到右结合，先算 `1 + 2` 得 3，再和 `'3'` 拼接。换成 `'3' + 1 + 2` 就是 `'312'`，因为第一次运算就成了字符串，后面全是拼接。这不是坑，而是结合顺序的直接结果；把数字运算用括号单独括起来就没有歧义。\n\n`Number.isNaN('abc')` 与 `isNaN('abc')`：前者 false，因为不转换，字符串本来就不是 NaN；后者 true，因为先做了 `Number('abc')` 得到 NaN。线上判断接口字段「是不是数字」时，两个坑方向相反：全局 `isNaN` 把 `'abc'` 判成 NaN，却对空串返回 false（空串转成 0），两类坏输入一真一假；`Number.isNaN` 只回答「本身是不是 NaN」。校验数字输入应该先 `Number(v)` 再 `Number.isFinite`。\n\n`typeof new String('abc')` 是 `'object'`：显式 `new` 出来的是包装对象，不是原始值，`typeof` 立刻暴露。所以不要用 `new String()`、`new Number()` 造值，它们会让 `===` 比较失败、让 `if` 判断出现意外。\n\n`s.length`：`s` 是原始值，读属性时引擎临时创建 `String` 包装对象、取 `length`、然后丢掉。所以能读不能写：`s.x = 1` 在严格模式下抛 `TypeError`，非严格模式静默丢弃。这就是装箱。\n\n## 四、三个常见误区\n\n### 误区一：`const` 让对象不可变\n现象：有人为了「防止被改」，把配置对象声明成 `const`，结果下游 `config.debug = true` 照样生效。\n为什么错：`const` 管的是绑定，不是对象。属性是否可写由属性描述符的 `writable` 决定，默认是 true。\n正确做法：要不可变就 `Object.freeze`（浅冻结，嵌套得递归），或者用不可变更新每次返回新对象，或者用私有字段把状态藏起来。团队协作里更实际的是约定「入参不写」，再配 lint 规则。\n\n### 误区二：内容相同就该 `===`\n现象：接口返回两个 `{ id: 1 }`，`a === b` 是 false，于是判断「这不是同一个东西」，逻辑走错分支。\n为什么错：`===` 对对象比的是引用地址，不是结构。只要不是同一个对象，内容再像也不相等。\n正确做法：比较 `id` 这类业务主键；真要结构比较用深比较（`util.isDeepStrictEqual` 或 `structuredClone` 后逐层比），`JSON.stringify` 只在键顺序稳定且没有 `undefined`/函数时可用。\n\n### 误区三：`isNaN('abc')` 说明 `'abc'` 是 NaN\n现象：用全局 `isNaN` 校验数字输入，`isNaN('abc')` 为 true 就提示「不是数字」，看似正确；但 `isNaN('')` 是 false，空输入被当成合法数字放过去。\n为什么错：全局 `isNaN` 先做 `Number()` 转换，它回答的是「转成数字后是不是 NaN」，不是「这个值本身是不是 NaN」。空串转成 0，所以不报。\n正确做法：先判类型再判 NaN，或用 `Number.isNaN`；校验用户输入用 `Number.isFinite(Number(v))` 或正则。\n\n## 五、边界与代价\n\n`==` 唯一值得保留的写法是 `x == null`：它同时接住 `null` 和 `undefined`，又不会把 `0`、`''` 算进来。除此之外一律用 `===`，因为读代码的人不该在脑内跑一张转换表。\n\n不要在业务对象上重写 `valueOf`/`toString` 让运算「变聪明」。它会让 `a + b` 的行为藏在另一个文件里，调试时看不出转换发生过；只在值对象（金额、坐标、时间区间）里这么做，并且同时提供显式的 `.add()`、`.toJSON()`。\n\n反例场景：用 `if (!amount)` 校验必填金额。`0` 是合法金额，`!0` 为 true，于是 0 元订单被拦下；同理 `!page` 会把第 0 页当空。要判空用 `amount == null` 或 `Number.isFinite`。\n\n另外两个代价：`typeof null` 返回 `'object'`、`typeof []` 也返回 `'object'`，精确判断得靠 `v === null` 和 `Array.isArray`；金额用浮点加隐式转换必然出错，改用整数分或 decimal 库。\n\n复制对象也有代价：`JSON.parse(JSON.stringify(x))` 会丢 `undefined`、函数和原型，`Date` 变成字符串；`structuredClone` 能处理 `Date`、`Map`、`Set` 和循环引用，但遇到函数直接抛 `DataCloneError`。选哪种复制方式取决于数据里有什么，而不是哪个写得短。\n\n`Object.is` 也不只是学术细节：React 的 `useState` 用它比较新旧值，所以 `setCount(-0)` 在 `count` 为 `0` 时会触发一次重渲染，而 `setCount(NaN)` 不会。写 `useMemo` 依赖数组时同理，理解这一点才能解释「为什么状态看起来没变组件还是渲染了」。\n\n## 六、动手任务\n\n写一个 `typeTag(v)`，返回精确的类型标签，必须能区分这些值：\n\n```text\ntypeTag(null)          → 'null'\ntypeTag([])            → 'array'\ntypeTag(NaN)           → 'nan'\ntypeTag(-0)            → 'negative-zero'\ntypeTag(0)             → 'number'\ntypeTag(1n)            → 'bigint'\ntypeTag(Symbol('s'))   → 'symbol'\ntypeTag('abc')         → 'string'\ntypeTag({})            → 'object'\n```\n\n约束：不能用 `typeof` 单独判断 `null` 和数组；`-0` 只能用 `Object.is` 区分；`NaN` 只能用 `Number.isNaN`。把这九行写成断言数组跑一遍，全绿才算过。再加一行 `typeTag(undefined)`，想清楚它和 `null` 的判断顺序为什么必须分开。判断顺序建议是 `v === null`、`Array.isArray`、`Number.isNaN`、最后 `Object.is(v, -0)`，顺序错了就会把 `-0` 认成普通数字。\n\n## 七、一句话总结\n\n- 原始值复制数据，对象复制地址；`===` 比对象时比的是地址。\n- `const` 锁绑定不锁内容，要不可变就自己造新对象。\n- `+` 遇字符串就拼接，其余算术先 `ToNumber`；提示决定 `valueOf` 还是 `toString` 先跑。\n- 判断「是不是 NaN」用 `Number.isNaN`，判断「是否同一个值」用 `Object.is`。\n- 原始值的属性来自临时装箱对象，读得到、写不进。",
+          "code": "// js-01 完整示例：同一个值，在赋值、传参、比较、转换里为什么不一致\n\n// 1) 原始值按值复制，对象复制的是引用\nlet num = 1\nconst box = { n: 1 }\nconst alias = box\nalias.n = 2\nconsole.log(box.n) // 2：alias 和 box 指向同一个对象\n\n// 2) const 锁的是绑定，不是对象内容\nconst list = [1, 2]\nlist.push(3)\n// list = []           // TypeError: Assignment to constant variable.\nconsole.log(list.length) // 3\n\n// 3) 传参：改形参不影响外面，改属性会\nfunction mutate(x, y) {\n  x = 99 // 只让形参 x 指向新值\n  y.n = 99 // 顺着引用改到同一个对象\n}\nmutate(num, box)\nconsole.log(num, box.n) // 1 99\n\n// 4) 比较：对象比地址，原始值比值\nconsole.log({ n: 1 } === { n: 1 }) // false\nconsole.log('1' == 1, '1' === 1) // true false\n\n// 5) 隐式转换：ToPrimitive 先问 valueOf，再问 toString\nconst price = {\n  valueOf: () => 10,\n  toString: () => '10元',\n}\nconsole.log(price + 1) // 11：+ 走 default 提示，valueOf 先命中\nconsole.log(`${price}`) // 10元：模板字符串要字符串，toString 命中\nconsole.log([] + {}) // [object Object]\nconsole.log(1 + '2', '12' - 1, 1 + 2 + '3') // 12 11 33\n\n// 6) NaN 与 Object.is\nconsole.log(NaN === NaN, Object.is(NaN, NaN)) // false true\nconsole.log(0 === -0, Object.is(0, -0)) // true false\nconsole.log(Number.isNaN('abc'), isNaN('abc')) // false true\n\n// 7) 装箱：原始值临时包了一层对象\nconst s = 'abc'\nconsole.log(s.length, s.toUpperCase()) // 3 ABC\nconsole.log(typeof s, typeof new String('abc')) // string object\nconsole.log(typeof null, typeof 1n, typeof Symbol()) // object bigint symbol",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\nconst a = { v: 1 }\nconst b = a\nb.v = 2\nconst c = { v: 2 }\nconsole.log(a.v, a === c)\n```",
+              "options": [
+                "`2 true`",
+                "`1 false`",
+                "`2 false`",
+                "`1 true`"
+              ],
+              "answer": 2,
+              "explain": "`a` 与 `b` 指向同一个对象，改 `b.v` 就是改 `a.v`，所以第一项是 2；`a` 与 `c` 是两次字面量创建的两个对象，`===` 比的是地址，第二项是 false。选第一个的错误在于把内容相等当成同一对象；选第二或第四个的错误在于以为赋值会复制对象，这是本课最核心的误区。"
+            },
+            {
+              "q": "下面这段想给 `user` 留一份快照再修改，结果 `user` 也被改了。要让 `user` 保持原样，最小改动是哪个？\n\n```js\nconst user = { name: 'ann', scores: [90] }\nconst snapshot = user        // 想留一份快照\nsnapshot.scores.push(80)\nconsole.log(user.scores.length)   // 期望 1，实际 2\n```",
+              "options": [
+                "改成 `const snapshot = structuredClone(user)`",
+                "把 `user` 的声明改成 `let`",
+                "给 `user` 加一句 `Object.freeze(user)`",
+                "把 `scores` 改成用字符串保存"
+              ],
+              "answer": 0,
+              "explain": "赋值只复制引用，`snapshot` 和 `user` 是同一个对象，所以 `push` 改的是同一份数据；`structuredClone` 会深拷贝，连 `scores` 数组一起断开。改成 `let` 只影响能否重新赋值，与内容是否共享无关。`Object.freeze(user)` 只冻结 `user` 自身的属性，`scores` 数组没被冻结，而且就算再冻结数组，它也只是让写入抛错，不会给你一份独立的快照。"
+            },
+            {
+              "q": "`\"abc\".length` 为什么能工作？`\"abc\"` 是原始值，按理说没有属性。",
+              "options": [
+                "字符串在内存里以对象形式存储，`length` 是它自己的属性",
+                "读取属性时引擎临时创建 `String` 包装对象，读完就丢弃",
+                "`length` 是全局函数，按字符串内容算出来的",
+                "字符串不可变，所以引擎为每个字符串缓存了一张属性表"
+              ],
+              "answer": 1,
+              "explain": "原始值本身没有属性，属性访问触发装箱：临时创建 `String` 包装对象、读 `length`、再丢掉，所以能读不能写（`s.x = 1` 在严格模式下抛 `TypeError`）。字符串在规范里是原始值而不是对象，第一个选项错在存储模型。`length` 是 `String` 原型上的访问器，不是全局函数。最后一个选项描述的缓存并不存在，不可变与能否读属性无关。"
+            },
+            {
+              "q": "下面哪个判断只接受 `null` 和 `undefined`，同时把 `0`、`''`、`false` 当作合法值？",
+              "options": [
+                "`if (!v)`",
+                "`if (v == null)`",
+                "`if (v === NaN)`",
+                "`if (v == false)`"
+              ],
+              "answer": 1,
+              "explain": "`== null` 是转换表里唯一值得保留的特例：`null` 只与 `null` 和 `undefined` 相等，`0` 和 `''` 都不会命中。`!v` 会把 `0`、`''`、`false`、`NaN` 全部当成空，这正是金额 0、页码 0 被拦下的原因。`v === NaN` 永远为 false，因为 `NaN` 不等于任何值。`v == false` 会先把布尔转成数字 0，于是 `0` 和 `''` 也被判为相等。"
+            }
+          ]
+        },
+        {
+          "id": "js-02",
+          "title": "函数与作用域：闭包到底捕获了什么",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n最经典的一段：\n\n```js\nconst items = ['a', 'b', 'c']\nfor (var i = 0; i < items.length; i++) {\n  setTimeout(() => console.log(items[i]), 0)\n}\n// 期望 a b c，实际三行 undefined\n```\n\n三个箭头函数读的是同一个 `i`，循环结束时 `i` 是 3，`items[3]` 是 `undefined`，而且读越界下标不会抛错，所以你连报错都看不到。列表按钮版本的表现是「点哪个都提交最后一件商品」。\n\n第二个现象是 `this` 丢失：\n\n```js\nconst timer = {\n  count: 0,\n  start() { setInterval(() => this.count++, 1000) },  // 箭头继承 start 的 this\n}\n```\n\n把箭头换成 `function () { this.count++ }`，`this` 在严格模式下是 `undefined`，`count` 加到别处去了，页面数字永远不动，报错可能是 `Cannot read properties of undefined (reading 'count')`。\n\n第三个现象是内存：页面切走之后，旧列表的十万条数据还在，因为某个回调还引用着它。三件事都指向同一个机制：函数记住的是它定义时所在的那块环境，而不是值。\n\n## 二、原理：它到底怎么运作\n\n作用域链在函数定义时确定，这叫词法作用域。每个函数对象创建时带一个内部槽 `[[Environment]]`，指向它定义处的环境记录；调用函数时新建一个函数环境，这个环境的「外层」是 `[[Environment]]`，不是调用者的环境。所以函数在哪里被调用，不影响它能看见哪些变量。\n\n对比动态作用域：`this` 和 `arguments` 是例外，它们属于「调用时决定」的信息。JS 里只有这两个是动态的，其余变量查找全部按定义位置。把这两套机制分清，很多「这里 this 不对、那里变量却对」的困惑就消失了。\n\n提升规则要一起说清：`var` 声明在进入作用域时就被处理并初始化为 `undefined`，函数声明连函数体一起可用；`let`、`const`、`class` 也会被提升，但留在 TDZ 里，执行到声明前访问就抛 `ReferenceError`。所以「函数声明能先用后定义、箭头函数不能」不是风格问题，而是提升规则。\n\n环境记录里放的是「名字到值」的绑定。闭包捕获的是这个容器，不是某一刻的副本，所以三个回调共享同一个 `i`，谁后读谁看到最新值。`let` 在 `for` 头部会为每一轮创建新绑定（规范里的 per-iteration environment），三个回调各自捕获不同的 `j`，输出 0、1、2。这是 `let` 修好循环闭包的原因，不是「`let` 会复制值」。\n\n顺带说遮蔽：`outer` 里再声明一个 `who` 不会改全局，只是新建一个绑定，`inner` 的作用域链上根本看不到它；想在内层改外层变量，只能通过闭包提供的方法（比如 `inc`），因为赋值同样按链查找。\n\n参数默认值有三个要点：默认值表达式在调用时求值，不是定义时；只有实参是 `undefined` 或没传才用默认值，传 `null`、`0`、`''` 都用传入值；默认值可以引用它前面已经初始化的参数。`arguments` 是类数组对象，非严格模式下还和形参双向映射；剩余参数 `...rest` 是真数组，能用全部数组方法。箭头函数两样都没有自己的 `this` 和 `arguments`，都从外层借。\n\n最后是释放。环境记录是一块内存，只要还有函数、监听器或定时器可达地引用它，它就活着；把最后一个引用断开，闭包和它捕获的数据一起被 GC 回收。闭包本身不是泄漏，泄漏是「不用了还可达」。\n\n## 三、代码逐行\n\n先看一个容易写错的版本，它不在 `code` 里：\n\n```js\nfunction createHandlers(list) {\n  const handlers = []\n  for (var i = 0; i < list.length; i++) {\n    handlers.push(() => list[i])\n  }\n  return handlers\n}\n```\n\n`var i` 是函数级绑定，整个 `createHandlers` 只有一个 `i`。返回后 `i` 等于 `list.length`，所有 handler 读到的都是 `list[length]`，即 `undefined`。把 `var` 换成 `let` 就好，不需要 IIFE 那种老写法。\n\n现在解释 `code` 里的关键行。\n\n`let count = 0` 在 `makeCounter` 的环境里，`inc` 和 `get` 各自持有一个指向这个环境的 `[[Environment]]`。`inc` 执行 `++count` 改的是环境里的绑定，`get` 下次读到的就是 2。调两次 `makeCounter()` 得到两个独立环境，所以 `c2.get()` 是 0——闭包不是全局单例。\n\n`for (var i = 0; ...)` 与 `for (let j = 0; ...)` 的差别就是 per-iteration 绑定：前者三个箭头共享一个 `i`，输出 `[3, 3, 3]`；后者每轮一个新 `j`，输出 `[0, 1, 2]`。注意这个差异只发生在 `for` 循环头部，普通块里的 `let` 只是块级作用域。\n\n`function label(name = 'anon', tag = name + '#' + (++seq))`：`tag` 的默认值引用了前面的 `name`，合法；反过来写会抛 `ReferenceError`，因为初始化有顺序。每次调用都会重新求值，所以 `seq` 每次加一，输出 `anon#1 a#2 b#3`。`label(null)` 输出 `null#5`——`null` 不触发默认值，这正是很多 `x.toFixed is not a function` 的来源。\n\n`const self = this` 配合箭头：`pick.call({ name: 'outer' }, 'arg0')` 让 `pick` 的 `this` 是那个对象，箭头里没有自己的 `this`，用的是 `pick` 的，所以 `picked.arrow()` 得到 `'outer'`；而 `picked.regular()` 是普通方法，`this` 由调用点 `picked` 决定，得到 `'inner'`。同一个对象里两个方法取到两种 `this`，这就是「箭头锁定义处、普通函数看调用点」。\n\n`firstArg: () => arguments[0]`：箭头没有自己的 `arguments`，它借的是 `pick` 的，所以拿到 `'arg0'`。写成普通函数 `firstArg() { return arguments[0] }` 的话，`picked.firstArg()` 没有实参，得到 `undefined`。\n\n再补一个真实场景：把 `picked.regular` 解构出来单独调用，`this` 就丢了——`const { regular } = picked; regular()` 里 `this` 在严格模式下是 `undefined`。因为 `this` 由调用表达式决定，裸调用没有接收者。要固定就 `picked.regular.bind(picked)`，或者一开始就用箭头。\n\n`function sum(first, ...rest)` 里 `Array.isArray(arguments)` 是 false：`arguments` 是类数组，没有 `map`、`filter`，要用 `Array.from(arguments)` 转。新代码直接用 `...rest`，还能配合默认值和解构。\n\n全局的 `who` 与 `inner`：`outer` 里调用 `inner()`，`inner` 返回 `'global'`。查找 `who` 时只看 `inner` 自己的 `[[Environment]]`（全局），`outer` 里那个同名 `who` 根本不在链上。换成动态作用域才会拿到 `'outer'`。\n\n`read = null` 之后，`makeReader` 返回的闭包不再被引用，它捕获的 `rows` 才可能被回收。这里 `rows` 是直接传进去的数组字面量，没有别的变量指着它，所以这行是唯一让它失活的动作。真实项目里还有事件监听器、`setInterval`、全局缓存三处会一直握着回调。\n\n## 四、三个常见误区\n\n### 误区一：闭包捕获的是「那一刻的值」\n现象：看到 `[1, 2, 3].map(i => () => i)` 输出 1、2、3，就以为所有闭包都是快照。\n为什么错：闭包捕获的是绑定，读的时候才取值。`map` 的回调参数每轮都是新绑定，所以这里恰好像快照；换成 `for (var i ...)` 立刻露馅。\n正确做法：需要固定当前值就显式复制进新绑定，比如 `const snapshot = i`，或者用 `let`、箭头参数、`forEach` 的回调参数让每轮产生新绑定。\n\n### 误区二：箭头函数只是普通函数的简写\n现象：为了「简洁」把对象方法写成 `getTotal: () => this.total`，调用时 `this` 是 `undefined`，结果 `NaN`。\n为什么错：箭头函数没有自己的 `this`、`arguments`、`super`，也不能 `new`；`this` 在定义时从外层继承，之后 `call`/`apply`/`bind` 都改不动。\n正确做法：需要动态 `this` 的地方（对象方法、原型方法、需要 `new` 的逻辑）用普通函数；回调、`map` 的参数、需要锁住外层 `this` 的地方用箭头。\n\n### 误区三：默认参数能兜住 `null`\n现象：`function fmt(n = 0) { return n.toFixed(2) }`，接口返回 `null` 时崩在 `toFixed`。\n为什么错：默认值只在实参为 `undefined` 或缺失时生效，`null` 是「传了个值」，直接赋值。接口里 `null` 和 `undefined` 混用非常常见。\n正确做法：在入口统一归一化（`n ?? 0`），或者默认值之外再在函数体里判一次 `n == null`；`??` 能同时接住两者。\n\n## 五、边界与代价\n\n闭包本身不泄漏，泄漏是「该释放的时候还可达」。代价有三块：生命周期不可见，一个返回出去的函数可能拖住整个大对象；每次调用 `makeCounter` 都新建一套环境和函数对象，实例成千上万时内存与 GC 压力都在；闭包里的状态无法从外部观察，调试只能靠断点看 Scope 面板，序列化也拿不到。\n\n反例场景：把十万条数据的数组闭包进每个列表项的点击回调。一百个回调就是一百份对同一数组的引用，删掉 DOM 后回调还被事件系统握着，页面切走内存也不降。正确做法是回调只捕获 `id`，数据从 store 按需取，卸载时 `removeEventListener`、`clearInterval`。另一种常见浪费是在循环里把整个 `item` 对象闭包进去，其实只用到 `item.id`；先取 `const id = item.id` 再闭包，内存能差一个数量级。\n\n不该用闭包的地方：需要跨模块共享的状态（用显式对象或类字段，别用「模块内 `let` 加返回函数」造隐式单例）；需要被序列化或快照的状态；需要被测试直接读写的状态。`arguments` 在新代码里也别用了：严格模式下它不再和形参同步，也没有数组方法。\n\n还有一个隐性代价：闭包让「数据从哪来」不可见。读一个返回出去的函数时，必须往上翻到定义处才知道它捕获了哪些变量，所以团队常要求定义闭包时在注释里写明捕获了什么、生命周期由谁负责。\n\n最后提醒版本差异：闭包是语言核心，不依赖任何版本；真正有版本差异的是块级作用域（ES2015 才引入 `let`）。读老代码时看到 IIFE 别当成风格怪癖，那是在没有 `let` 的年代手工模拟每轮绑定。\n\n## 六、动手任务\n\n先修一个 bug：下面这段要按顺序打印 `0 1 2`，实际打印三个 `3`。\n\n```js\nfor (var i = 0; i < 3; i++) {\n  setTimeout(() => console.log(i), 0)\n}\n```\n\n要求给出两种改法（`let` 版本、`for...of` 版本），并说明为什么 IIFE 那种老写法也能修。然后写一个 `once(fn)`：返回新函数，无论调用多少次，`fn` 只执行一次，后续调用直接返回第一次的结果，并且要保留 `this` 和参数：\n\n```js\nconst init = once(function (a, b) { return this.base + a + b })\ninit.call({ base: 10 }, 1, 2)   // 13\ninit.call({ base: 99 }, 5, 5)   // 仍然是 13\n```\n\n实现提示：用两个闭包变量存 `called` 和 `result`，回调里用 `fn.apply(this, args)` 保留 `this`，`args` 用剩余参数收。还有一个真实取舍：首次调用如果 `fn` 抛错，`called` 要不要置位——置位后错误会被「记住」，不置位则允许重试。\n\n写完再故意用箭头包一层 `const wrapped = () => fn.apply(this, args)`，观察 `this` 变成 `undefined`，`this.base` 一读就抛 `TypeError`——而不是你预期的 13。想清楚为什么。\n\n## 七、一句话总结\n\n- 作用域链在函数定义时确定，`this` 和 `arguments` 在调用时确定。\n- 闭包捕获的是环境里的绑定，不是值；`let` 在 `for` 头部每轮新建绑定才修好循环。\n- 箭头函数没有自己的 `this`、`arguments`，也不能 `new`。\n- 默认参数只对 `undefined` 生效，并且每次调用重新求值。\n- 闭包不泄漏，泄漏是「不用了还可达」；卸载时断开引用。",
+          "code": "// js-02 完整示例：闭包捕获的是变量，不是那一刻的值\n\n// 1) 多个闭包共享同一个环境里的绑定\nfunction makeCounter() {\n  let count = 0\n  return {\n    inc: () => ++count,\n    get: () => count,\n  }\n}\nconst c1 = makeCounter()\nc1.inc()\nc1.inc()\nconsole.log(c1.get()) // 2\nconst c2 = makeCounter()\nconsole.log(c2.get()) // 0：每次调用新建一个环境\n\n// 2) 循环里的 var 共享一个绑定，let 每轮新建\nconst byVar = []\nfor (var i = 0; i < 3; i++) byVar.push(() => i)\nconsole.log(byVar.map(f => f())) // [ 3, 3, 3 ]\n\nconst byLet = []\nfor (let j = 0; j < 3; j++) byLet.push(() => j)\nconsole.log(byLet.map(f => f())) // [ 0, 1, 2 ]\n\n// 3) 默认参数只在没传或传 undefined 时生效，且每次调用重新求值\nlet seq = 0\nfunction label(name = 'anon', tag = `${name}#${++seq}`) {\n  return tag\n}\nconsole.log(label(), label('a'), label('b')) // anon#1 a#2 b#3\nconsole.log(label(undefined, undefined)) // anon#4\nconsole.log(label(null)) // null#5\n\n// 4) 箭头函数没有自己的 this / arguments\nfunction pick() {\n  const self = this\n  return {\n    name: 'inner',\n    regular() { return this.name },\n    arrow: () => self.name,\n    firstArg: () => arguments[0],\n  }\n}\nconst picked = pick.call({ name: 'outer' }, 'arg0')\nconsole.log(picked.regular()) // inner：看调用点\nconsole.log(picked.arrow()) // outer：定义时锁定\nconsole.log(picked.firstArg()) // arg0：借的是 pick 的 arguments\n\n// 5) rest 是真数组，arguments 是类数组\nfunction sum(first, ...rest) {\n  console.log(Array.isArray(rest), Array.isArray(arguments)) // true false\n  return first + rest.reduce((a, b) => a + b, 0)\n}\nconsole.log(sum(1, 2, 3)) // 6\n\n// 6) 作用域链在定义时确定，与调用位置无关\nconst who = 'global'\nfunction outer() {\n  const who = 'outer'\n  return inner() // 虽然是在 outer 里调用，inner 并不看 outer 的 who\n}\nfunction inner() {\n  return who\n}\nconsole.log(outer()) // global\n\n// 7) 闭包拖住被引用的数据：不再需要时断开引用\nfunction makeReader(rows) {\n  return () => rows.length\n}\nlet read = makeReader(new Array(1e5).fill(0))\nconsole.log(read()) // 100000\nread = null // 没有其它引用后，闭包与 rows 才可回收",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\nconst out = []\nfor (var i = 0; i < 2; i++) {\n  for (let j = 0; j < 2; j++) {\n    out.push(() => `${i}${j}`)\n  }\n}\nconsole.log(out.map(f => f()).join(','))\n```",
+              "options": [
+                "`00,01,10,11`",
+                "`21,21,21,21`",
+                "`00,01,01,11`",
+                "`20,21,20,21`"
+              ],
+              "answer": 3,
+              "explain": "`var` 的 `i` 是函数级绑定，四个箭头共享它，循环结束后 `i` 是 2，所以第一位恒为 2；`let` 的 `j` 在 `for` 头部每轮新建绑定，四个箭头分别捕获 0、1、0、1，于是 `20,21,20,21`。选第一个的错误在于以为 `var` 也有块级作用域，那是 `let` 的行为。选第二个错在把内层也当成共享一个绑定。选第三个只是把两轮顺序拼错，没有解释机制。"
+            },
+            {
+              "q": "下面代码想收集三个读取函数，结果全是 `undefined`。问题出在哪？\n\n```js\nconst items = ['a', 'b', 'c']\nconst getters = []\nfor (var i = 0; i < items.length; i++) {\n  getters.push(() => items[i])\n}\nconsole.log(getters.map(g => g()))\n```",
+              "options": [
+                "输出 `['a', 'b', 'c']`，代码没问题",
+                "输出 `[undefined, undefined, undefined]`，三个箭头共享 `i`，调用时 `i` 已是 3",
+                "输出 `[3, 3, 3]`，因为打印的是 `i` 的值",
+                "抛 `TypeError`，因为 `items[3]` 越界"
+              ],
+              "answer": 1,
+              "explain": "三个箭头捕获的是同一个 `var` 绑定 `i`，调用时 `i` 已经是 3，`items[3]` 是 `undefined`，而读取越界下标不会抛错。把 `var` 改成 `let` 才会得到 `['a','b','c']`，因为每轮新建绑定。选第三个混淆了「打印 `i`」和「用 `i` 取数组元素」。选第四个错在以为数组越界会抛错。"
+            },
+            {
+              "q": "闭包捕获的到底是什么？",
+              "options": [
+                "变量所在的环境记录，读的时候才取值",
+                "函数定义时变量的副本，相当于一张快照",
+                "函数被调用时的实参与 `this`",
+                "外层函数的返回值"
+              ],
+              "answer": 0,
+              "explain": "闭包是一个函数加上它定义处的环境记录，变量查找发生在调用时，所以看到的是最新值。捕获副本无法解释 `var` 循环输出三个 3。实参与 `this` 属于调用信息，不是闭包捕获的内容。外层函数的返回值与之无关，闭包持有的是整个环境而不只是返回值。"
+            },
+            {
+              "q": "下面哪种需求必须用普通函数，不能用箭头函数？",
+              "options": [
+                "需要剩余参数收集不定数量的实参",
+                "需要给参数写默认值",
+                "需要 `this` 由调用者决定，比如对象方法或原型方法",
+                "需要解构参数对象"
+              ],
+              "answer": 2,
+              "explain": "箭头函数没有自己的 `this`，定义时从外层继承，`call`/`apply`/`bind` 也改不了，所以依赖调用点的对象方法和原型方法必须用普通函数。剩余参数、默认值、解构参数都是参数语法，两种函数都支持。此外箭头函数还不能 `new`，也没有 `arguments`。"
+            }
+          ]
+        },
+        {
+          "id": "js-03",
+          "title": "数组三件套：map / filter / reduce",
+          "minutes": 50,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n线上白屏，控制台一行红字：\n\n```text\nTypeError: Reduce of empty array with no initial value\n```\n\n代码是 `const total = list.reduce((a, o) => a + o.amount)`。有数据时一直正常，某天用户筛出一个空列表，整页崩了。根因不是 `reduce` 难用，而是没传初始值时它把第一个元素当累加器，空数组没有第一个元素。\n\n第二个现象：价格列表 `[5, 40, 100]` 排完序变成 `[100, 40, 5]`。`sort()` 不带比较器时把所有元素转成字符串按字典序比，`'100' < '40' < '5'`。\n\n第三个现象是「改了自己的数据」：`const sorted = list.sort(...)` 之后，`list` 的顺序也变了——它们本来就是同一个数组。三个现象分别对应初始值、默认比较规则和原地修改。\n\n## 二、原理：它到底怎么运作\n\n三个方法共享一个骨架：遍历数组，对每个存在的下标调用回调 `(当前值, 下标, 原数组)`，收集结果。差别只在「收集成什么」：`map` 一对一，新数组长度等于原数组；`filter` 一对零或一，长度不定；`reduce` 多对一，结果由累加器和你的返回值决定。\n\n`map` 的内部步骤：先按 `length` 建一个等长新数组，再逐个存在的下标调用回调，把返回值写到同一下标。空槽不会调用回调，新数组对应位置也是空槽，所以 `map` 之后 `length` 不变，但不是每个位置都有值。\n\n`filter` 只保留回调返回真值的元素。注意是「真值」不是「布尔」：返回 `'0'`（非空字符串）会保留，返回 `0`（数字）才丢，返回 `undefined` 一律丢——这是忘了写 `return` 时的典型症状。\n\n回调的第三个参数是原数组，很多人不知道，于是写出 `arr.map(x => arr.indexOf(x))` 这种平方复杂度的代码：`indexOf` 每次从头扫，十万条就是上百亿次比较。要下标用第二个参数 `i`，要查找用 `findIndex`，一次遍历就够。\n\n`reduce` 有两种模式。传了初始值时，`acc` 从初始值开始，回调跑 `length` 次（空槽除外），累加器类型由初始值决定：给字符串数组传 `0` 求和，`0 + '1'` 先变成 `'01'`，最后得到字符串。没传初始值时，第一个存在的元素当 `acc`，回调从第二个开始；空数组直接抛 `TypeError`；单元素数组返回那个元素且回调一次都不执行。所以求和的稳妥写法永远带 `, 0`。\n\n`reduce` 做 `groupBy` 时初始值必须是 `{}`：不传的话第一个订单会变成累加器，`acc[o.user]` 等于在订单对象上加属性，最后得到的是一堆挂在订单上的垃圾字段。\n\n`map` 和 `forEach` 都遍历，但 `map` 会为每个存在的下标收一个返回值。想生成 `[0, 1, 2]` 这种序列，`Array.from({ length: 3 }, (_, i) => i)` 可以，`new Array(3).map((_, i) => i)` 不行——新数组全是空槽，回调一次都不跑。\n\n`forEach` 是这三者的「无返回值」版本：返回 `undefined`，不能链式；回调里的 `return` 只跳过本次迭代，等价于 `continue`，不是 `break`。要提前退出，用 `some`、`every`、`find`（命中即停），或者 `for...of`。\n\n可变方法是另一套语义：`sort`、`reverse`、`splice`、`push`、`pop`、`shift`、`unshift`、`fill` 都改原数组，并返回原引用（或返回被删的元素）。`sort` 默认把元素转成字符串按 UTF-16 码元比较，数字必须传 `(a, b) => a - b`；比较器要返回负数、0 或正数，返回布尔值会让顺序未定义。ES2023 起有 `toSorted`、`toReversed`、`toSpliced`、`with`，返回新数组，Node 20 可用。\n\n## 三、代码逐行\n\n先看一段「看起来对」的代码，它不在 `code` 里：\n\n```js\nlet total = 0\norders.map(o => {\n  total += o.amount     // 在 map 里做副作用\n})\n```\n\n它「能跑」，但三处都错：`map` 的语义是映射，返回的新数组被丢掉了；累计逻辑藏在回调里，读代码的人要翻到函数体才知道 `total` 被改；如果回调是 `async`，`total` 还会在 `await` 之后才更新，外面读到的是 0。要遍历做副作用就用 `forEach` 或 `for...of`。\n\n现在逐行看 `code`。\n\n`orders.map(o => o.id)`：新数组 `[1, 2, 3]`，原数组不动。回调只做纯映射、不写外部变量，这是 `map` 唯一推荐的用法。\n\n`orders.filter(o => o.amount >= 100)`：返回订单 1 和 3，元素还是原来那两个对象（浅），改它们的属性原数组也会变。要连元素一起复制，得在后面接 `map(o => ({ ...o }))`。\n\n`orders.reduce((sum, o) => sum + o.amount, 0)`：初始值 `0` 保证空数组返回 0，也保证累加器是数字。去掉 `, 0`，非空时结果一样，空数组时抛 `TypeError`——就是线上白屏那一行。回调的第四个参数是原数组，这里没用上；要算「某笔订单占总额的比例」这类需要全局信息的逻辑才会用到它，也说明 `reduce` 的回调其实是四个参数。\n\n`const g = (acc[o.user] ??= { count: 0, amount: 0 })`：`??=` 只在左边是 `null` 或 `undefined` 时赋值，再把结果返回给 `g`，所以第一次见 `ann` 时创建对象、之后复用同一个。它比 `if (!acc[k]) acc[k] = ...` 安全，后者在 `acc[k]` 是 `0` 或 `''` 时也会覆盖。\n\n`try { [].reduce(...) } catch`：捕获到 `TypeError`。真实代码不要靠 try 兜这个，靠「永远传初始值」避免。\n\n`[5].reduce((a, b) => a + b)` 返回 5：单元素数组没有回调可跑。这解释了为什么 `[].reduce(...)` 报错而 `[1].reduce(...)` 不报。\n\n`['1','2'].reduce((a,b) => a+b, 0)` 得到 `'012'`：第一次是 `0 + '1'`，数字加字符串走拼接，之后一路字符串。累加器的类型在第一次就定型了。\n\n`sparse = [1, , 3]`：`length` 是 3，但下标 1 不存在（不是 `undefined`）。`map` 跳过它，新数组也是稀疏的；`filter` 只留下两个元素，`length` 变 2；`[...sparse]` 展开把空槽变成 `undefined`，所以长度还是 3。判断有没有空洞用 `0 in arr` 或 `Object.keys(arr)`，别用 `length`。\n\n`nums.forEach` 里的 `if (n > 2) return`：只跳过这一次回调，后面继续跑，所以 `seen` 是 `[1, 2]`。要中断只能换方法：`find` 找到即停，`some` 命中 true 即停，`every` 命中 false 即停，`for...of` 里可以直接 `break`。\n\n`[].every(n => n > 0)` 返回 true：全称判断在空集上恒真（vacuous truth）。所以用它做「所有元素都合法」的校验时，空数组会静默通过；要拒绝空数组就在前面补 `if (!list.length) return false`。`some` 对空数组则返回 false。\n\n`raw.sort()`：原地排序并返回原引用，`sorted === raw` 为 true；默认字符串比较把 `100` 排到了 `9` 前面。`[...raw].sort((a, b) => a - b)` 先浅拷贝再排，原数组保持 `[10, 100, 9]`。\n\n`queue.splice(1, 1)`：原地删掉 `'b'`，返回被删元素的数组 `['b']`。要不可变地插入一个元素，用 `slice` 拼：`[...queue.slice(0, 1), 'x', ...queue.slice(1)]` 得到 `['a', 'x', 'c']`。\n\n## 四、三个常见误区\n\n### 误区一：初始值只是「可选参数」\n现象：`[].reduce((a, b) => a + b)` 抛错，或者 `['1','2'].reduce((a, b) => a + b, 0)` 得到 `'012'` 而不是 3。\n为什么错：初始值决定两件事——空数组的返回值，以及累加器的类型。不传时第一个元素兼任累加器，类型也跟着它走。另外 `[5].reduce((a, b) => a + b)` 一次回调都不执行，所以回调里的计数、日志这类副作用在单元素数组上不会发生，别把统计写在 `reduce` 回调里又指望它按元素数跑。\n正确做法：求和永远 `.reduce((a, b) => a + b, 0)`；对象累加传 `{}`；不确定数组是否为空时必须传。\n\n### 误区二：`sort` 返回排好序的新数组\n现象：`this.list.sort()` 之后发现 `this.list` 也变了；或者 `[5, 40, 100].sort()` 得到 `[100, 40, 5]`。\n为什么错：`sort` 是原地方法，返回值就是同一个引用；默认比较是字符串序，不是数字序。\n正确做法：要新数组先 `[...arr]` 或 `arr.toSorted()`；数字一定传 `(a, b) => a - b`。\n\n### 误区三：`filter` 之后的元素是「新的」\n现象：`const vip = list.filter(o => o.vip)` 之后改 `vip[0].name`，`list` 里也变了。\n为什么错：`filter`、`map`、`slice` 都是浅操作，新数组装的是同一批对象引用。\n正确做法：要断开就把元素也复制（`map(o => ({ ...o }))`），嵌套对象用 `structuredClone`。\n\n## 五、边界与代价\n\n链式调用每一步都产出一个中间数组并完整遍历一次。五步链式在十万条数据上就是五次分配、五次遍历，GC 压力和时间都在；合并成一次 `reduce` 或一个 `for...of` 能省掉中间数组，但可读性会下降。经验值：几千条以内优先可读性，链路超过三步或数据上万再合并。\n\n`reduce` 的过度使用是反模式：把过滤、映射、排序、求和、拼字符串全塞进一个 `reduce` 的回调，三十行、无法单测、改一个需求要重读全部。约定是 `reduce` 只做「压成一个值或一个对象」。\n\n反例场景：只有三个元素、还要在中途 `break` 的逻辑，写成 `for...of` 三行就完了，链式加 `some` 反而绕。另外稀疏数组用三件套会得到「长度对不上」的结果，先 `Array.from(arr)` 归一化再处理。\n\n`map` 里不要发请求：`map` 会立刻同步跑完，`async` 回调返回的是 `Promise` 数组，顺序和并发都不受控，需要 `Promise.all` 或串行 `for...of`（见 js-05）。`filter` 的回调应该是纯函数，带副作用的过滤会让「为什么这条没出来」变成玄学。\n\n`sort` 从 ES2019 起保证稳定，相等元素保持原顺序；但比较器返回布尔值或 `NaN` 时顺序变成实现相关，`(a, b) => a > b` 必须改成 `(a, b) => a - b`。排序前也要确认没有 `undefined`，默认比较会把它转成字符串 `'undefined'` 排到最后。要下标又不想多建数组，`for (const [i, o] of orders.entries())` 就够了，可读性不比链式差。\n\n另一个反例是去重：`arr.filter((x, i) => arr.indexOf(x) === i)` 看着聪明，实际是平方复杂度；`[...new Set(arr)]` 或一次 `reduce` 才是线性。链式方法写得越像声明式，越容易藏进这种隐性嵌套遍历。\n\n## 六、动手任务\n\n写 `summarize(orders)`，一次遍历返回：\n\n```text\n输入 [{ user:'ann', amount:120 }, { user:'bob', amount:80 }, { user:'ann', amount:300 }]\n→ { total: 500, count: 3, byUser: { ann: 420, bob: 80 }, topUser: 'ann' }\n\n输入 []\n→ { total: 0, count: 0, byUser: {}, topUser: null }\n```\n\n要求：用 `reduce` 实现，回调里不出现 `map`、`filter`；空数组不能抛错；`topUser` 取金额最高者，金额相同时取先出现的那个。写完用 `assert.deepStrictEqual` 对照上面两组预期输出。再加一个自检：给 `orders` 套一层 `Proxy` 统计 `get` 次数，确认整个函数只遍历一遍。第二组断言最容易漏：空数组一旦少传初始值就直接抛 `TypeError`，还没走到 `deepStrictEqual` 就先炸了。提示：`Proxy` 的 `get` 陷阱只能数到对下标的读取，`length` 也会被读；所以断言写成「下标读取次数不超过 `orders.length`」，而不是精确等于某个数。\n\n## 七、一句话总结\n\n- `map` 一对一、`filter` 一对零或一、`reduce` 多对一；三者都不改原数组。\n- `reduce` 的初始值决定空数组的结果和累加器类型，求和一律传 `0`。\n- `forEach` 的 `return` 只是 `continue`，要短路用 `find`、`some`、`every` 或 `for...of`。\n- `sort`、`reverse`、`splice` 原地改并返回原引用；默认字符串排序，数字必须传比较器。\n- 链式调用每步一个中间数组，数据量大时合并成一次遍历。",
+          "code": "// js-03 完整示例：三件套各自的返回物与边界\n\nconst orders = [\n  { id: 1, user: 'ann', amount: 120 },\n  { id: 2, user: 'bob', amount: 80 },\n  { id: 3, user: 'ann', amount: 300 },\n]\n\n// 1) map：一对一，长度永远不变\nconsole.log(orders.map(o => o.id)) // [ 1, 2, 3 ]\n\n// 2) filter：只做筛选，回调应返回布尔\nconst big = orders.filter(o => o.amount >= 100)\nconsole.log(big.map(o => o.id)) // [ 1, 3 ]\n\n// 3) reduce：把数组压成一个值\nconsole.log(orders.reduce((sum, o) => sum + o.amount, 0)) // 500\n\n// 4) 一次遍历同时做 groupBy 与 countBy\nconst stats = orders.reduce((acc, o) => {\n  const g = (acc[o.user] ??= { count: 0, amount: 0 })\n  g.count += 1\n  g.amount += o.amount\n  return acc\n}, {})\nconsole.log(stats)\n// { ann: { count: 2, amount: 420 }, bob: { count: 1, amount: 80 } }\n\n// 5) 累加器陷阱：空数组 + 不给初始值\ntry {\n  ;[].reduce((a, b) => a + b)\n} catch (e) {\n  console.log(e.constructor.name) // TypeError\n}\nconsole.log([5].reduce((a, b) => a + b)) // 5：首元素当累加器，回调一次都没跑\nconsole.log([0, 1, 2].reduce((a, b) => a + b)) // 3\nconsole.log(['1', '2'].reduce((a, b) => a + b, 0)) // 012：0 + '1' 先变成字符串\n\n// 6) 稀疏数组：三件套都会跳过空槽\nconst sparse = [1, , 3]\nconsole.log(sparse.length) // 3\nconsole.log(sparse.map(x => x * 2)) // [ 2, <1 empty item>, 6 ]\nconsole.log(sparse.filter(() => true).length) // 2\nconsole.log([...sparse].length) // 3：展开把空槽变成 undefined\n\n// 7) forEach 不能 break，需要提前退出就换方法\nconst nums = [1, 2, 3, 4]\nconst seen = []\nnums.forEach(n => {\n  if (n > 2) return // 只是跳过本次回调\n  seen.push(n)\n})\nconsole.log(seen) // [ 1, 2 ]\n\nconsole.log(orders.find(o => o.amount > 200).id) // 3：找到就停\nconsole.log(nums.some(n => n > 3), nums.every(n => n > 0)) // true true\nconsole.log([].every(n => n > 0)) // true：空数组的 every 恒为真\n\n// 8) 可变方法会原地改数组\nconst raw = [10, 9, 100]\nconst sorted = raw.sort() // 默认按字符串比较，而且改的是原数组\nconsole.log(sorted === raw, raw) // true [ 10, 100, 9 ]\nconst asc = [...raw].sort((a, b) => a - b)\nconsole.log(asc, raw) // [ 9, 10, 100 ] [ 10, 100, 9 ]\n\nconst queue = ['a', 'b', 'c']\nconst removed = queue.splice(1, 1) // 原地删除\nconsole.log(queue, removed) // [ 'a', 'c' ] [ 'b' ]\nconst inserted = [...queue.slice(0, 1), 'x', ...queue.slice(1)]\nconsole.log(inserted) // [ 'a', 'x', 'c' ]",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\nconst out = []\n;[1, 2, 3].forEach(n => {\n  if (n === 2) return\n  out.push(n)\n})\nconsole.log(out)\n```",
+              "options": [
+                "`[1]`",
+                "`[1, 2, 3]`",
+                "`[1, 3]`",
+                "`[]`"
+              ],
+              "answer": 2,
+              "explain": "`forEach` 回调里的 `return` 只结束本次回调，等价于 `continue`，第三个元素仍会被处理，所以是 `[1, 3]`。选第一个的错误在于把 `return` 当成 `break`，`forEach` 的返回值也没有中断能力。选第二个错在以为 `return` 之后还会把 2 推进去，实际它连推入语句都没执行。选第三个需要每次回调都命中 `return`，而条件只在 `n === 2` 时成立。"
+            },
+            {
+              "q": "`prices` 是 `[5, 40, 100]`，期望升序。下面代码的问题是什么？\n\n```js\nconst prices = [5, 40, 100]\nconsole.log(prices.sort())\n```",
+              "options": [
+                "输出 `[100, 40, 5]`，默认按字符串比较，应传 `(a, b) => a - b`",
+                "输出 `[5, 40, 100]`，没有问题",
+                "输出 `[100, 40, 5]`，因为 `sort` 默认降序",
+                "输出 `[5, 40, 100]`，因为 `sort` 返回新数组、原数组不变"
+              ],
+              "answer": 0,
+              "explain": "不传比较器时元素被转成字符串按字典序比较，`'100' < '40' < '5'`，所以结果是 `[100, 40, 5]`；同时 `sort` 是原地方法，返回值就是原数组。选第二个忽略了默认的字符串比较，选第三个把结果归因于降序，实际是字符串序。选第四个还错在以为 `sort` 返回新数组。"
+            },
+            {
+              "q": "关于 `reduce` 的初始值，哪句是正确的？",
+              "options": [
+                "不传初始值时回调从第一个元素开始，和传 `0` 完全等价",
+                "不传时累加器的默认值是 `undefined`",
+                "传初始值只影响返回值，不影响回调执行次数",
+                "不传时首元素直接当累加器、回调少跑一次，空数组会抛 `TypeError`"
+              ],
+              "answer": 3,
+              "explain": "不传初始值时第一个存在的元素成为 `acc`，回调从第二个元素开始，所以 `[5].reduce(...)` 一次回调都不执行、直接返回 5；空数组没有任何元素可当 `acc`，抛 `TypeError`。第二个选项把「没有初始值」当成「初始值是 `undefined`」，两者行为完全不同。第三个选项错在：传初始值会改变回调执行次数，空数组时正是它让回调不执行也能返回初始值。"
+            },
+            {
+              "q": "在十万条的数组里找第一个满足条件的元素，找到就该停，用哪个？",
+              "options": [
+                "`filter(...)[0]`，再取第一个",
+                "`find(...)`",
+                "`map(...)[0]`",
+                "`forEach` 里 push 到新数组再取 `[0]`"
+              ],
+              "answer": 1,
+              "explain": "`find` 命中即停并返回那个元素，正是这里的短路语义。`filter` 会遍历完整个数组并新建一个可能很长的数组，只为取第一个元素，十万条时白建一个数组。`map` 同样遍历全部，而且映射结果里还得再判断哪个满足条件。`forEach` 既不能 `break` 也没有返回值，要额外维护变量和状态。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "js-adv",
+      "name": "进阶",
+      "goal": "能判断一个属性是否可枚举、一次拷贝够不够深，能写对并发与错误处理，能说清 this 指向和原型链，并在业务代码里避开浅拷贝、串行 await、this 丢失这三类高频坑。",
+      "lessons": [
+        {
+          "id": "js-04",
+          "title": "对象与解构：数据是怎么组织的",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n上线前给编辑器加了个新配置：版本号只在内部用，不想出现在保存的 JSON 里，于是这样写：\n\n```js\nconst config = { theme: 'dark' }\nObject.defineProperty(config, 'version', { value: '1.0.0' })\nconsole.log(config.version)        // '1.0.0'，读得到\nconsole.log(Object.keys(config))   // ['theme']，version 不见了\nconst saved = { ...config, fontSize: 14 }\nconsole.log(saved.version)         // undefined\n```\n\n读得到、却复制不到。这类问题不会报错，只会让\"明明赋值了\"的字段在跨模块传递时静默消失，等到用户说\"配置没生效\"时，问题已经离现场很远。\n\n同一段代码里还藏着第二个坑：`{ ...config }` 只复制一层。如果 `config.font` 是对象，两个变量就指向同一块内存，改一个另一个跟着变。还有一个更常见的现场：给某个对象挂了个 `toString` 方法方便调试，结果 `for...in` 多遍历出一项，序列化结果里也多了一个函数字段 —— 因为属性默认是可枚举的，而 `for...in` 连原型链上的可枚举属性一起走。\n\n数据库里读出来的记录更典型：接口返回前习惯性写 `{ ...row }`，前端却反馈 `id` 不见了。翻半天代码没找到 delete，最后发现 ORM 把主键定义成了不可枚举属性。属性可不可见，不写在业务代码里，写在对象的元数据里。\n\n对象不是\"键值对袋子\"，它有一套属性规则（描述符）和一条原型链；解构、展开、`Object.freeze`、`structuredClone` 都只是在这套规则上做的取舍。不弄清规则，就只能靠反复试错。\n\n## 二、原理：它到底怎么运作\n\n每个属性都有一组描述符。数据属性是 `value` / `writable` / `enumerable` / `configurable`，访问器属性是 `get` / `set` / `enumerable` / `configurable`。字面量 `{ a: 1 }` 创建的属性，四个开关全是 true；而 `Object.defineProperty` 只写 `value` 时，其余三个默认是 false —— 不可枚举、不可写、不可配置。同一个描述符里同时给 `value` 和 `get` 会直接抛 TypeError，两者只能选一种。\n\n`enumerable` 决定了属性是否参与\"遍历类\"操作：`Object.keys`、`for...in`、展开运算符、`Object.assign`、`JSON.stringify` 都会跳过它。这就是\"读得到但复制不到\"的根因。注意 `for...in` 还会遍历原型链上的可枚举属性，`Object.keys` 不会 —— 这是两者最实质的区别。\n\n属性顺序也有规则：整数形式的键（`'1'`、`'20'`）按数值升序排在前面，其余字符串键按插入顺序，Symbol 键不进入 `Object.keys` 但仍会被展开复制。写快照对比、表单字段排序时如果依赖 keys 顺序，很容易在数字键上翻车。\n\n访问器属性的 get 函数在每次读取时执行，所以解构 `const { a } = obj` 也会触发 getter —— 一个有副作用或很慢的 getter，能让一次普通解构变成 bug 源。类里写的 get 方法落在 prototype 上，同样不可枚举。\n\n读属性时，引擎先查自有属性，没有就沿 `[[Prototype]]` 往上一层层找，直到 `null`。`in` 查整条链，`Object.hasOwn` 只看自己。写属性不会沿链写，只会落在自己身上；但如果原型上有个同名 setter，赋值会调用那个 setter，看起来就像\"写到了父级\"。用 `Object.create(null)` 造出来的对象没有原型，适合当字典，代价是连 `toString` 都没有。另外 `__proto__` 只是挂在 `Object.prototype` 上的访问器，是 `[[Prototype]]` 的语法糖；取原型用 `Object.getPrototypeOf` 更稳，因为 `__proto__` 可能被同名属性覆盖。\n\n解构是\"按键取值\"：`const { a } = obj` 等价于 `obj.a`，所以原型上的属性也能解构出来。默认值 `= 3` 只在取到 `undefined` 时生效，`null` 不触发；重命名 `{ a: x }` 里冒号左边是键、右边是新变量；嵌套解构 `{ user: { name } }` 一旦 `user` 为 `undefined` 就直接抛错。\n\n拷贝分三层：赋值是共享引用；展开和 `Object.assign` 是浅拷贝，复制自有且可枚举的属性，值是对象时搬的仍是引用；`structuredClone` 是深拷贝，用结构化克隆算法，支持循环引用、`Date`、`Map`、`Set`，但函数会抛错、原型会丢失。三者的差别不是\"快慢\"，而是\"复制哪一层、复制哪些属性\"。\n\n## 三、代码逐行\n\n```js\nconst raw = { theme: 'dark', font: { size: 14 } }\nObject.defineProperty(raw, 'version', { value: '1.0.0' })\nconst copy = { ...raw }\ncopy.font.size = 20\n\nconsole.log(Object.keys(raw))                       // ['theme', 'font']\nconsole.log(Object.hasOwn(raw, 'version'))          // true\nconsole.log(copy.version)                           // undefined\nconsole.log(raw.font.size)                          // 20\nconst desc = Object.getOwnPropertyDescriptor(raw, 'version')\nconsole.log(desc.writable, desc.enumerable)         // false false\n```\n\n1. `{ theme, font }` —— 字面量属性的三个开关全为 true。`font` 的值是一个对象引用，这一行决定了后面浅拷贝的后果。\n2. `defineProperty(raw, 'version', { value })` —— 只给 value，其余默认 false。version 确实存在、能读，但不可枚举、不可写、不可配置；去掉这一行改用 `raw.version = '1.0.0'`，后面三行的结果全部翻转。\n3. `{ ...raw }` —— 展开只搬自有且可枚举的属性，version 被跳过；`font` 搬的是引用。换成 `Object.assign({}, raw)` 结果完全一样。\n4. `copy.font.size = 20` —— 改的是共享的那一个 font 对象，`raw.font.size` 同步变成 20。这就是浅拷贝的真实代价。\n5. `Object.keys(raw)` 得到 `['theme', 'font']`，`JSON.stringify(raw)` 同样丢掉 version。线上\"存进去少了字段\"多半就是这一条。\n6. `Object.hasOwn(raw, 'version')` 是 true，因为它确实存在，只是不可枚举。用 `Object.keys().includes()` 判断字段存在性是错的。\n7. `copy.version` 是 undefined：属性没被搬过去，不是\"值丢了\"。这类\"复制后少字段\"的问题，检查顺序永远是先看描述符，再看原型。\n8. `getOwnPropertyDescriptor` 一次列出四个开关，排查\"为什么改不动、为什么遍历不到\"时先打印它，比猜快得多。\n9. 把展开换成 `JSON.parse(JSON.stringify(raw))`，version 依然丢失 —— JSON 序列化同样只认可枚举的自有属性。根治办法只有两个：`defineProperty` 时显式写 `enumerable: true`，或者干脆用普通赋值。\n\n## 四、三个常见误区\n\n### 误区一：`{ ...obj }` 或 `Object.assign` 是深拷贝\n\n现象：复制一份 state 后改嵌套字段，原对象跟着变。原因：两者都只复制第一层的属性值，值是对象时复制的是引用。有人改成 `JSON.parse(JSON.stringify(obj))`，嵌套确实分开了，但 `Date` 变成字符串、`undefined` 和函数字段被删掉、`NaN` 变成 `null`、循环引用直接抛错 —— 换了一种错法。正确做法是只手工展开被修改路径上的每一层；数据干净时可以用 `structuredClone`；团队项目也可以用 immer 这类结构共享库。\n\n### 误区二：`Object.freeze` 冻结了整个对象\n\n现象：`Object.freeze(CONFIG)` 之后 `CONFIG.font.size = 20` 依然生效。原因：freeze 只把自己这一层每个自有属性的 writable 和 configurable 设为 false，并阻止增删属性，嵌套对象和 `Map`/`Set` 里的内容完全不受影响。要深冻结必须递归，并且要处理循环引用。有人以为冻结数组就安全了：`Object.freeze(arr)` 之后 `push` 确实会抛 TypeError（`length` 不可写），但 `arr[0].x = 1` 照样生效。另外，冻结后赋值在严格模式抛 TypeError，在非严格模式静默失败 —— 两种表现都不等于\"有人会提醒你\"。\n\n### 误区三：用 `in` 或 `obj.hasOwnProperty` 判断字段是否存在\n\n现象：`'toString' in {}` 是 true；`Object.create(null)` 创建的对象调用 `hasOwnProperty` 直接抛 TypeError。原因：`in` 会查整条原型链，`hasOwnProperty` 可能被同名属性覆盖（比如接口返回的字段就叫这个名字），对象也可能根本没有原型。正确做法是 `Object.hasOwn(obj, key)`，语义就是\"自有属性\"，不受原型影响；需要兼容老环境时写 `Object.prototype.hasOwnProperty.call(obj, key)`，别写 `obj.hasOwnProperty(key)`。\n\n## 五、边界与代价\n\n`structuredClone` 不是万能深拷贝：函数、DOM 节点、Promise 都会抛 DataCloneError；类实例会被克隆成普通对象，原型上的方法全部丢失；属性描述符和冻结状态也不保留。传类实例进去之前，先想清楚下游是否还要调用它的方法。\n\n深拷贝有真实开销，对象越大、层级越深越慢。在 60fps 的渲染循环里对上千条数据做 `structuredClone`，或者每次 setState 都深拷贝整个 store，卡顿是必然的。反例：一个每秒刷新 30 次的实时列表，每条记录都 `structuredClone` —— 这里应该做结构共享，只替换变动的那几个节点。\n\n不可变更新在深嵌套时可读性很差：`{ ...a, b: { ...a.b, c: { ...a.b.c, d: 1 } } }`。层数超过三层就该抽一个 `setIn` 工具，而不是继续手写；再往上就该换数据结构。\n\n冻结也不是免费的：递归冻结一棵大对象树要遍历每个节点，只在开发环境或一次性初始化时做，别放进请求处理的热路径。顺带区分三个容易混的方法：`preventExtensions` 只禁止加新属性，`seal` 再加一条禁止删除，`freeze` 才连写也禁。业务里说\"这个对象不能改\"，通常需要的是 freeze 加强制不可变更新，而不是 seal —— 后者会留下\"删不掉也改不了、又没保护嵌套\"的半成品状态。同理，解构默认值的表达式每次调用都会求值，`function f({ list = buildBigList() } = {})` 在没传参时会白跑一遍。\n\n解构默认值救不了 `null`，也救不了\"参数整个没传\"：`function f({ a }) {}` 调用 `f()` 会抛 TypeError，必须写成 `function f({ a } = {})`。\n\n## 六、动手任务\n\n写两个函数并自己验证：\n\n1. `deepFreeze(obj)`：递归冻结；遇到非对象或已冻结的直接返回；用 `WeakSet` 记录访问过的对象以处理循环引用。验收：`Object.isFrozen(deepFreeze({ a: { b: 1 } }).a)` 为 true，且传入循环引用的对象不会死循环。`Object.isFrozen` 判断是第一道闸，`WeakSet` 是第二道 —— 少了任何一道，循环引用都会把栈打爆。\n2. `setIn(obj, path, value)`：`path` 形如 `['editor', 'fontSize']`，返回新对象，原对象不变，未涉及的子树保持同一引用。\n\n验收脚本：\n\n```js\nconst s = { theme: 'dark', editor: { fontSize: 14, tabSize: 2 } }\nconst n = setIn(s, ['editor', 'fontSize'], 16)\nconsole.log(s.editor.fontSize, n.editor.fontSize) // 14 16\nconsole.log(n.theme, n.editor.tabSize)            // dark 2\nconsole.log(n === s, n.editor === s.editor)       // false false\n```\n\n`setIn` 的难点在\"逐层复制\"：从根往下走，每一层都用展开复制一份，只替换最后一段。写完把 `path` 改成三层再跑一遍，确认中间层也没被改。故意把某层的 `{ ...obj }` 删掉，观察原对象被污染的现象，再把它加回来 —— 这一步比读十遍定义有用。另外，`path` 里出现不存在的键时，展开会静默创建它，拼错的路径会悄悄长出一棵新树；正式使用前先校验路径存在。\n\n## 七、一句话总结\n\n- 读得到不等于复制得到：`enumerable: false` 的属性会被 keys、JSON、展开集体忽略。\n- 属性描述符是对象的元数据，`getOwnPropertyDescriptor` 是排查\"改了没反应\"的第一现场。\n- 展开和 assign 只复制一层，值是对象就还是共享；深拷贝要付 `structuredClone` 的代价，并接受它的边界。\n- `Object.freeze` 只冻一层，真不可变要么递归冻结，要么靠约定加结构共享。\n- `in` 查原型链，`Object.hasOwn` 只看自己，判断字段是否存在用后者。",
+          "code": "'use strict'\n\n// 1) 浅拷贝：只复制第一层，嵌套对象仍是同一个引用\nconst defaults = { theme: 'light', editor: { fontSize: 14, tabSize: 2 } }\nconst shallow = { ...defaults }\nshallow.editor.fontSize = 20\nconsole.log(defaults.editor.fontSize) // 20 —— 原对象被改\n\n// 2) 只复制被修改路径上的每一层，其余子树复用引用\nconst user = { ...defaults, editor: { ...defaults.editor, fontSize: 16 } }\nconsole.log(user.editor.fontSize, defaults.editor.fontSize) // 16 20\nconsole.log(user.editor === defaults.editor) // false\nconsole.log(user.theme, user.editor.tabSize) // light 2\n\n// 3) structuredClone 能处理循环引用\nconst state = { count: 0, self: null }\nstate.self = state\nconst cloned = structuredClone(state)\nconsole.log(cloned !== state, cloned.self === cloned) // true true\n\n// 4) 但 structuredClone 会丢原型、拒绝函数\nclass Point {\n  constructor() {\n    this.x = 1\n  }\n  distance() {\n    return this.x\n  }\n}\nconst p = structuredClone(new Point())\nconsole.log(p instanceof Point, typeof p.distance) // false undefined\ntry {\n  structuredClone({ fn: () => 1 })\n} catch (err) {\n  console.log(err.name) // DataCloneError\n}\n\n// 5) JSON 深拷贝处理不了循环引用\ntry {\n  JSON.parse(JSON.stringify(state))\n} catch (err) {\n  console.log(err instanceof TypeError) // true\n}\n\n// 6) freeze 只冻一层：嵌套对象照样能改\nconst config = Object.freeze({ theme: 'dark', font: { size: 14 } })\nconfig.font.size = 20\nconsole.log(Object.isFrozen(config), config.font.size) // true 20\nconsole.log(Object.isFrozen(config.font)) // false",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\nconst proto = { a: 1, b: 2 }\nconst obj = Object.create(proto)\nobj.c = 3\nconst { a, b = 20, d = 4 } = obj\nconsole.log(a, b, d)\n```",
+              "options": [
+                "1 2 4",
+                "1 20 4",
+                "undefined 2 4",
+                "1 2 undefined"
+              ],
+              "answer": 0,
+              "explain": "解构是按键取值，会沿原型链读到 a=1、b=2；默认值 20 只在取到 undefined 时生效，这里取到的是 2。d 不存在，取到 undefined 才落到默认值 4。选 1 20 4 的人误以为默认值会覆盖原型上的值；选 undefined 2 4 的人误以为解构只看自有属性；选 1 2 undefined 的人漏了默认值。"
+            },
+            {
+              "q": "下面这段代码想返回一个\"加了标签的新 state\"，它错在哪？\n\n```js\nconst state = { user: { name: \"ada\", tags: [] } }\n\nfunction addTag(tag) {\n  const next = { ...state }\n  next.user.tags.push(tag)\n  return next\n}\n\naddTag(\"js\")\nconsole.log(state.user.tags)\n```",
+              "options": [
+                "push 只能用于数字数组，应该换成 unshift",
+                "展开只复制了一层，next.user 与 state.user 是同一个对象，push 改到了原 state；应逐层展开 user 和 tags",
+                "user 是原型上的属性，所以展开时被跳过了",
+                "必须用 JSON.parse(JSON.stringify(state)) 才能修复，逐层展开做不到"
+              ],
+              "answer": 1,
+              "explain": "展开复制的是属性值，值是对象时复制的仍是引用，所以 next.user 和 state.user 指向同一个对象，push 直接改了原数组。选 push 只能用于数字数组是无中生有；选 user 在原型上也不对，它本来就是自有可枚举属性；JSON 深拷贝确实能修，但\"逐层展开做不到\"是错的，手工展开被修改的那两层同样有效且更便宜。"
+            },
+            {
+              "q": "调用 Object.defineProperty(obj, \"x\", { value: 1 }) 之后，下面哪句描述是对的？",
+              "options": [
+                "x 可写可枚举，和字面量属性完全一样",
+                "x 可读，但不可写、不可枚举、不可配置；Object.keys、JSON.stringify、展开都看不到它",
+                "x 完全不可读，访问它得到 undefined",
+                "x 可读可写，只是不能用 delete 删除"
+              ],
+              "answer": 1,
+              "explain": "defineProperty 没有写出来的开关默认是 false，所以 x 不可写、不可枚举、不可配置，遍历和序列化都会跳过它。选项一混淆了 defineProperty 与字面量的默认值；选项三把\"不可枚举\"错当成\"不可读\"；选项四说反了 writable 与 configurable。"
+            },
+            {
+              "q": "下面哪种用法会让 structuredClone 抛错或丢数据？",
+              "options": [
+                "克隆一个带循环引用的普通对象",
+                "克隆 class 实例，并期望克隆后还能调用原型上的方法",
+                "克隆同时包含 Date 和 Map 的配置对象",
+                "克隆一个嵌套三层的普通数组"
+              ],
+              "answer": 1,
+              "explain": "结构化克隆能处理循环引用，也支持 Date、Map、Set 和嵌套数组；但类实例会被还原成普通对象，原型上的方法全部丢失，如果实例自带了函数属性还会直接抛 DataCloneError。其余三项都是它明确支持的输入。"
+            }
+          ]
+        },
+        {
+          "id": "js-05",
+          "title": "异步：Promise 与 async/await",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n详情页要同时拉用户、订单、优惠券三个接口，代码看起来已经是并行了：\n\n```js\nasync function loadAll(ids) {\n  return ids.map(async (id) => {\n    const res = await fetch(`/api/items/${id}`)\n    return res.json()\n  })\n}\nconst items = await loadAll([1, 2, 3])\nconsole.log(items[0].title)   // undefined\n```\n\n`loadAll` 返回的不是数组，而是一个 Promise，它的值是「三个 Promise」。`await` 只解开最外面那一层，里面三个请求还在飞。`items[0]` 是一个 pending 的 Promise，`.title` 自然是 undefined —— 因为不报错，这个 undefined 会一路带到渲染层，最后表现为\"接口有数据，页面是空的\"。\n\n两个修法方向相反：`Promise.all(ids.map(...))` 是真并行；`for (const id of ids) await ...` 是串行，三个请求排队，总耗时相加。选错的代价，一边是\"数据是 undefined\"，一边是\"页面慢三倍\"。\n\n另一个常见现场：控制台只留一行 UnhandledPromiseRejection，堆栈指向框架内部，没有任何一行是你写的。某个 Promise 被创建后没人 catch，错误在微任务里被抛到了全局。\n\n更有迷惑性的是 catch 的位置：`p.then(f).catch(h)` 能接住 f 抛的错，而 `p.catch(h).then(f)` 接不住 —— catch 只处理它上游的那一段，f 在下游，出错时已经越过了 h。链条一长，\"明明写了 catch，还是报未捕获\"就是这么来的。\n\n## 二、原理：它到底怎么运作\n\nPromise 是一个状态机：pending → fulfilled 或 rejected，单向、不可逆。`new Promise(executor)` 里的 executor **同步执行**，但 `resolve`/`reject` 只有第一次调用生效，后面全被忽略。executor 里同步抛错会直接让它 rejected，所以 `new Promise((resolve) => { throw new Error('x') })` 等价于 reject；反过来，`resolve` 之后再抛错就没用了，状态已经锁定。\n\n`then(onFulfilled, onRejected)` 做两件事：注册回调，并**返回一个新的 Promise**；新 Promise 的状态由回调的返回值或抛错决定。所以链式调用能一路往下传，而原 Promise 永远不变。\n\n回调永远异步执行（微任务），哪怕 Promise 已经 fulfilled，`p.then(f)` 里的 f 也不会在当前栈里跑。回调里抛错不会炸掉当前调用栈，而是把返回的那个新 Promise 变成 rejected —— 这就是\"错误穿透\"：中间没有 catch，就一直往后传。回调返回一个 Promise 时，新 Promise 会\"采纳\"它的状态，等它落定。\n\n一个最小顺序题：`console.log(1); Promise.resolve().then(() => console.log(3)); console.log(2)` 输出 1、2、3 —— then 的回调被放进微任务队列，当前栈清空后才执行。再补一个 `setTimeout(..., 0)`，它排在所有微任务之后。这类题不是背结论，而是记住\"then 的回调一定晚于当前同步代码\"。\n\n`async` 函数是语法糖，但有三处要记准：调用时立刻返回 Promise，函数体同步执行到第一个 `await`；`await x` 相当于把后面的代码注册成 `x` 的回调（还是微任务，`await 1` 也会让出）；`await` 一个 rejected 值会在该位置抛出，能被 try/catch 接住，这只是 `.catch` 的另一种写法，不是新的错误模型。`await` 也能接 thenable —— 任何带 `then` 方法的对象都会被 `Promise.resolve` 拆包，所以第三方库返回的\"类 Promise\"对象照样能 await。\n\n四个组合器的失败语义完全不同：`all` 任意一个 reject 就整体 reject，其余请求仍在跑，结果被丢弃；`allSettled` 等全部结束，返回 `{ status, value }` 或 `{ status, reason }` 数组，永不 reject；`race` 第一个 settle，成功失败都算；`any` 第一个成功，全失败抛 `AggregateError`，`.errors` 里是每个失败原因。`all` 接受任意可迭代对象，非 Promise 的元素会被 `Promise.resolve` 包一层；空数组直接 fulfilled，这是唯一一个不用 try/catch 也安全的边界。\n\n取消：Promise 本身没有取消接口。`AbortController` 的思路是\"把 signal 传进去，让操作自己响应\"，fetch 收到 abort 会以 `DOMException`（name 为 `AbortError`）reject，且被 abort 的请求不会再有响应体。还有一点容易忽略：Promise 的状态无法同步读取，没有 `p.state` 这样的属性，只能通过 then 观察 —— 想\"先拿到结果再继续\"的人，最后往往写出把结果塞进外部变量的反模式。\n\n## 三、代码逐行\n\n```js\nasync function getUser(id, signal) {\n  const res = await fetch(`/api/users/${id}`, { signal })\n  if (!res.ok) throw new Error(`HTTP ${res.status}`)\n  return res.json()\n}\n\nconst controller = new AbortController()\nconst timer = setTimeout(() => controller.abort(), 3000)\ntry {\n  const user = await getUser(1, controller.signal)\n  console.log(user.name)\n} catch (err) {\n  console.log(err.name)          // 超时：AbortError\n} finally {\n  clearTimeout(timer)\n}\n```\n\n1. `async function` —— 调用即返回 Promise；函数体同步跑到第一个 await；`throw` 和 `return` 都会被自动包装成 rejected / fulfilled，不需要手动 `new Promise`。\n2. `fetch(url, { signal })` —— 把取消通道传进去。没有 signal，后面的 abort 对这次请求毫无影响，前端\"不等了\"但连接还在。\n3. `if (!res.ok) throw` —— fetch 只在网络层失败（断网、DNS、CORS 被拦）时 reject；404 和 500 都是\"成功的响应\"，必须自己看 `res.ok` 或 `res.status`，否则会把错误页当数据解析。这行是 fetch 最常见的漏洞。\n4. `return res.json()` —— 返回的是 Promise，async 会自动展开它；`return await res.json()` 在这里是多余的。JSON 解析失败同样会让整个函数 rejected。\n5. `new AbortController()` 加 `setTimeout` —— Promise 没有内置超时，超时是\"定时器 + abort\"拼出来的；3 秒后 abort，第 2 行的请求以 AbortError 失败。\n6. `try/catch` —— 同时接住 HTTP 错误、JSON 解析错误和 AbortError；靠 `err.name` 或自定义错误类区分，别只写一句\"请求失败\"。\n7. `finally { clearTimeout(timer) }` —— 请求提前成功时清掉定时器。不清也不会立刻出错，但组件卸载后定时器仍会触发 abort，在频繁挂载的场景里就是泄漏。\n8. `signal` 是可以复用的：一个 controller 的 signal 传给多个请求，一次 abort 全部取消（路由切换时的标准做法）。但 abort 之后这个 signal 永久是 aborted，下一批请求必须新建 controller。\n9. `try` 包住 `await` 和把 `catch` 挂在 `then` 后面，效果等价；但 try 块里如果还有别的同步代码，同步异常也会被同一个 catch 接住，排查时先分清错误来源。\n\n## 四、三个常见误区\n\n### 误区一：在 map 里 await，以为就是并发\n\n`await ids.map(async ...)` 拿到的是 Promise 数组，`await` 之后每个元素仍是 Promise；`for...of` 里 `await` 才是串行。要并行就 `Promise.all(ids.map(...))`，要限流就用\"固定数量 worker + 共享游标\"，不能靠 `forEach` —— 它不会等回调里的 Promise，错误也接不住。验证方式很简单：给三个任务各加 100ms 延迟，`Promise.all` 版本约 100ms 结束，`for...of` 版本约 300ms，用 `Date.now()` 打点，别靠感觉。\n\n### 误区二：以为 `Promise.all` 一项失败就取消了其他请求\n\n`all` 只是\"不再等\"，其他 fetch 仍在跑、仍占带宽、仍可能写库。要真正取消，得让每个请求共用一个 `AbortController`，并在 catch 里 abort。注意这种短路只影响\"等待\"和\"结果\"，不影响已经开始的工作，所以 catch 里通常要显式 abort。另外 `all` 的 reject 只带第一个错误，其余失败信息全部丢失 —— 需要全部原因就用 `allSettled`。\n\n### 误区三：try/catch 能接住所有异步错误\n\n`try { setTimeout(() => { throw new Error('x') }) } catch (e) {}` 接不住，因为错误发生在另一个调用栈。没 await 的 Promise、事件回调里的异常同样接不住，只有 `await` 过的才能被这个 try 捕获。全局兜底是浏览器的 `unhandledrejection` / `window.onerror`、Node 的 `process.on('unhandledRejection')`，它们只能记录和上报，不能恢复执行，也不能替代本地的 catch。在 Node 15 以后，未处理的 rejection 默认会让进程退出，线上表现就是\"服务偶尔重启\"，日志里却只有一行警告。\n\n## 五、边界与代价\n\n`Promise.all` 不是越多越好：几十个请求同时发会打满浏览器同源连接数（HTTP/1.1 大约 6 个），也让下游服务瞬间雪崩。真实项目要限流，5 个左右的并发是个稳妥起点。串行也不是\"安全\"的同义词：三个互不依赖的接口串起来，用户就要多等两倍时间；弱网下每次往返 100ms 起，串行最容易把首屏拖过 3 秒。\n\n`allSettled` 不会失败，所以容易掩盖问题：三个接口全挂了它照样返回一个数组，只检查 `results.length` 就以为成功，是典型的线上事故。它适合\"部分失败可以降级\"的场景，用的时候必须逐项看 `status`。\n\n`any` 适合\"多个镜像源取最快\"，但它只保留第一个成功值，其余失败信息塞在 `AggregateError.errors` 里，而且其他请求不会被取消，只是结果被丢掉。\n\n反例：一个下单流程里写 `Promise.all([扣库存, 建订单, 发短信])`。三者有依赖、部分失败要回滚，并行执行只会让状态更难恢复 —— 这里应该串行加补偿，而不是并行。\n\n另一个取舍是\"失败要不要重试\"：GET 是幂等的，可以重试；POST 不是。`Promise.all` 里混着读写请求时，一个失败就整体失败，按整体重试会把已经成功的写再做一遍 —— 这类流程需要单独设计补偿，不能指望组合器兜住。\n\n超时封装必须传 signal，否则只是\"前端不等了\"，后端还在算。`AbortSignal.timeout(3000)` 更简洁，但要注意目标环境支持情况。反过来，取消也不能滥用：abort 掉一个已经提交的写请求，服务端可能已经落库，前端却以为失败了，重试就会重复提交。\n\n还有一类代价容易被忽略：await 会把函数切成多段，调试器里的调用栈在每段之间断开，错误堆栈常常只剩最后一段，跨 async 的排查要靠 `error.cause`、或是日志里带上业务 id。这也是为什么\"日志里的上下文\"比\"堆栈\"更值钱。顺带一句：`finally` 里不要写 `return`，它会吞掉原来的返回值或异常。\n\n## 六、动手任务\n\n全部用 `setTimeout` 模拟，不联网：\n\n1. `sleep(ms, value)`：ms 后 resolve 出 value。\n2. `mapLimit(items, limit, fn)`：并发上限为 limit，结果顺序与输入一致。\n3. `withTimeout(promise, ms)`：超时以 `Error('timeout')` 失败，且不留下未处理的 rejection。\n\n验收：`mapLimit([1,2,3,4,5], 2, async n => { await sleep(100); return n * 2 })` 输出 `[2,4,6,8,10]`，总耗时约 300ms（5 个任务、2 并发，跑 3 轮）；把 limit 改成 1，耗时应变成约 500ms。`withTimeout(sleep(800, 'ok'), 300)` 应在 300ms 左右抛出 timeout，而不是等到 800ms 或触发 unhandled rejection。最后把失败、超时、主动取消三条错误路径各跑一次，打印 `error.name`，确认没有一条漏到全局。\n\n提示：`mapLimit` 用一个共享游标 `let cursor = 0`，起 `Math.min(limit, items.length)` 个 worker，每个 worker 用 `while (cursor < items.length)` 领任务。先写 limit=1 的版本验证顺序，再放开并发。`withTimeout` 里要记得在 promise 落定后 `clearTimeout`，并让内部 promise 的 reject 始终被 catch —— 否则一个\"超时赢了\"的 Promise 之后仍会 rejected，变成没有归属的 unhandled rejection。写完用 `process.on('unhandledRejection', ...)` 在 Node 里跑一遍，确认它一次都没被触发。\n\n## 七、一句话总结\n\n- `await` 只解一层；`map(async)` 得到的是 Promise 数组，不是结果数组。\n- `then` 返回新 Promise，回调抛错变成下游 rejected，这就是错误穿透。\n- `all` 快速失败、`allSettled` 全收、`race` 第一个结束、`any` 第一个成功。\n- 串行还是并行由业务依赖决定，不由代码好不好看决定；并发要限流。\n- Promise 不能被取消，取消靠 signal，超时靠定时器加 abort。",
+          "code": "// 全部任务用 setTimeout 模拟，不联网，可直接在 Node 20+ 运行\nconst sleep = (ms, value) => new Promise((resolve) => setTimeout(() => resolve(value), ms))\nconst fail = (ms, message) => new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))\n\n// 并发上限为 limit 的 map，结果顺序与输入一致\nasync function mapLimit(items, limit, fn) {\n  const results = new Array(items.length)\n  let cursor = 0\n  const worker = async () => {\n    while (cursor < items.length) {\n      const index = cursor++\n      results[index] = await fn(items[index], index)\n    }\n  }\n  const size = Math.min(limit, items.length)\n  await Promise.all(Array.from({ length: size }, () => worker()))\n  return results\n}\n\n// 能被 AbortSignal 取消的任务\nfunction runTask(ms, signal) {\n  return new Promise((resolve, reject) => {\n    if (signal.aborted) {\n      reject(signal.reason)\n      return\n    }\n    const timer = setTimeout(() => resolve(`done in ${ms}ms`), ms)\n    signal.addEventListener(\n      'abort',\n      () => {\n        clearTimeout(timer)\n        reject(signal.reason)\n      },\n      { once: true },\n    )\n  })\n}\n\nasync function main() {\n  // 1) 串行 vs 并行：同样的 3 个 150ms 任务\n  const serialStart = Date.now()\n  const serial = []\n  for (const id of [1, 2, 3]) serial.push(await sleep(150, id))\n  console.log('serial', serial, Date.now() - serialStart) // [1,2,3] ≈450\n\n  const parallelStart = Date.now()\n  const parallel = await Promise.all([1, 2, 3].map((id) => sleep(150, id)))\n  console.log('parallel', parallel, Date.now() - parallelStart) // [1,2,3] ≈150\n\n  // 2) allSettled 保留每一项的成败，顺序与输入一致\n  const settled = await Promise.allSettled([sleep(30, 'ok'), fail(10, 'boom')])\n  console.log(settled.map((r) => r.status)) // ['fulfilled', 'rejected']\n  console.log(settled[0].value, settled[1].reason.message) // ok boom\n\n  // 3) any：第一个成功；全部失败才抛 AggregateError\n  console.log(await Promise.any([fail(10, 'a'), sleep(20, 'win')])) // win\n  try {\n    await Promise.any([fail(10, 'a'), fail(20, 'b')])\n  } catch (err) {\n    console.log(err.name, err.errors.map((e) => e.message)) // AggregateError ['a','b']\n  }\n\n  // 4) 限流：5 个任务、并发 2，共 3 轮\n  const started = Date.now()\n  const results = await mapLimit([1, 2, 3, 4, 5], 2, async (n) => {\n    await sleep(100)\n    return n * 2\n  })\n  console.log(results, Date.now() - started) // [2,4,6,8,10] ≈300（含调度开销，实测 300–350）\n\n  // 5) 取消：50ms 后 abort，200ms 的任务以 AbortError 结束\n  const controller = new AbortController()\n  const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 50)\n  try {\n    await runTask(200, controller.signal)\n  } catch (err) {\n    console.log(err.name) // AbortError\n  } finally {\n    clearTimeout(timer)\n  }\n}\n\nmain()",
+          "quiz": [
+            {
+              "q": "下面代码的输出顺序是什么？\n\n```js\nasync function run() {\n  console.log('A')\n  await null\n  console.log('C')\n}\nrun()\nconsole.log('B')\n```",
+              "options": [
+                "A、B、C",
+                "A、C、B",
+                "B、A、C",
+                "A、B、C，但 C 比 setTimeout 更晚"
+              ],
+              "answer": 0,
+              "explain": "async 函数体同步执行到第一个 await，打印 A 后返回一个 Promise；主栈继续打印 B；await 之后的续体是微任务，当前栈清空后才打印 C。选 A、C、B 的人误以为 await 会阻塞主线程；选 B、A、C 的人把异步函数的同步段也当成了异步；最后一项错在微任务一定早于定时器。"
+            },
+            {
+              "q": "下面这段代码的错误在哪？\n\n```js\nasync function loadTitles(ids) {\n  const list = ids.map(async (id) => {\n    const res = await fetch(`/api/items/${id}`)\n    return (await res.json()).title\n  })\n  return list.map((item) => item.toUpperCase())\n}\n```",
+              "options": [
+                "map 里不能写 async，这段代码是语法错误",
+                "list 是 Promise 数组，item 上没有 toUpperCase，会抛 TypeError；应先 await Promise.all(ids.map(...))",
+                "res.json() 需要 await 两次才能拿到对象",
+                "fetch 需要 await 两次，否则拿到的是未读取的流"
+              ],
+              "answer": 1,
+              "explain": "map 返回的是回调结果组成的数组，回调是 async 就得到 Promise 数组；对 Promise 调 toUpperCase 会抛 TypeError。map 里写 async 完全合法，只是不会等待；res.json() 一次 await 就够，返回的 Response 也只是多一次 await 的事，与 toUpperCase 报错无关。"
+            },
+            {
+              "q": "关于 p.then(f)，下面哪句是对的？",
+              "options": [
+                "f 同步执行，then 返回原 Promise",
+                "f 总在当前调用栈之后以微任务执行；then 返回新 Promise，f 抛错会让新 Promise 变 rejected，原 Promise 状态不变",
+                "then 返回新 Promise，但 f 抛错会污染原 Promise 的状态",
+                "f 只在成功时执行，失败时 then 本身会抛错"
+              ],
+              "answer": 1,
+              "explain": "then 注册回调并返回一个新 Promise，回调永远是微任务；回调抛错只会让新 Promise rejected，原 Promise 已经 settled，不可更改。选项一错在同步执行和返回值；选项三错在\"污染原 Promise\"；选项四是错的，失败时第一个回调被跳过，then 不会抛错（除非给了第二个参数并由它抛出）。"
+            },
+            {
+              "q": "并发请求 3 个镜像源，只要有一个成功就返回，全部失败才报错。应该用哪个组合器？",
+              "options": [
+                "Promise.all",
+                "Promise.race",
+                "Promise.any",
+                "Promise.allSettled"
+              ],
+              "answer": 2,
+              "explain": "Promise.any 在第一个成功后 fulfill，全部失败时抛 AggregateError，正好对应\"有一个成功就返回、全失败才报错\"。all 是第一个失败就整体失败；race 是第一个 settle 就返回，可能返回失败；allSettled 永远成功且要等全部结束，还需要自己判断结果。"
+            }
+          ]
+        },
+        {
+          "id": "js-06",
+          "title": "this、原型与 class",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n给用户列表加一个\"打招呼\"按钮，逻辑写在 class 里，看起来很自然：\n\n```js\nclass User {\n  constructor(name) { this.name = name }\n  greet() { return `hi ${this.name}` }\n}\nconst user = new User('Ada')\nconst handler = user.greet\nhandler()\n// TypeError: Cannot read properties of undefined (reading 'name')\n```\n\n把方法当回调传出去 —— `setTimeout(user.greet, 0)`、`button.addEventListener('click', user.greet)`、`arr.map(user.greet)` —— 方法里的 `this` 就不再是 user。class 体内的代码是严格模式，`this` 是 `undefined`，所以报的是\"读 undefined 的属性\"；如果换成普通对象的方法，`this` 会变成全局对象，不报错，但结果同样错，还会顺手往全局写一个 `name`。\n\n`this` 不是\"函数自己的属性\"，它在每次调用时由**调用位置**决定。同一个函数，换一种调用方式就换一个 `this`，这就是所有\"方法丢了\"问题的根源。\n\n## 二、原理：它到底怎么运作\n\n五种绑定，优先级从高到低：`new`（新对象）> 显式（`call`/`apply`/`bind`）> 隐式（`obj.fn()` 的点号左边）> 默认（严格模式 `undefined`，非严格模式全局对象）。箭头函数不参与这套规则，它没有自己的 `this`，取的是**定义时**外层作用域的值，且无法被 call/bind 改写。\n\n`call(thisArg, a, b)` 立即调用，参数逐个传；`apply(thisArg, [a, b])` 立即调用，参数是数组或类数组；`bind(thisArg)` 不调用，返回一个 this 被永久固定的新函数。bind 多次只有第一次生效，之后再 call 也改不了 —— 绑定是单向的。传原始值当 this 时，非严格模式会被装箱成对象（`call(1)` 里的 this 是 Number 包装对象），严格模式保持原始值，所以 `typeof this` 在两种模式下结果不同。\n\n原型链：每个函数都有一个 `prototype` 对象，每个对象都有一个内部槽 `[[Prototype]]`（`__proto__` 是它的访问器）。`new C()` 做四件事：建一个空对象；把它的 `[[Prototype]]` 指向 `C.prototype`；以这个对象为 this 执行构造函数；返回这个对象（如果构造函数显式返回了对象，则返回那个对象）。方法放在 prototype 上，所有实例共享一份；实例只存自己的字段。`instanceof` 不神秘，就是沿左侧对象的原型链找 `C.prototype`，找到就 true。\n\n`class` 是语法糖，本质仍然是构造函数加 prototype，但有几处真实差异：类体是严格模式；方法不可枚举（`Object.keys(实例)` 看不到）；类声明有 TDZ（声明前 `new` 抛 ReferenceError，不是 undefined）；必须用 `new` 调用，直接调用抛 TypeError；派生类构造函数里必须先 `super()` 才能碰 `this`。\n\n类字段（`count = 0`、`onClick = () => {}`）是另一套初始化：它们在 `super()` 之后、构造函数体之前按声明顺序执行，每个实例各有一份。字段写成箭头函数时，this 在初始化那一刻就绑定到实例，之后无论怎么传递都不会丢 —— 这是\"方法丢失\"最省心的解法，代价是每个实例多一个函数对象。\n\n`super` 不是\"父类实例\"，它沿 `[[HomeObject]]`（方法定义时所在的那个 prototype）去找父级方法，调用时 `this` 仍是当前实例。私有字段 `#x` 是真正的私有：不在对象上留下任何可枚举痕迹，外部访问是语法错误，只能用 `#x in obj` 做品牌检查。\n\n顺带记一个高频点：`addEventListener` 的回调用普通函数时，`this` 是触发事件的元素（`currentTarget`），换成一个箭头函数，`this` 就变成外层作用域的值。两者都能用，但含义完全不同，混用时会得到\"为什么这里 this 是 window\"的困惑。\n\n## 三、代码逐行\n\n```js\nclass Counter {\n  constructor() { this.count = 0 }\n  inc() { return ++this.count }\n}\nconst c = new Counter()\nconst inc = c.inc\n// inc()                                                     // TypeError：this 是 undefined\nconst bound = inc.bind(c)\nconsole.log(bound(), bound())                                // 1 2\nconsole.log(Object.keys(c))                                  // ['count']\nconsole.log(Object.getOwnPropertyNames(Counter.prototype))    // ['constructor', 'inc']\nconsole.log(Object.getPrototypeOf(c) === Counter.prototype)   // true\nconsole.log(c instanceof Counter)                             // true\n```\n\n1. `constructor` 里只放\"每个实例独有\"的字段。把方法写进构造函数也能跑，但每个实例各持一份函数，内存翻倍，也没法在 prototype 上统一替换或打补丁。\n2. `inc()` 定义在 `Counter.prototype` 上，所有实例共享。这一行决定了下面 `Object.keys(c)` 只看到 `count`。\n3. `const inc = c.inc` —— 取出函数本身，和 c 的关联就此断开。调用位置从\"`c.inc()`\"变成\"`inc()`\"，绑定规则从隐式退化成默认。写成 `const inc = c.inc.bind(c)` 或 `const inc = () => c.inc()` 都能跑，但含义不同：前者固定了 this，后者每次调用才重新取方法。\n4. `// inc()` —— class 体严格模式，默认绑定给 `undefined`，于是 `this.count` 抛 TypeError。去掉严格模式就是静默绑定全局，bug 更难找。\n5. `inc.bind(c)` —— 返回新函数，this 永久固定为 c，后续 `call({...})` 也无法改写。注意 `bind` 之后 `bound.name` 会变成 `bound inc` 之类的形式，排查时别被名字骗。\n6. `Object.keys(c)` 是 `['count']`：方法在原型上且不可枚举。调试时\"实例上没有方法\"不是 bug，`Object.getOwnPropertyNames(c)` 同样只有 `count`。\n7. `getOwnPropertyNames(Counter.prototype)` 能看到 `constructor` 和 `inc`：类的所有方法（包括 getter、setter、普通方法）都挂在这里，`constructor` 也指向类本身。\n8. `getPrototypeOf(c) === Counter.prototype` 与 `instanceof` 检查的是同一件事：原型链第一环是 `Counter.prototype`，再往上是 `Object.prototype`，最后是 `null`。\n9. 这 8 行里没有一行改过 `this`，但 `bound` 和直接调用 `inc` 的结果完全不同 —— 决定 this 的是调用表达式长什么样，不是函数在哪里定义。\n\n## 四、三个常见误区\n\n### 误区一：以为箭头函数\"没有 this\"，所以能当对象方法\n\n箭头函数的 this 来自外层作用域。定义在对象字面量里时，外层通常是模块顶层或全局，不指向这个对象，所以 `const o = { n: 1, get: () => this.n }` 拿不到 `o.n`；在模块里 `this` 还是 undefined，调用时直接 TypeError。箭头适合\"在方法内部再定义回调\"，比如 `arr.map(x => this.count + x)`，不适合作为对象或类的方法本身。判断一次调用会不会丢 this，看调用点的点号，而不是看函数定义在哪里。\n\n### 误区二：用 bind 解决 this，结果监听器移除不掉\n\n`el.addEventListener('click', this.onClick.bind(this))` 每次 `bind` 都产生一个新函数，`removeEventListener` 传入另一个新的 bind 结果永远匹配不上，监听器连同它闭包里的 DOM 一起泄漏。正确做法有两种：在构造函数里 `this.onClick = this.onClick.bind(this)` 只绑定一次并存下来，或者直接把方法写成类字段 `onClick = () => {}`，保证引用始终是同一个。这也是前端框架里\"组件卸载后还在响应事件\"的典型成因。顺手排查的办法：在 DevTools 控制台用 `getEventListeners(el)` 看元素上还挂着几个监听，数量只增不减就是这里的问题。\n\n### 误区三：把 `__proto__` 和 `prototype` 混为一谈\n\n`prototype` 是函数才有的属性，是给 `new` 用的模板；`__proto__`（规范名 `[[Prototype]]`）是每个对象都有的内部槽，指向它的父级。`Counter.prototype` 本身是个对象，它的 `__proto__` 是 `Object.prototype`；而实例的 `__proto__` 是 `Counter.prototype`。改 `C.prototype = {}` 只影响之后 new 出来的实例，已经存在的实例仍指向旧原型，`instanceof` 会立刻变 false。\n\n## 五、边界与代价\n\n不要为了 this 到处 bind：bind 每次都产生新函数，丢失原函数的 `length`，`name` 也会被改写，还让\"这个方法到底绑到了谁\"变得不可见。优先用调用时 `call`，或者用箭头类字段一次性固定。\n\nclass 不是唯一选择，也不总是更好的选择。纯数据加纯函数（组合）在业务代码里通常更好测、更好序列化。只有需要\"一份状态 + 一组行为 + instanceof 或私有字段\"时，class 才值得。一个实用判据：如果这个对象要经过 JSON 传给前端、或要存进数据库，用普通对象省事得多。如果只是想把状态藏起来、又不想要继承，闭包工厂函数是更轻的方案：每次调用返回一组方法，共享同一个局部变量，天然没有 this 问题。\n\n反例：用继承表达订单类型，`class VipOrder extends Order`、`class VipRefundOrder extends VipOrder`。类型一多、行为一交叉，继承树就会爆炸，改父类方法时不知道会影响谁。这里用\"策略对象 + 组合\"更稳，深继承超过两层时 `super` 的查找路径已经很难在脑内追踪。\n\n私有字段 `#x` 有真实代价：它不会被 `JSON.stringify`、`Object.keys`、展开或 `structuredClone` 带出来，持久化时必须自己写 `toJSON`；单元测试也不能直接读，只能加一个方法暴露。另一个代价是它无法被\"打补丁\"：外部没有办法在读写出错时插入日志，只能改类本身。如果只是想要\"外部别乱改\"，用 `WeakMap` 存私有状态、或者干脆用闭包工厂函数，都是可选的替代方案，各有取舍。另外，`Object.setPrototypeOf` 在运行时频繁调用会破坏引擎的内联缓存，性能敏感路径上应该用 `Object.create` 一次成型。\n\n还有一个容易被忽略的边界：非严格模式下 this 绑定全局，会让\"方法丢了\"从报错变成静默污染全局变量。把项目切成 ESM（模块默认严格模式），等于让这类 bug 在第一现场就暴露。\n\n方法丢失还有一个隐式版本：`arr.map(obj.format)` 里，map 以 `(item, index, array)` 三个参数调 format，this 是 undefined。如果 format 恰好只读第一个参数，代码看起来能用，直到某天它开始读 `this.prefix`，整条列表一起出错。这类 bug 的修复成本不在改法，而在定位 —— 它出现在\"很久以前\"的代码里。\n\n## 六、动手任务\n\n实现三个工具，都必须正确处理 this：\n\n1. `once(fn)`：只执行一次，后续调用返回第一次的结果，`this` 与参数原样透传。\n2. `memoize(fn)`：按第一个参数缓存结果，用 `Map`；命中缓存时也不能丢 this 语义。\n3. `bindAll(obj, keys)`：把对象上指定的方法绑定到自身，返回该对象。\n\n验收脚本：\n\n```js\nconst obj = { n: 2, inc(x) { return this.n + x } }\nconst f = once(obj.inc)\nconsole.log(f.call({ n: 10 }, 1))   // 11\nconsole.log(f.call({ n: 100 }, 5))  // 11，且不再执行\nconst o = { n: 3, add(x) { return this.n + x } }\nbindAll(o, ['add'])\nconst { add } = o\nconsole.log(add(4))                 // 7\n```\n\n`once` 的关键是用 `fn.apply(this, args)` 而不是 `fn(args)`，否则第一次调用的 this 就丢了。`memoize` 用 `cache.has(arg)` 而不是 `if (cache.get(arg))`，否则结果是 `0`、`''`、`false` 时会重复计算。`bindAll` 要返回原对象，方便链式调用。\n\n三个都写完再跑一遍\"失败版\"：把 `apply` 改成普通调用、把 `has` 改成真值判断、把 `bindAll` 删掉，逐个观察哪个验收值先坏掉。能预测出坏在哪一行，才算真的掌握了 this 的传递路径。\n\n## 七、一句话总结\n\n- this 由调用位置决定：new > 显式 > 隐式 > 默认；箭头函数不参与，取定义处外层。\n- bind 只认第一次，返回新函数；call/apply 立即执行，区别只在传参形式。\n- 方法在 prototype 上共享且不可枚举，实例只存自己的字段。\n- class 是严格模式加原型，方法不可枚举、必须 new、派生类先 super。\n- 丢失 this 的三处高发地：回调、解构方法、定时器；修法是绑定一次或改用箭头字段。",
+          "code": "'use strict'\n\n// 1) 原型链：实例只存字段，方法在 prototype 上共享\nclass Animal {\n  constructor(name) {\n    this.name = name\n  }\n  speak() {\n    return `${this.name} makes a sound`\n  }\n}\n\nclass Dog extends Animal {\n  #toy = 'bone'\n  speak() {\n    return `${super.speak()} / woof`\n  }\n  static isDog(value) {\n    return #toy in value // 品牌检查：外部无法伪造\n  }\n}\n\nconst dog = new Dog('Rex')\nconsole.log(dog.speak()) // Rex makes a sound / woof\nconsole.log(Object.keys(dog)) // ['name']\nconsole.log(Object.hasOwn(dog, 'speak')) // false\nconsole.log(Object.getPrototypeOf(dog) === Dog.prototype) // true\nconsole.log(Object.getPrototypeOf(Dog.prototype) === Animal.prototype) // true\nconsole.log(Dog.isDog(dog), Dog.isDog({})) // true false\n\n// 2) 丢失 this：方法被摘下来单独调用\nconst speak = dog.speak\ntry {\n  speak()\n} catch (err) {\n  console.log(err.name) // TypeError：this 是 undefined\n}\nconsole.log(dog.speak.call({ name: 'Tom' })) // Tom makes a sound / woof\n\n// 3) bind 只认第一次\nfunction who() {\n  return this.name\n}\nconst a = who.bind({ name: 'a' })\nconst b = a.bind({ name: 'b' })\nconsole.log(a(), b(), a.call({ name: 'c' })) // a a a\n\n// 4) Object.create：不调用构造函数也能造对象\nconst base = { greet() { return `hi ${this.name}` } }\nconst child = Object.create(base)\nchild.name = 'Ada'\nconsole.log(child.greet()) // hi Ada\nconsole.log('greet' in child, Object.hasOwn(child, 'greet')) // true false\n\n// 5) class 必须用 new 调用\ntry {\n  Dog('x')\n} catch (err) {\n  console.log(err.name) // TypeError\n}",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\nfunction who() { return this.name }\nconst a = who.bind({ name: 'a' })\nconst b = a.bind({ name: 'b' })\nconst obj = { name: 'obj', who }\nconsole.log(a(), b(), obj.who())\n```",
+              "options": [
+                "a b obj",
+                "a a obj",
+                "a a a",
+                "a b b"
+              ],
+              "answer": 1,
+              "explain": "bind 只认第一次绑定：b 是把已经绑定过的 a 再 bind 一次，this 仍然是 { name: \"a\" }，所以 a 和 b 都返回 a；obj.who() 是隐式绑定，this 是 obj，返回 obj。选 a b obj 的人以为二次 bind 会覆盖；选 a a a 的人漏了 obj.who() 的隐式绑定；选 a b b 的人两处都判断错了。"
+            },
+            {
+              "q": "这段代码运行时会发生什么？\n\n```js\nclass Counter {\n  constructor() { this.count = 0 }\n  start() {\n    setInterval(function () {\n      this.count += 1\n      console.log(this.count)\n    }, 1000)\n  }\n}\nnew Counter().start()\n```",
+              "options": [
+                "回调里的 this 不是实例（是全局对象，Node 里是 Timeout 对象），this.count 得到 undefined，undefined + 1 变成 NaN；应改用箭头函数或提前 bind(this)",
+                "setInterval 不能访问外部变量，必须改成 setTimeout 递归",
+                "constructor 里没有绑定 this，所以 count 一开始就是 undefined",
+                "setInterval 的延迟必须小于 1000，否则回调里的 this 会变"
+              ],
+              "answer": 0,
+              "explain": "普通函数回调的 this 由调用方决定：定时器把 this 设成全局对象（Node 里是 Timeout 对象），读到的 this.count 是 undefined，加一得 NaN，实例上的 count 始终是 0。箭头函数继承 start 的 this，或在 start 里先 bind(this)，都能修。选项二与 this 无关；选项三不对，count 已在构造函数里赋成 0；选项四是编造的规则。"
+            },
+            {
+              "q": "关于 class 与原型的关系，下面哪句是对的？",
+              "options": [
+                "class 的方法会复制到每个实例上，所以实例之间互不影响",
+                "class 的方法定义在构造函数的 prototype 上且不可枚举，实例通过原型链访问，Object.keys(实例) 看不到方法",
+                "class 是全新的对象模型，不依赖 prototype",
+                "实例的 __proto__ 指向构造函数本身"
+              ],
+              "answer": 1,
+              "explain": "class 本质仍是构造函数加 prototype，方法挂在 Ctor.prototype 上且不可枚举，实例通过原型链共享它们。选项一错在\"复制到每个实例\"，那样会浪费内存；选项三错在 class 就是原型机制的语法糖；选项四错在实例的 __proto__ 指向 Ctor.prototype，而不是构造函数。"
+            },
+            {
+              "q": "关于 this 与 bind 的取舍，下面哪句是对的？",
+              "options": [
+                "给 addEventListener 传 this.handler.bind(this)，可以用同样写法的 removeEventListener 移除",
+                "在构造函数里 bind 一次并保存引用，或用箭头类字段，才能保证 add 与 remove 拿到同一个函数",
+                "bind 之后仍然可以用 call 改掉 this",
+                "箭头函数可以被 new 调用，只是拿不到 this"
+              ],
+              "answer": 1,
+              "explain": "bind 每次都返回新函数，两次 bind 的引用不同，removeEventListener 匹配不上，监听器会泄漏；只有绑定一次并保存引用（或箭头类字段）才稳定。选项一错在引用不一致；选项三错在 bind 固定 this 后 call 无效；选项四错在箭头函数没有构造能力，new 会抛 TypeError。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "js-pro",
+      "name": "实战",
+      "goal": "学完能用原生 DOM 与事件把一组数据渲染成可交互、不漏监听器的页面；用 ESM 和 fetch 组装出带超时、错误分类的请求链路；出错时能用结构化错误、因果链和全局兜底自己定位问题。",
+      "lessons": [
+        {
+          "id": "js-07",
+          "title": "DOM 与事件：把数据变成界面",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n上午十点，「订单管理」页的删除按钮上线了。测试同学点了一下，页面白屏、刷新，控制台没有红色报错，只有一条 `GET /orders?page=1` 的导航记录。\n\n结构是这样：\n\n```html\n<form id=\"filters\"><button class=\"del\">删除</button></form>\n```\n\n```js\ndocument.querySelector('.del').addEventListener('click', (e) => {\n  e.stopPropagation()\n  removeRow()\n})\n```\n\n`<button>` 在 `<form>` 里的默认 `type` 是 `submit`。`stopPropagation()` 只是不让事件继续冒泡，它拦不住浏览器对按钮执行的「提交表单」这个默认动作。于是删除逻辑执行了，页面也刷新了。\n\n第一个症状五分钟能修，第二个要等线上有人反馈「删一条删了三条」才会被发现。因为「多绑了几次」不会报错，它只是让同一段逻辑多跑几遍；只有当一个操作不幂等（比如发请求、写库、扣库存）时，重复执行才会变成可见的事故。\n\n同一个页面还有第二个症状：列表 200 行，每行一个按钮。点第 3 行的按钮，接口被调了三次——因为渲染函数每次重跑都在给整张表重新 `addEventListener`，删了行也不解绑。\n\n两个症状指向同一件事：DOM 的存在方式和事件的传播方式，是两个独立机制。分开看都不难，混在一起就会写出「看起来在跑、其实在漏」的界面代码。\n\n## 二、原理：它到底怎么运作\n\n一次点击会沿 DOM 树走三趟：事件对象从 `window` 出发，经过 `document`、`html`、`body` 和各级祖先，下到真正被点的元素，这是捕获阶段；到达目标元素时是目标阶段；然后原路返回、一路上浮到 `window`，这是冒泡阶段。\n\n`addEventListener(type, fn, useCapture)` 的第三个参数决定监听器挂在哪一趟：`true` 或 `{ capture: true }` 挂捕获，默认挂冒泡。同一元素上捕获监听器先于冒泡监听器执行，同一趟里按注册顺序执行。\n\n这条路径带来两个必须分清的动作：\n\n- `stopPropagation()` 停止传播。事件不再往后走，但**同一节点上其他监听器照常执行**；要连它们一起停，用 `stopImmediatePropagation()`。\n- `preventDefault()` 取消默认动作。表单提交、链接跳转、复选框勾选、`wheel` 滚动都是默认动作，它只在 `event.cancelable === true` 时有效。\n\n两者互不影响：调前者不阻止提交，调后者不阻止冒泡。\n\n目标阶段有个容易记错的细节：事件到达 `inner` 时，挂在 `inner` 上的捕获监听器和冒泡监听器都会执行，顺序是捕获监听器在前、冒泡监听器在后，与注册顺序无关。所以「先注册的先执行」只在同一趟里成立，跨阶段不成立。现代浏览器都按这个顺序实现，老代码里靠注册顺序「碰巧对上」的逻辑，换个浏览器就可能翻车。\n\n想亲眼确认阶段，可以在监听器里打印 `e.eventPhase`：`1` 是捕获、`2` 是目标、`3` 是冒泡。同一个回调挂两遍（一遍捕获、一遍冒泡），两次打印的值会不一样，这比背定义可靠。\n\n事件委托利用的是冒泡这一趟。既然子元素的事件一定经过父元素，就没必要给每个子元素各挂一个监听器：在稳定的父容器上挂一个，用 `event.target` 找到真正被点的元素，再向上找你要的那一层。列表新增一行时，新行自动被这个监听器覆盖，不需要重新绑定。\n\n代价是 `event.target` 永远是「最深的那个元素」——点了 `<span>`，拿到的是 `span` 而不是 `li`。`closest` 恰好补上这一步：它从元素自身开始匹配，一层层向上找第一个符合选择器的祖先（含自身）。点在 `li` 本身时返回它自己，点在 `span` 时返回包着它的 `li`，都不需要你写循环。\n\n## 三、代码逐行\n\n```js\nconst list = document.querySelector('#todo')\nlist.addEventListener('click', (e) => {\n  const li = e.target.closest('li')\n  if (!li || !list.contains(li)) return\n  li.classList.toggle('done')\n})\n```\n\n1. `document.querySelector('#todo')` 只查一次，把结果留在闭包里。别在监听器内部每次点击都重新查询，那等于把 DOM 查询放进热路径。\n2. `list.addEventListener('click', ...)` 只挂一个监听器，处理 N 个子元素。挂载点必须是「不会随渲染被替换掉」的容器——如果每次渲染都把 `<ul>` 换掉，监听器会跟着旧节点一起被丢弃。\n3. `e.target` 是真正被点的元素，可能是 `span`、`input`，也可能是 `ul` 自己。用 `e.currentTarget` 拿到的是 `list`，两者不是一回事。\n4. `closest('li')` 从 `e.target` 向上找最近的 `li`，找不到返回 `null`。它是委托的核心：不关心点到了哪一层，只关心它在不在某个 `li` 里。\n5. `if (!li || !list.contains(li))` 是防护。点在 `ul` 空白处时 `closest` 返回 `null`，直接 `li.classList` 就是 `TypeError`；`closest` 还可能向上穿出列表、匹配到页面别处的 `li`，所以用 `contains` 把它关回内部。\n6. `classList.toggle('done')` 只改一个 class，不重建节点。若用 `li.innerHTML = ...` 重写，`li` 里的 `<input>` 会换成新节点，用户正在输入的内容、勾选状态、其他监听器全没了。\n7. 如果监听器写成 `async`，`await` 之后的 `e.currentTarget` 会变成 `null`——事件对象在派发结束后就被回收了。去掉 `await` 或提前把需要的值存进局部变量，否则你会对着 `null` 调方法。\n\n## 四、三个常见误区\n\n### 误区一：用 stopPropagation 阻止跳转或提交\n\n现象：给链接加了 `e.stopPropagation()`，页面照跳。\n\n原因：跳转是 `<a>` 的默认动作，不是传播行为。`stopPropagation()` 只影响事件往上走，浏览器该跳还是跳。\n\n正确做法：`e.preventDefault()`。两者可以同时用——既不想让父级知道这次点击、又不想让表单提交，就两个都调，并写清楚为什么。\n\n还有一种抄来的写法：在原生监听器末尾写 `return false`，以为能阻止默认行为。那套约定来自 jQuery，原生 `addEventListener` 直接忽略返回值，`return false` 在这里等于什么都没做。\n\n### 误区二：渲染一次绑一次，删除时不解绑\n\n现象：列表刷新三次后，点一次按钮，接口被调三次。\n\n原因：监听器由「节点 + 类型 + 函数引用」三者确定。每次渲染都 `addEventListener` 一个新的匿名函数，旧节点被 `innerHTML` 清掉时，挂在该节点上的监听器会随节点回收；但挂在 `window`、`document` 或常驻容器上的监听器会一直留在内存里，并且继续被触发。\n\n正确做法：容器只绑一次（委托）。必须动态绑定时，要么保存函数引用再 `removeEventListener`，要么用一个 `AbortController` 统一解绑：\n\n```js\nconst ac = new AbortController()\nwindow.addEventListener('resize', onResize, { signal: ac.signal })\nac.abort() // 一次解绑该 signal 上的所有监听器\n```\n\n判断有没有重复绑定有个笨办法：连续点两次同一个按钮，数控制台打了几行日志。如果第一次一行、第二次三行，就是每次渲染都在叠加。\n\n### 误区三：用 innerHTML 拼用户数据\n\n现象：某个用户的昵称是 `<img src=x onerror=\"alert(1)\">`，列表页弹出对话框；或者列表里正在输入的内容，一刷新就没了。\n\n原因：`innerHTML` 把字符串当 HTML 解析，用户数据里任何标签都会被浏览器执行；同时它会销毁并重建所有子节点，事件监听器和输入状态一起丢失。\n\n正确做法：纯文本用 `textContent`，它永远只写文本节点，`<` 会原样显示；需要结构就用 `createElement` + `append`，把结构和数据分开。只有内容完全由你自己生成、且经过白名单清洗时，才考虑 `innerHTML`。\n\n顺带一提，`insertAdjacentHTML` 有同样的问题——它只是换了插入位置，解析规则没变，该转义还是要转义。\n\n## 五、边界与代价\n\n事件委托不是免费的。每次点击都要做一次 `closest` 遍历，在几千行、层级很深的表格里开销可见；监听器挂在 `document` 上时，全页面的点击都会先经过你。\n\n不冒泡的事件用不了委托：`focus`、`blur`、`mouseenter`、`mouseleave`、`load` 都不冒泡。想委托就换对应的冒泡版本 `focusin`、`focusout`、`mouseover`、`mouseout`，或者改在捕获阶段监听。\n\n`{ passive: true }` 是把「我不会调用 `preventDefault`」提前告诉浏览器，让它不必等监听器执行完就能开始滚动。代价是监听器里再调 `preventDefault()` 无效，控制台会警告。`touchstart`、`touchmove`、`wheel` 挂在 `window`/`document`/`body` 上时，Chrome 已默认 passive，所以自定义下拉框、横向滚动容器这类需要阻止默认行为的组件必须显式写 `{ passive: false }`。\n\n最小化重排的原则是读写分离：先把要读的布局信息（`offsetHeight`、`getBoundingClientRect`）全部读完，再统一写样式。中间只要插一次写，浏览器就会强制同步布局，把刚写的样式算出来给下一次读用。需要把写操作推到下一帧时用 `requestAnimationFrame`，但别在里面做重计算——它跑在渲染之前，占用的仍是同一帧的时间。\n\n另一个常被忽略的开销是高频事件。`scroll`、`resize`、`pointermove` 一秒能触发上百次，回调里只要读一次布局属性，就变成上百次同步布局。这不是委托本身的问题，但它总和委托一起出现：先把回调里的读操作去掉，再谈优化。\n\n必须渲染富文本时，别自己写正则过滤。用成熟的白名单清洗库（如 DOMPurify）处理后再交给 `innerHTML`，并在 CSP 里加 `require-trusted-types-for 'script'`，让浏览器把「字符串直接变成 HTML」的入口整体关掉。\n\n反例：只有三个静态按钮的工具栏，写委托是过度设计。直接绑三个监听器，读代码的人一眼看懂，比琢磨 `closest` 更省事。\n\n## 六、动手任务\n\n准备一个含 5 个 `<li>` 的列表，每行末尾一个 `<button class=\"del\">删除</button>`，改成事件委托版本，限时 15 分钟。验收五点：\n\n1. 点击任意行的删除按钮，该行消失，控制台输出 `remove 3`（数字取自该行的 `data-id`）。\n2. 点击行内文字（`<span>`）不触发删除。\n3. 在控制台执行 `document.querySelector('#todo').append(newLi)` 新增一行，新行的删除按钮立刻可用。\n4. Chrome 控制台执行 `getEventListeners(document.querySelector('#todo'))`，`click` 数组长度必须是 1。\n5. 把删除函数改成 `console.count('remove')`，连点三次同一行，计数必须是 1 次——多出来的就是重复触发。\n\n第 2 点失败，通常是写成了 `e.target.tagName === 'BUTTON'` 而不是 `closest('button')`；第 4 点大于 1，说明把监听器放进渲染函数了。第 3 点如果失败，检查监听器是不是挂在了某个会被替换掉的节点上。\n\n## 七、一句话总结\n\n- `preventDefault` 管默认动作，`stopPropagation` 管传播，两者不能互相替代。\n- 委托 = 一个容器监听器 + `closest` 找源头，新增节点自动生效。\n- `textContent` 写数据、`createElement` 建结构，`innerHTML` 只用于自己生成且已清洗的内容。\n- 批量插入用 `DocumentFragment`，读写分离，别让布局在循环里被反复强制计算。\n- 解绑监听器要么靠同一函数引用，要么靠 `AbortController` 的 `signal`。",
+          "code": "// js-07 示例：数据 → 界面，一次构建、一个监听器、读写分离\n// 粘到任意页面控制台即可运行（重复运行会复用同一个容器，不堆 DOM）\n\nlet root = document.getElementById('demo-07')\nif (!root) {\n  root = document.createElement('div')\n  root.id = 'demo-07'\n  document.body.append(root)\n}\nroot.replaceChildren()   // 只清内容，容器本身留着，监听器才有稳定的挂载点\n\n// 1) 数据是唯一真相源，DOM 只是它的投影\nconst state = [\n  { id: 1, text: '读完 SPEC 的七段结构', done: false },\n  { id: 2, text: '<img src=x onerror=\"alert(1)\">', done: false }, // 用户输入：走 innerHTML 会弹窗\n  { id: 3, text: '跑一遍校验脚本', done: true },\n]\n\n// 2) 构建：先在 DocumentFragment 里攒好，最后只插一次\nfunction build(items) {\n  const frag = document.createDocumentFragment()\n  for (const item of items) {\n    const li = document.createElement('li')\n    li.dataset.id = String(item.id)\n    li.className = item.done ? 'done' : ''\n\n    const box = document.createElement('input')\n    box.type = 'checkbox'\n    box.checked = item.done\n\n    const text = document.createElement('span')\n    text.textContent = item.text      // 只用 textContent：用户数据永远不会变成标签\n    text.style.marginLeft = '6px'\n\n    li.append(box, text)\n    frag.append(li)\n  }\n  return frag                          // 还没进文档树，零重排\n}\n\nconst list = document.createElement('ul')\nlist.id = 'todo-07'\nlist.style.cssText = 'font:14px/1.9 system-ui;padding-left:18px;width:max-content'\nlist.append(build(state))              // 一次性入树 = 一次重排\nroot.append(list)\n\n// 3) 委托：整个列表只有一个 click 监听器，之后新增的 li 自动生效\nlist.addEventListener('click', (e) => {\n  const li = e.target.closest('li')\n  if (!li || !list.contains(li)) return   // 点在列表空白处，或 closest 穿出了列表\n  const item = state.find((it) => it.id === Number(li.dataset.id))\n  if (!item) return                       // 数据里没有的 id 不处理：DOM 不是真相源\n\n  item.done = !item.done                  // 先改数据\n  li.classList.toggle('done', item.done)  // 再改界面\n  li.querySelector('input').checked = item.done\n  console.log('toggle', item.id, item.done)\n})\n\n// 4) 读写分离：一次读完布局，再统一写样式，避免「写-读-写」强制同步布局\nrequestAnimationFrame(() => {\n  const height = list.getBoundingClientRect().height  // 只读一次\n  list.style.borderLeft = '3px solid #4c8dff'\n  list.style.paddingTop = '4px'\n  list.style.background = '#f7f9ff'\n  console.log('list height =', Math.round(height))\n})\n\n// 5) 解绑：same 函数引用，或一个 signal 管一组监听器；once 让它自己退场\nconst ac = new AbortController()\nwindow.addEventListener('keydown', (e) => console.log('[once] key =', e.key), {\n  once: true,\n  signal: ac.signal,\n})\n// 提前取消就 ac.abort()：比 removeEventListener 少记一个函数引用\n\nconsole.log('已渲染', state.length, '行；点复选框或文字试试，再按任意键')",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\nconst outer = document.createElement('div')\nconst inner = document.createElement('span')\nouter.append(inner)\ndocument.body.append(outer)\n\nconst log = []\nouter.addEventListener('click', () => log.push('outer-capture'), true)\nouter.addEventListener('click', () => log.push('outer-bubble'))\ninner.addEventListener('click', () => log.push('inner'))\ninner.click()\n\nconsole.log(log.join(','))\n```",
+              "options": [
+                "inner,outer-capture,outer-bubble",
+                "outer-capture,inner,outer-bubble",
+                "outer-capture,outer-bubble,inner",
+                "inner,outer-bubble（捕获阶段不经过 outer）"
+              ],
+              "answer": 1,
+              "explain": "事件先走捕获：从 window 沿祖先下到目标，所以 outer 的捕获监听器最先执行；到 inner 时进入目标阶段；冒泡阶段从 inner 回到 outer，触发它的冒泡监听器。认为 inner 最先的那个选项忽略了捕获阶段；把两个 outer 监听器排在一起的选项，误以为它们按注册顺序连续执行，其实它们分属两个阶段；最后一项「捕获不经过 outer」的说法本身错误，捕获必然经过所有祖先。"
+            },
+            {
+              "q": "列表用事件委托处理删除，但按钮里嵌了一个 `<svg>` 图标后，点图标不生效。问题出在哪？\n\n```js\nlist.addEventListener('click', (e) => {\n  if (e.target.tagName === 'BUTTON') removeRow(e.target.closest('li'))\n})\n```",
+              "options": [
+                "监听器挂在冒泡阶段，应该改成捕获阶段",
+                "`e.target` 是被点的最深元素（可能是 `svg` 或 `path`），应该用 `e.target.closest('button')` 再判断",
+                "应该用 `e.currentTarget.closest('li')` 拿到行",
+                "按钮上少了 `e.preventDefault()`"
+              ],
+              "answer": 1,
+              "explain": "`e.target` 永远是最深的那个元素，点图标时拿到的是 `svg`/`path`，`tagName` 自然不是 `BUTTON`；`closest` 会向上找到按钮，问题就解决了。换成捕获阶段不改变 `e.target` 是谁，所以那条无效。`e.currentTarget` 是挂监听器的 `list` 本身，用它只能定位到整个列表，拿不到具体哪一行。`preventDefault` 管的是默认动作，跟「找不到目标元素」无关。"
+            },
+            {
+              "q": "`window.addEventListener('wheel', onWheel, { passive: true })` 的实际效果是什么？",
+              "options": [
+                "监听器会在滚动开始前同步执行，`preventDefault()` 依然能阻止滚动",
+                "浏览器不必等监听器返回就可以开始滚动，因此 `onWheel` 里的 `preventDefault()` 不再生效",
+                "监听器会被推迟到滚动停止后才执行",
+                "`passive` 等价于 `once`，监听器只触发一次"
+              ],
+              "answer": 1,
+              "explain": "`passive: true` 是提前承诺「我不会调用 `preventDefault`」，浏览器据此不必等待监听器返回就能滚动，代价是里面再调 `preventDefault()` 无效，控制台会给警告。它不改变回调的执行时机，所以「滚动停止后才执行」不成立；它也跟触发次数无关，那是 `once` 的作用。要阻止默认滚动，必须显式写 `{ passive: false }`。"
+            },
+            {
+              "q": "下面哪个事件**不能**用事件委托（在父容器上监听）处理？",
+              "options": [
+                "click",
+                "input",
+                "focus",
+                "keydown"
+              ],
+              "answer": 2,
+              "explain": "`focus` 和 `blur` 不冒泡，子元素获得焦点时事件不会经过父容器，委托收不到。要用委托就换成冒泡版本 `focusin`/`focusout`，或者把监听器挂在捕获阶段。`click`、`input`、`keydown` 都会冒泡，委托对它们有效。"
+            }
+          ]
+        },
+        {
+          "id": "js-08",
+          "title": "模块化与 fetch：组装一个真实页面",
+          "minutes": 48,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n需求很简单：进页面拉一次用户列表。代码上线后，后端 500，页面显示「加载成功，共 0 条」。\n\n```js\nconst res = await fetch('/api/users')\nconst data = await res.json()\nrender(data)\n```\n\n`fetch` 只在网络层失败时 reject：DNS 解析失败、连接被拒、跨域被拦、请求被取消。服务端返回 500、404、401，对 `fetch` 来说都是「一次成功的 HTTP 交换」，Promise 正常 resolve。于是 `res.json()` 去解析 `{ \"error\": \"internal\" }` 或一段 HTML 错误页，`data` 变成错误对象，或者直接抛 `SyntaxError`。\n\n第二个症状更难查：用户切到弱网，请求挂住 30 秒，页面一直转圈。`fetch` 没有默认超时，`try/catch` 也救不了——它没抛错，只是还没回来。而你的 `catch` 里写的是「请检查网络」，于是 `JSON` 解析失败、超时、真正的断网，三种完全不同的原因被折叠成同一句提示，排查时无从下手。\n\n第三种是一行日志：`Uncaught (in promise) TypeError: Failed to fetch`。它几乎不提供信息：哪个接口、什么参数、用户是谁，全没有，因为错误在 `fetch` 那一层就被折叠了。\n\n这一节要做的事，是把「请求、状态、渲染」拆成三段各自能验证的代码，并且让每一种失败都能被区分出来。\n\n## 二、原理：它到底怎么运作\n\nESM 是静态的。`import`/`export` 只能写在模块顶层，不能写在 `if` 里，路径不能拼字符串；浏览器在**求值之前**就解析出整张模块图，再按依赖顺序求值。`import` 声明会被提升——写在文件中间的 import 和写在第一行效果一样。\n\n同一个模块被多处 import，只会求值一次，所有导入方共享同一份模块作用域。这带来两个后果：模块级变量天然是单例（可以当轻量缓存），但它同时也是隐式的全局状态，测试之间会互相污染。循环依赖能工作，也是因为绑定而不是拷贝——两个模块互相 import 时，先求值的那个拿到的是对方「已创建但尚未初始化」的绑定，只要不在初始化完成前读它（否则触发 TDZ），就能跑完。\n\n`<script type=\"module\">` 有三个隐含行为：自动 `defer`（等 HTML 解析完再执行，早于 `DOMContentLoaded`）、模块内自动严格模式、顶层 `await` 可用（ES2022）。这也解释了为什么模块里的 `this` 是 `undefined`，而不是 `window`。\n\n`fetch` 只有三种 reject 情况：网络错误、跨域失败、被 `AbortSignal` 取消。HTTP 状态码不在其中，所以成败要自己看 `res.ok`（状态码 200–299 时为 `true`）。\n\n`Response.body` 是一条 `ReadableStream`，只能消费一次。`res.json()`、`res.text()`、`res.arrayBuffer()` 都会把流读干，第二次调用直接抛 `TypeError`。想复用就先 `res.clone()`，代价是响应体会被缓冲两份。\n\n请求的生命周期控制靠 `AbortController`：`controller.signal` 传给 `fetch`，`controller.abort()` 让 `fetch` 以 `AbortError` reject。超时就是这个机制的封装——定时器到点就 abort。注意「取消」和「超时」在调用方看来是两种错误，需要分开处理：用户主动切页取消不该弹提示，超时则应该提示重试。\n\n这套结构还决定了错误处理的位置。模块**求值阶段**抛出的错误（比如顶层 `await` 失败）会让整个模块加载失败，`import` 它的模块连导出都拿不到，只能在动态 `import()` 的 `catch` 或全局钩子里接。所以「模块顶层发请求」看着优雅，实际上把失败变成了不可局部处理的启动错误。\n\n最后是状态。新手常写三个独立变量：`loading`、`error`、`data`，于是出现「`loading` 和 `error` 同时为真」这种不可能状态，界面按什么顺序判断都不对。把它们收成一个枚举（`idle` / `loading` / `ready` / `error`），状态机就只有四条边，渲染函数一个 `switch` 写完，也不会出现互相矛盾的组合。\n\n## 三、代码逐行\n\n模块拆分的骨架（这部分是静态结构，不是运行时逻辑）：\n\n```js\n// api.js\nexport async function fetchUsers(signal) { /* 请求 + 错误归类 */ }\nexport const BASE = '/api'\n\n// view.js\nimport { BASE } from './api.js'\nexport function view(state) { /* 纯函数：state → HTML 字符串 */ }\n\n// main.js\nimport { fetchUsers } from './api.js'\n```\n\n1. `export async function fetchUsers` 是命名导出。导入方必须用这个名字（或用 `as` 重命名），但打包工具能静态分析出「谁用了它」，没用到的可以摇掉。`export default` 相反：导入方随便起名，工具很难判断有没有被用到，同一个模块在不同文件里可能被叫作 `api` 和 `client`，全局搜索都搜不准。\n2. `import { BASE } from './api.js'` 路径必须写全：`./` 不能省（省了会被当成包名），浏览器原生 ESM 不会自动补 `.js`。打包器允许省略、浏览器不允许，这是「本地能跑、线上 404」的常见来源。去掉 `.js` 后，`tsc` 和 `webpack` 都可能不报错，只有真浏览器会挂。\n3. `import` 只能在顶层。想按条件加载，用动态 `import('./heavy.js')`，它返回 Promise，可以做懒加载和错误处理。把动态 import 写在 `if` 里是允许的，写在 `.then` 里也可以，这是它和静态 import 最大的区别。\n4. `view(state)` 只接收数据、返回字符串，不碰 `fetch`、不碰 `document`。这是本节最重要的设计：纯函数可以在 Node 里直接测，不需要浏览器、不需要 mock 网络。去掉这个约束，`view` 里一旦读了 `location` 或 `localStorage`，测试就得准备一整套环境。\n5. `main.js` 只负责把三者接起来：拿数据、算状态、把结果交给渲染。它应该是三个文件里最短的那个。错误分支里只保留 `message` 和 `status` 的摘要，不要把原始 `Response` 对象往上抛——它带着已经读过的 body 流，跨模块传递后既不能再读，也不能序列化。\n6. `fetchUsers(signal)` 的参数不是装饰。把外部的 `signal` 传进来，调用方才能在切页、关弹窗时取消请求；不传的话请求会一直飞，等它回来时界面早就换掉了，回调里再去操作一个已经卸载的节点，就是下一节要讲的「错误发生在你接不住的地方」。\n\n完整的可运行版本在 `code` 里，用 `data:` URL 模拟接口，不需要后端也能跑。\n\n## 四、三个常见误区\n\n### 误区一：以为 fetch 会因为 4xx/5xx 抛错\n\n现象：`try { const res = await fetch(url); render(await res.json()) } catch { showError() }`，后端 500 时页面显示空白数据，`catch` 没进。\n\n原因：HTTP 错误不是网络错误。Promise 只对「拿不到响应」reject。\n\n正确做法：请求后立刻检查 `if (!res.ok) throw new HttpError(res.status, url)`，把状态码变成异常，后续 `catch` 才有意义。这一步别交给调用方：三个调用方里至少有一个会忘。\n\n判断依据很简单——打开 DevTools 的 Network 面板，如果请求的状态码是 500 但 Promise 走了 `then`，就是这个原因。\n\n### 误区二：无脑重试\n\n现象：超时后自动重试三次，订单创建了四笔。\n\n原因：`POST /orders` 不幂等。重试只对幂等请求安全；4xx（429 除外）重试多少次都是同样结果，只会放大后端压力。\n\n正确做法：只重试幂等请求 + 网络错误/5xx/429，次数上限 2–3 次，间隔指数退避并加随机抖动，避免所有客户端同时重试。429 还要读 `Retry-After`，它明确告诉你等多久，比你自己猜的退避更准。\n\n### 误区三：把请求、状态、渲染揉成一个 async 函数\n\n现象：组件里 `await fetch` 之后直接 `container.innerHTML = ...`，加个 loading 要改五处，写测试要起一个真服务器。\n\n原因：副作用（网络）和纯计算（状态转换、HTML 生成）混在一起，改任何一处都要整体重跑，也没法单独验证。\n\n正确做法：拆成 `fetchJson`（只管请求与错误归类）、`toViewModel(data)`（纯函数，处理缺字段、空值）、`view(state)`（纯函数，state → 字符串）。三者输入输出都能单独验证，`view` 甚至可以直接在控制台里用假数据跑。\n\n一个自查标准：这个函数能不能在没有网络、没有浏览器的环境里跑通？如果不能，它就还不是纯函数，测试成本迟早会以「起一个 mock server」的形式还回来。\n\n## 五、边界与代价\n\n原生 ESM 不做打包。一个页面拆成 40 个模块，浏览器就要发 40 个请求（HTTP/2 多路复用能缓解，但不消除往返开销）。生产环境仍然要打包或至少预加载，`type=\"module\"` 不等于「不需要构建」。\n\n循环依赖能跑，但它几乎总是设计问题的信号：两个模块互相需要，通常意味着有一段共享逻辑应该下沉到第三个模块。能工作不等于应该这么写。\n\n缓存也不是「加个 `cache: 'no-store'` 就完事」。`no-store` 让浏览器完全不存，代价是每次都走网络；`no-cache` 是「存但每次校验」，配合 `ETag` 时服务端返回 304，省的是带宽而不是往返。跨域请求默认不带 Cookie（`credentials` 默认 `same-origin`），要带就得写 `credentials: 'include'`，同时服务端必须回具体的 `Access-Control-Allow-Origin`，不能用 `*`。\n\n超时值不是越短越好。移动网络下 3 秒会误杀正常请求，重试又会让一次慢请求变成三次。超时按接口的 P95 延迟来定，而不是拍一个整数。\n\n流式读取的代价是复杂度：不能用 `res.json()`，要自己处理分块、解码（`TextDecoderStream`），以及「流到一半断了」的情况——那时界面已经渲染了一半，错误处理比一次性请求难得多。反例：一个每天只变一次的下拉选项列表，上流式 + 重试 + 增量渲染，是纯粹的过度设计。\n\n还有一层容易丢的信息：在 `catch` 里把原始 `err` 换成一句「加载失败」，日志里就只剩这句提示。正确做法是抛错时保留 `cause`、上报时带上 `status`，只在最后交给界面时才翻译成人话——翻译和诊断不在同一层做。\n\n## 六、动手任务\n\n把下面这个函数拆成三个可单独测试的部分：\n\n```js\nasync function loadUsers() {\n  const res = await fetch('/api/users')\n  const data = await res.json()\n  document.querySelector('#list').innerHTML = data.map((u) => `<li>${u.name}</li>`).join('')\n}\n```\n\n要求与验收：\n\n- `fetchJson(url, { timeout })`：5 秒超时，非 2xx 抛错，错误对象带 `status` 字段。\n- `toViewModel(list)`：`name` 为空的项显示 `（未命名）`，缺 `id` 的项直接过滤掉。\n- `view(state)`：接受 `{ status: 'loading' | 'ready' | 'error', data?, message? }`，返回 HTML 字符串，文本必须转义。\n\n验证：在控制台执行 `view({ status: 'ready', data: [{ id: 1, name: '' }, { id: 2, name: 'a<b@x.com' }] })`，输出应包含 `（未命名）` 和 `a&lt;b@x.com`，且不该出现裸的 `<b`。再单独跑 `toViewModel([{ name: 'x' }])`（没有 id），应得到空数组。最后把超时改成 1 毫秒，确认走的是 `error` 分支而不是一直 loading。\n\n再加一条验收：把 `fetchJson` 的地址改成 `https://httpbin.org/status/500`（或本地任何一个返回 500 的接口），`catch` 里拿到的 `status` 必须是 500。若拿不到，说明你还在依赖 `fetch` 自己抛错。\n\n## 七、一句话总结\n\n- ESM 的 import 是静态提升的实时绑定，路径要写全，只读不可赋值。\n- `fetch` 只在网络层失败时 reject，4xx/5xx 必须自己检查 `res.ok`。\n- `body` 只能读一次，要复用先 `clone`。\n- 超时和取消是同一套机制（`AbortController`），但两者在业务上要分开提示。\n- 请求、状态、渲染拆成三段，纯函数部分不进浏览器也能测。",
+          "code": "// js-08 示例：请求 → 状态 → 渲染，三段各自可测\n// Node 20+ 或浏览器控制台直接运行（用 data: URL 模拟后端，不依赖网络）\n// 真实工程里这三段在 api.js / view.js / main.js 三个模块中，用 export/import 连接；\n// 为了让示例能整段粘贴运行，这里合并成一个文件，不写 import/export。\n\nconst API = 'data:application/json,' + encodeURIComponent(JSON.stringify([\n  { id: 1, name: '林一', email: 'lin@example.com' },\n  { id: 2, name: '  ', email: 'a<b@example.com' },  // 名字只有空格 + 需要转义的字符\n  { email: 'no-id@example.com' },                   // 缺 id，应被过滤\n]))\n\n// ① 请求层：只管「怎么拿到 JSON」，并把各种失败折叠成同一种异常\n// 非 2xx 自己抛错（fetch 不会），超时用 AbortSignal.timeout，只重试可重试的错误\nasync function fetchJson(url, { timeout = 3000, retries = 1 } = {}) {\n  try {\n    const res = await fetch(url, { signal: AbortSignal.timeout(timeout) })\n    if (!res.ok) {\n      const err = new Error(`HTTP ${res.status} ${res.statusText}`, { cause: res })\n      err.status = res.status\n      err.retryable = res.status >= 500 || res.status === 429\n      throw err\n    }\n    return await res.json()   // body 只能读一次，所以这里不 clone\n  } catch (err) {\n    // 网络错误是 TypeError，超时是 name === 'TimeoutError'；二者都值得重试一次\n    const retryable = err.retryable || err.name === 'TimeoutError' || err instanceof TypeError\n    if (retries > 0 && retryable) {\n      return fetchJson(url, { timeout, retries: retries - 1 })\n    }\n    throw err\n  }\n}\n\n// ② 状态层：纯函数，把「接口返回」变成「界面需要的数据」\nfunction toViewModel(list) {\n  return list\n    .filter((u) => u.id != null)              // 没有 id 的记录无法定位，直接丢掉\n    .map((u) => ({\n      id: u.id,\n      name: u.name?.trim() || '（未命名）',    // 空白名字给占位，别让界面出现空洞\n      email: u.email ?? '',\n    }))\n}\n\n// ③ 渲染层：纯函数，state → HTML 字符串；转义只在这一个出口做\nconst ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }\nconst esc = (value) => String(value).replace(/[&<>\"']/g, (ch) => ESC[ch])\n\nfunction view(state) {\n  if (state.status === 'loading') return '<p>加载中…</p>'\n  if (state.status === 'error') return `<p class=\"err\">${esc(state.message)}</p>`\n  if (state.data.length === 0) return '<p>暂无数据</p>'\n  const items = state.data\n    .map((u) => `<li data-id=\"${u.id}\"><b>${esc(u.name)}</b> ${esc(u.email)}</li>`)\n    .join('')\n  return `<ul>${items}</ul>`\n}\n\n// ④ 组装层：只负责把三段接起来，以及「loading → 成功/失败」的状态流转\nasync function main() {\n  const states = [{ status: 'loading' }]\n  try {\n    const data = await fetchJson(API)\n    states.push({ status: 'ready', data: toViewModel(data) })\n  } catch (err) {\n    // 错误对象里带 status，界面只拿到一句人话，两者不混在一起\n    states.push({ status: 'error', message: `加载失败（${err.status ?? err.name}），请稍后重试` })\n  }\n  for (const s of states) console.log(s.status, '→', view(s))\n  return states\n}\n\nmain().catch((err) => console.error('未捕获：', err))",
+          "quiz": [
+            {
+              "q": "接口正常返回 `{\"n\":1}`，下面代码（位于 async 函数内）输出什么？\n\n```js\nconst res = await fetch('/api/data')\nconst a = await res.json()\ntry {\n  await res.json()\n} catch (e) {\n  console.log(e.name)\n}\nconsole.log(a.n)\n```",
+              "options": [
+                "先 `1`，再 `1`",
+                "先 `TypeError`，再 `1`",
+                "先 `1`，再 `TypeError`",
+                "两行都是 `undefined`"
+              ],
+              "answer": 1,
+              "explain": "`Response.body` 是一条只能消费一次的流，`json()` 已经把流读干，第二次调用直接抛 `TypeError`（body stream already read），被 `catch` 打印出来，之后才执行 `console.log(a.n)`，所以顺序是先 `TypeError` 再 `1`。它不会返回缓存结果，所以「再输出一次 1」不成立；`a.n` 是第一次解析成功的结果，不会是 `undefined`。要复用响应必须先 `res.clone()`。"
+            },
+            {
+              "q": "后端 500 时返回 `{\"error\":\"internal\"}`。下面代码页面显示用户名 `undefined`，`catch` 却没进。原因是什么？\n\n```js\nasync function loadUser(id) {\n  const res = await fetch(`/api/users/${id}`)\n  return res.json()\n}\n```",
+              "options": [
+                "`fetch` 对 5xx 会 reject，只是 catch 写得不对",
+                "`fetch` 只在网络层失败时 reject，5xx 也是正常 resolve，必须自己检查 `res.ok`",
+                "应该改成 `XMLHttpRequest`，它遇到 5xx 会抛错",
+                "应该加 `mode: 'no-cors'`，否则拿不到响应体"
+              ],
+              "answer": 1,
+              "explain": "`fetch` 的 Promise 只在网络错误、跨域失败、被取消时 reject；服务端返回 500 依然是一次成功的 HTTP 交换，Promise 正常 resolve，于是 `res.json()` 解析了错误对象。`XMLHttpRequest` 也不吃 5xx（状态码照常给），换成它并不能解决。`no-cors` 只会让响应变成不可读的 opaque，反而更糟。正确写法是拿到响应后立刻 `if (!res.ok) throw ...`。"
+            },
+            {
+              "q": "关于 ESM 的导入绑定，下面哪一句正确？\n\n```js\n// counter.js\nexport let count = 0\nexport const inc = () => { count++ }\n\n// main.js\nimport { count, inc } from './counter.js'\ninc()\nconsole.log(count)\n```",
+              "options": [
+                "输出 `0`，因为 import 拿到的是导出那一刻的值的拷贝",
+                "输出 `1`，因为 import 是实时绑定，导出方改变量后导入方读到新值",
+                "输出 `1`，因为 import 会把变量提升成全局变量",
+                "输出 `0`，因为 `let` 导出的值在导入侧会被冻结"
+              ],
+              "answer": 1,
+              "explain": "ESM 的导出是实时绑定（live binding），导入方读到的是同一个变量，`inc()` 把 `count` 改成 1，之后读就是 1。它不是值拷贝，也不是把变量变成全局——全局变量反而会让模块之间的依赖无法静态分析。导入方拿到的是只读视图，可以读、不能赋值，但这不影响导出方自己修改。"
+            },
+            {
+              "q": "给请求加自动重试时，下面哪种策略是对的？",
+              "options": [
+                "任何失败的请求都重试三次，多数情况下第三次就成功了",
+                "只重试幂等请求（如 `GET`），且失败原因是网络错误 / 5xx / 429，配合退避、随机抖动和次数上限",
+                "`POST /orders` 创建订单失败后立即重试，保证不丢单",
+                "401 未授权时反复重试，直到拿到新 token"
+              ],
+              "answer": 1,
+              "explain": "重试的前提是「重复执行不会产生副作用」，所以只对幂等请求安全；5xx、429 和网络错误属于可能自愈的失败，配指数退避、随机抖动和上限才不会把后端打垮。`POST /orders` 不幂等，重试可能创建多笔订单。401 是凭证问题，重试同一请求只会一直 401，应该去刷新 token 或跳登录。4xx（429 除外）重试多少次都是同样结果。"
+            }
+          ]
+        },
+        {
+          "id": "js-12",
+          "title": "错误处理与调试：让 bug 自己暴露",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n监控里有一条 `Uncaught (in promise) Error: 请求失败`，堆栈只有两行，指向 `main.3f2a.js:1:48213`。你不知道是哪个用户、哪个接口、原始错误是什么——因为这一行 `throw new Error('请求失败')` 把底下那个 `TimeoutError` 丢掉了。\n\n同一个项目里还有一处：\n\n```js\ntry {\n  await saveOrder(order)\n} catch (e) {\n  // 先上线，回头补日志\n}\n```\n\n订单没保存成功，用户看到「保存成功」。这个 bug 活了两个月，直到财务对账才发现。\n\n两个例子是一枚硬币的两面：错误被吞掉，和错误没有上下文。前者让 bug 消失，后者让 bug 变成谜语。更麻烦的是，这两类问题都不会在开发时暴露——本地网络好、数据干净、点一次就成功，`catch` 永远不执行。\n\n还有一种更隐蔽的：错误确实被 catch 了，但 catch 里做的事情是「把 `err` 转成一句中文提示」然后 `return`。于是日志里只有「加载失败」，你既不知道是超时还是 404，也不知道是哪个用户。这一节要解决的就是让失败自己说话。\n\n## 二、原理：它到底怎么运作\n\n`Error` 本质是个普通对象：`name`、`message`，加上引擎生成的 `stack` 字符串。`stack` 不在 ECMAScript 规范里，V8、SpiderMonkey、JavaScriptCore 的格式各不相同，只能给人看，不能拿来做解析。\n\n常用成员：`TypeError`（用错类型、访问 `undefined` 的属性）、`RangeError`（数组长度非法、递归过深）、`ReferenceError`（访问未声明变量，TDZ 也抛它）、`SyntaxError`（`JSON.parse` 失败）、`AggregateError`（`Promise.any` 全部失败）、`DOMException`（`AbortError`、`QuotaExceededError` 等 Web API 错误）。\n\n`cause` 是 ES2022 加的第二个参数：`new Error(msg, { cause })`。它把原始错误挂到 `err.cause` 上，形成一条链。这是「包装错误」唯一不丢信息的写法。读取时沿着 `cause` 一路往下走，就能从「加载订单失败」走到「socket hang up」，中间每一层都保留了自己的上下文。\n\n堆栈的边界值得单独说。同步错误一路抛出时，`stack` 保留完整的调用链；一旦跨过 `await`，V8 会在栈里插入 `await` 帧（Node 12 起默认开启 async stack traces，Chrome DevTools 也能显示异步调用链），但「谁触发了这次调用」——比如是哪个点击、哪个定时器——是拿不到的。跨 `setTimeout`、事件回调、`Promise.then` 之后，原始栈就断了，只能靠你在错误里自己带上下文。\n\nV8 还提供了一个私有 API `Error.captureStackTrace(target, ctor)`，用来裁掉构造函数自身的帧，让堆栈第一行落在真正调用的地方——自定义错误库常用它。它不是标准，别在跨引擎的代码里依赖。\n\n`try/catch` 的作用域边界是**同步执行栈**：它能接住 `try` 块里同步抛出的错误，以及你 `await` 的那个 Promise 的 rejection。它接不住定时器回调里的错误、事件处理器里的错误、没有 `await` 的 Promise、别人模块里异步抛出的错误。\n\n这些错误会一路冒到宿主：浏览器里是控制台红字，Node 里可能直接结束进程。最后一道网是全局钩子——`window.onerror` / `window.addEventListener('error')` 接同步未捕获错误，`unhandledrejection` 接未处理的 rejection。它们能上报、能降级 UI、能阻止默认的控制台输出（`event.preventDefault()`），但不能让已经发生的错误不发生。\n\n还有一层：`addEventListener('error', fn, true)` 在捕获阶段能收到资源加载失败（`<img>`、`<script>`）的 error 事件，那类事件不冒泡，`window.onerror` 收不到。排查「图片裂了但没报错」时用得上。\n\n最后是分类。错误至少分三类：**可恢复**（网络抖动、429、超时），值得重试或提示重试；**终态**（401、403、404、参数校验失败），重试无用，要引导用户；**编程错误**（`TypeError`、`ReferenceError`），不该被 catch 吞掉，应该 fail fast 并在开发期暴露。把三类塞进同一个 `catch`，就必然出现「对着 TypeError 弹『请检查网络』」。\n\n## 三、代码逐行\n\n```js\nclass HttpError extends Error {\n  constructor(status, url, options) {\n    super(`HTTP ${status} ${url}`, options)  // ①\n    this.name = 'HttpError'                  // ②\n    this.status = status                     // ③\n  }\n}\n\ntry {\n  await load()\n} catch (err) {\n  if (err instanceof HttpError && err.status === 401) redirectToLogin()\n  else throw err                            // ④\n}\n```\n\n1. `super(message, options)`——`Error` 构造函数只认两个参数，第二个才是 `{ cause }`。写成 `super(message, cause)`，`cause` 会被直接忽略，链断在这里而且不报错。\n2. `this.name = 'HttpError'`——不改的话，控制台和日志里显示的是 `Error`，你按 name 做的过滤、聚合、告警规则全部失效。\n3. `this.status = status`——把机器可读的信息放在字段上，而不是拼进 `message`。文案会改、会翻译，字段不会。\n4. `else throw err`——不认识的错误必须原样抛出。`catch` 里只处理你预期的那一类，其余交给上层或全局钩子；吞掉它的代价是永远不知道它发生过。\n\n关于 `cause` 还有一个兼容性细节：`{ cause }` 选项需要 Chrome 93+ / Node 16.9+。要兼容更老的运行时，就在构造函数里手动写 `this.cause = cause`，字段行为一致，只是不参与引擎的默认打印。\n\nNode 里另有一个高频坑：`console.error(err)` 会展开 `stack`，而 `console.error(String(err))` 只给你一行 `Error: xxx`，堆栈全丢。日志库、模板字符串、JSON 序列化都有同样的问题——要么把错误对象原样传下去，要么显式取 `err.stack`。\n\n再补一条边界：`instanceof` 在 `class X extends Error` 上可靠（ES2015 之后 `Error` 的 `prototype` 链是正常的），但跨 realm（iframe、`vm` 沙箱）会失效，因为两边的 `Error` 构造函数不是同一个对象。这时改用 `err.name` 或自定义的 `code` 字段判断。\n\n## 四、三个常见误区\n\n### 误区一：空 catch\n\n现象：`catch (e) {}`，或者 `catch (e) { console.log(e) }`。\n\n原因：前者让错误彻底消失；后者在开发环境有用，在生产等于没记——控制台没人看，也没有用户、请求、参数这些上下文。\n\n正确做法：能处理的就处理（降级、重试、提示），处理不了就 `throw`。确实要忽略时（比如「关闭弹窗时用户已离开」），写一行注释说明为什么可以忽略，并用 `console.debug` 留痕。审查代码时，一个空的 `catch` 块应该和一句「以后补」的注释一样刺眼。\n\n### 误区二：以为 try/catch 能包住异步回调\n\n现象：\n\n```js\ntry {\n  setTimeout(() => { JSON.parse(bad) }, 0)\n} catch (e) {\n  console.log('caught') // 永远不会执行\n}\n```\n\n原因：`setTimeout` 只是把回调登记进任务队列，`try` 块在登记完就结束了。回调执行时，调用栈上早已没有这个 `try`。\n\n正确做法：把 `try/catch` 放进回调内部；或者在入口统一包一层 `safeHandler(fn)`，让所有事件回调都经过它。同理，`element.addEventListener('click', async () => { await x })` 里 `await` 之后抛的错，也不会被外面任何 `try` 接住。\n\n### 误区三：把 message 给用户看，生产环境内联 source map\n\n现象：用户看到 `TypeError: Cannot read properties of undefined (reading 'id')`；或者打包产物里带着完整的 `//# sourceMappingURL=data:application/json;base64,...`，源码原样可读。\n\n原因：`message` 是给开发者看的，里面常有内部字段名、SQL 片段、路径；内联 source map 让包体积翻倍，还把源码公开。\n\n正确做法：错误到用户文案走一张映射表（按 `code` 查），查不到就用统一兜底文案；source map 用 `hidden-source-map` 生成，只上传给错误监控平台，不放进静态目录。\n\n这个误区还有一个变体：把 `err.stack` 存进数据库的 `varchar(255)` 字段。截断之后你只剩文件名和一行前缀，最有价值的中段调用链全被切掉了——存 stack 要留足长度，或者干脆只存到日志系统。\n\n## 五、边界与代价\n\nsource map 是「事后还原」的工具，不是运行时能力。浏览器只在打开 DevTools 时才去下载 `.map`，所以它不影响线上性能——影响的是源码是否泄露、构建产物是否变大。取舍很直接：要么不生成，保留压缩后的堆栈（定位基本靠猜）；要么生成但不公开，上传到监控平台。\n\n日志要有上下文，但上下文本身有成本。一条日志带 `requestId`、`userId`、`code`、`route`、`duration` 就够定位；把整个响应体、整个表单、整个路由状态都塞进去，日志量涨两个数量级，检索变慢，还容易把身份证号、手机号写进去。敏感字段在写日志前脱敏，而不是等出事再删。\n\n全局兜底不能替代本地处理。`unhandledrejection` 里你只知道「有个 Promise 失败了」，拿不到当时的业务上下文；它适合做最后一道网——上报、提示刷新、埋点，不适合做业务补偿。而且它只覆盖「没人处理」的错误：一旦某个 `catch` 把错误吞了，全局钩子也看不到。\n\n上报本身也会失败：监控接口挂了、用户断网、`sendBeacon` 被拦截。所以上报逻辑要用 `try/catch` 包住，并且永远不要因为它失败而影响主流程。反例：给每个 `catch` 都加一次 `captureException`——同一类错误一分钟触发上万次，监控被打爆、告警被淹没。正确做法是按 `code + route` 聚合、采样、限流；采样也要用稳定的哈希（比如按 `userId` 取模），否则同一个用户的错误时有时无，比不采样更难查。\n\n排查顺序也有讲究：先看 `code` 判断类别，再看 `cause` 找到根因，最后看 `context` 定位到具体请求。如果日志里只有 message，你只能在「能不能重现」上耗时间；如果只有 stack，你只知道「哪一行炸了」，不知道「为什么这一行会拿到这个值」。\n\n工具上，`debugger` 语句等价于在这一行下一个断点。它比 `console.log` 强的地方是：不修改数据、能看完整作用域、能往下单步。循环里第 87 次才出错时，用条件断点（Sources 面板右键行号 → Add conditional breakpoint）把条件写成 `i === 87`，比打印 87 行日志快得多。不确定某次调用是谁发起的时候，`console.trace()` 会直接打出整条调用链。\n\n## 六、动手任务\n\n给下面这段两层调用加诊断：\n\n```js\nasync function loadOrders(userId) {\n  if (!userId) throw new TypeError('userId is required')\n  return await fetch(`/api/orders?user=${userId}`)\n}\n```\n\n要求：\n\n1. 参数缺失时抛自定义错误，`code` 为 `E_ARGS`；\n2. 网络失败时包装成 `E_NET`，原始错误放进 `cause`；\n3. 写一个 `report(err, where)`，输出一行 `[where] CODE | message | cause=...`，并返回给用户看的文案；\n4. 注册 `unhandledrejection` 钩子，把漏网的 rejection 也打进同一套格式。\n\n验证：`report(await loadOrders(null).catch((e) => e), 'loadOrders')` 应输出含 `E_ARGS` 且 `cause=userId is required` 的一行；把 catch 里的 `cause` 删掉，同一行变成 `cause=-`，这就是「丢上下文」的样子。再在控制台写一个不 `await` 的失败 Promise，确认钩子打印了同一套格式而不是 `Uncaught (in promise)`。\n\n再补两条验收：`report(new Error('boom'), 'x')` 必须落到 `E_UNKNOWN` 并返回兜底文案，而不是把 `boom` 显示给用户；把 `report` 里的 `console.log` 换成 `console.table([{ where, code, cause }])`，确认字段没有变成 `undefined`。\n\n## 七、一句话总结\n\n- 包装错误必须用 `super(message, { cause })` 保留原始错误，否则链在包装处就断了。\n- 自定义错误要设 `name` 和 `code`，别让判断逻辑依赖文案。\n- `try/catch` 只覆盖同步栈和你 `await` 的那一个 Promise，回调与漏网的 rejection 归全局钩子管。\n- 生产用 `hidden-source-map`：能还原堆栈，但不泄露源码。\n- 日志带上下文的目的是「能定位」，不是「记得多」；上报必须聚合、采样并容错。",
+          "code": "// js-12 示例：把「失败」变成可诊断的数据\n// 浏览器控制台或 Node 20 直接运行；预期输出见文件末尾注释\n\n// 1) 自定义错误：机器可读的 code + 上下文 + 原始错误，三者都不塞进 message\nclass AppError extends Error {\n  constructor(message, { code = 'E_APP', cause, context = {} } = {}) {\n    super(message, { cause })  // 第二个参数才是 { cause }；写成 super(message, cause) 会静默丢掉\n    this.name = 'AppError'\n    this.code = code\n    this.context = context\n  }\n}\n\n// 2) 只有这一处决定「给用户看什么」；未知错误一律兜底，绝不把原始 message 抛给用户\nconst USER_MESSAGE = {\n  E_ARGS: '请先选择用户',\n  E_NET: '网络不稳定，请稍后重试',\n  E_TIMEOUT: '请求超时，请稍后重试',\n}\nconst toUserMessage = (err) => USER_MESSAGE[err?.code] ?? '出了点问题，请稍后再试'\n\n// 3) 一次「底层报错 → 包一层 → 上层决策」的调用链\nasync function loadOrders(userId) {\n  try {\n    if (!userId) throw new TypeError('userId is required')  // 参数错误：重试也没用\n    // 模拟一次真实网络往返，10ms 后失败\n    await new Promise((_, reject) => setTimeout(() => reject(new Error('socket hang up')), 10))\n    return []\n  } catch (err) {\n    // 用 cause 把原始错误挂上去，否则根因和原始堆栈在这里就断了\n    const code = err instanceof TypeError ? 'E_ARGS' : 'E_NET'\n    throw new AppError('加载订单失败', { code, cause: err, context: { userId } })\n  }\n}\n\n// 4) 统一出口：一行结构化日志 + 一句人话，两者不混在一起\nfunction report(err, where) {\n  const code = err?.code ?? 'E_UNKNOWN'\n  const cause = err?.cause?.message ?? '-'\n  console.log(`[${where}] ${code} | ${err?.message ?? '-'} | cause=${cause}`)\n  return toUserMessage(err)\n}\n\n// 5) 全局兜底：只接「漏网的」，真正的处理仍然在本地\nfunction onUnhandled(reason) {\n  console.log(`[全局兜底] ${reason?.code ?? reason?.name ?? 'unknown'} | ${reason?.message ?? reason}`)\n}\nif (typeof window !== 'undefined') {\n  window.addEventListener('unhandledrejection', (e) => onUnhandled(e.reason))\n} else if (typeof process !== 'undefined') {\n  process.on('unhandledRejection', onUnhandled)\n}\n\n// 6) 三种失败 + 一个故意漏网的 rejection\nasync function run() {\n  console.log('--- A 参数缺失 ---')\n  console.log('→', report(await loadOrders(null).catch((e) => e), 'loadOrders'))\n\n  console.log('--- B 网络失败 ---')\n  console.log('→', report(await loadOrders(42).catch((e) => e), 'loadOrders'))\n\n  console.log('--- C 未知错误 ---')\n  console.log('→', report(new Error('boom'), 'renderHome'))\n\n  console.log('--- D 漏网的 rejection ---')\n  loadOrders(42)  // 故意不 await：本地 try/catch 接不到它，只能由全局钩子接住\n  console.log('（本地 catch 不会执行，稍后由 unhandledrejection 打印）')\n}\n\nrun()\n\n// 预期输出（顺序与内容都稳定）：\n// --- A 参数缺失 ---\n// [loadOrders] E_ARGS | 加载订单失败 | cause=userId is required\n// → 请先选择用户\n// --- B 网络失败 ---\n// [loadOrders] E_NET | 加载订单失败 | cause=socket hang up\n// → 网络不稳定，请稍后重试\n// --- C 未知错误 ---\n// [renderHome] E_UNKNOWN | boom | cause=-\n// → 出了点问题，请稍后再试\n// --- D 漏网的 rejection ---\n// （本地 catch 不会执行，稍后由 unhandledrejection 打印）\n// [全局兜底] E_NET | 加载订单失败",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\nasync function load() {\n  try {\n    await Promise.reject(new Error('inner'))\n  } catch (e) {\n    throw new Error('outer', { cause: e })\n  }\n}\nload().catch((e) => console.log(e.message, e.cause?.message))\n```",
+              "options": [
+                "`outer undefined`",
+                "`outer inner`",
+                "`inner inner`",
+                "`inner undefined`"
+              ],
+              "answer": 1,
+              "explain": "`await` 把 rejection 变成 `catch` 里的同步异常 `e`（原始错误，message 是 `inner`），再用 `new Error('outer', { cause: e })` 包一层，新错误的 `message` 是 `outer`、`cause` 指向原始错误，所以输出 `outer inner`。忘掉 `cause` 的话第二段就是 `undefined`，那正是「包装错误把根因丢掉」的典型现场。`throw` 之后的错误才是 `load()` 的 rejection，所以第一段不可能是 `inner`。"
+            },
+            {
+              "q": "下面代码控制台报了未捕获的 `SyntaxError`，`caught` 一次也没打印。为什么？\n\n```js\ntry {\n  setTimeout(() => {\n    JSON.parse('{oops}')\n  }, 0)\n} catch (e) {\n  console.log('caught:', e.message)\n}\n```",
+              "options": [
+                "`JSON.parse` 写在 `try` 里，`catch` 一定能接住，问题在别处",
+                "回调在另一个任务里执行，`try` 块早已结束，`catch` 接不住；要把 `try` 放进回调内部",
+                "应该在 `catch` 里加 `throw e` 才能打印",
+                "定时器回调里的错误会变成 unhandledrejection，所以 `catch` 无效"
+              ],
+              "answer": 1,
+              "explain": "`setTimeout` 只是把回调登记进任务队列，`try` 块在登记完就退出了；回调执行时调用栈上已经没有这个 `try`，错误只能冒到宿主。修法是把 `try/catch` 移进回调内部，或在入口统一包一层 `safeHandler`。`catch` 里再 `throw` 只会让原本没被捕获的错误依旧没被捕获；这类同步错误也不会变成 rejection，它是 uncaught error，不是 unhandled rejection。"
+            },
+            {
+              "q": "关于 `window.onerror` 与 `unhandledrejection`，下面哪一句正确？",
+              "options": [
+                "两者是同一个事件的两个名字，注册一个就够",
+                "`unhandledrejection` 的 `event.reason` 是 rejection 的原因，而 `window.onerror` 收不到 Promise rejection",
+                "注册 `unhandledrejection` 之后，未处理的 rejection 就不会再发生了",
+                "跨域脚本抛出的错误，`window.onerror` 仍能拿到完整的 message 和堆栈"
+              ],
+              "answer": 1,
+              "explain": "同步未捕获错误走 `window.onerror`（或捕获阶段的 `error` 事件），未处理的 Promise rejection 走 `unhandledrejection`，两者是不同事件，所以要各注册一个。`unhandledrejection` 只能上报、降级 UI，或在 `event.preventDefault()` 后抑制默认控制台输出，错误本身已经发生。跨域脚本没有 CORS 头时，浏览器只会给出 `Script error.`，拿不到 message 和堆栈。"
+            },
+            {
+              "q": "生产环境的 source map 该怎么处理？",
+              "options": [
+                "内联进 JS 文件，方便随时打开控制台调试",
+                "用 `hidden-source-map` 生成，只上传给错误监控平台，不放进静态目录",
+                "不生成 source map，压缩后的堆栈照样能精确还原到源码行",
+                "source map 会让线上运行变慢，因为浏览器每次请求都要下载它"
+              ],
+              "answer": 1,
+              "explain": "`hidden-source-map` 会生成 `.map` 但不写 `sourceMappingURL` 注释，产物里不留线索，把 `.map` 上传到监控平台就能还原堆栈，也不会公开源码。内联 map 会让包体积接近翻倍并把源码直接暴露。不生成 map 时，压缩后的列号和混淆过的变量名基本无法定位。浏览器只在打开 DevTools 时才去取 `.map`，所以它不影响线上运行性能。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "js-expert",
+      "name": "精通",
+      "goal": "能沿事件循环、内存、渲染流水线三条线索定位卡顿与泄漏，写出的性能代码有测量、有取舍，而不是凭感觉优化。",
+      "lessons": [
+        {
+          "id": "js-09",
+          "title": "事件循环：微任务、宏任务与执行顺序",
+          "minutes": 45,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n后台日志页有个「加载更多」按钮：点击后先把按钮文案改成「加载中…」，再同步处理二十万条记录，最后把结果写回页面。上线后用户反馈——点下去页面僵住近两秒，然后数字直接跳出来，中间那句「加载中…」从来没露过面。有人试着在中间插一句 `await Promise.resolve()`，进度条照样一动不动。\n\n这不是 DOM 写错了，而是渲染时机判断错了。你把文本改小，只是改了内存里的节点数据；浏览器什么时候真正画出来，是另一套规则决定的。同一套规则还解释了另外两个现象：在循环里不停 `Promise.resolve().then(...)` 会让标签页彻底失去响应；而把同一段计算挪进 `setTimeout`，页面就能喘上气。\n\n## 二、原理：它到底怎么运作\n\n浏览器有一个调用栈和两个队列。同步代码在栈上执行；宏任务（task）与微任务（microtask）分别排队。一次完整的事件循环是这样：\n\n1. 从宏任务队列取出一个任务执行。整段 `<script>` 本身就是第一个宏任务。\n2. 栈清空后，把微任务队列**全部**清空；清空过程中新产生的微任务，也在同一轮里跑完。\n3. 浏览器判断这一帧要不要渲染：先跑 `requestAnimationFrame` 回调，再做样式计算、布局、绘制、合成。\n4. 回到第一步，取下一个宏任务。\n\n拿一次真实点击走一遍：用户按下按钮，浏览器把这次输入作为**一个**宏任务派发，监听器在栈上执行；回调返回、栈清空，接着清空微任务；然后进入渲染步骤——先跑 `requestAnimationFrame` 回调，再算样式、布局、绘制、合成，这一帧上屏；最后才轮到下一个宏任务，那可能正是你 0ms 前排的 `setTimeout`。整条链里能画出东西的窗口只有一个，就是那个渲染步骤。\n\n关键在于第三步是「有机会才做」。浏览器按屏幕刷新节奏（通常 16.7ms 一次）找空隙渲染；只要微任务没清空、或者当前任务没结束，就没有渲染机会。所以一个跑了两秒的同步任务，会让这两秒里所有的帧全部丢失——不是画得慢，是根本没画。\n\n微任务来自 `then`/`catch`/`finally`、`await` 之后的续体、`queueMicrotask`、`MutationObserver`。宏任务来自 `setTimeout`/`setInterval`、网络 I/O、用户事件、`postMessage`、`MessageChannel`。`await` 做的事只是把后续代码包成一个微任务，它不是「让出主线程」，更不是「让浏览器渲染」——这一点是绝大多数误判的源头。\n\n`Promise.then` 与 `queueMicrotask` 都是微任务，先后只取决于入队顺序，差别在错误处理：后者抛出的异常直接报给全局（`window.onerror`），前者变成一个 rejected 的 Promise，忘了挂 `catch` 就是一个没人管的口子。`MutationObserver` 之所以用微任务，是因为它要在「这一轮所有 DOM 改动完成」和「渲染之前」这个窄窗口里交付变更记录：早一点看不到全部改动，晚一点就白改了。\n\n`setTimeout(fn, 0)` 也不是零延迟：按规范，嵌套层级超过五层后，最小延迟被抬到 4ms，而且它必然排在本轮所有微任务之后。要尽快进入下一个宏任务又不想吃这 4ms，常用 `MessageChannel`。Node 里还多两条队列：`process.nextTick` 先于 Promise 微任务清空，`setImmediate` 在 check 阶段执行，所以顶层 `setTimeout(0)` 与 `setImmediate` 谁先谁后并不稳定。\n\n再说渲染：一帧的预算是 16.7ms，超出的任务会被记为 long task（阈值 50ms）。长任务不只影响动画，更影响 INP——用户点下去到画面更新之间的那段等待，就是这些任务堆出来的。\n\n还有一个常被忽略的细节：宏任务不止一个队列。定时器、网络 I/O、用户输入往往分属不同的任务源，浏览器有权在它们之间做取舍，所以「先排的 `setTimeout` 一定先跑」在压力大时并不成立；而微任务队列只有一个，严格先进先出。做顺序推断时，只能依赖同一队列内的顺序。\n\n## 三、代码逐行\n\n```js\nbtn.addEventListener('click', () => {\n  btn.textContent = '加载中…';              // ①\n  const rows = heavySyncWork();            // ②\n  render(rows);\n  btn.textContent = `共 ${rows.length} 条`;  // ③\n});\n```\n\n① 这一行只是把文本换成一个新字符串，并把元素标脏。它不会立刻触发绘制，因为当前任务还没结束，事件循环还卡在这个回调里。\n\n② 这是罪魁。同步循环占满调用栈，事件循环被按在这一步，微任务队列、渲染步骤、下一个宏任务全部排在后面等。这两秒里用户看到的还是上一帧的画面。\n\n③ 与①的写入被合并了：同一帧内对同一属性的多次修改，只有最后一次参与渲染。所以即便①有机会生效，它和③之间也没有任何一次渲染窗口，最终画出来的只有「共 N 条」。\n\n要真的显示中间态，必须在②之前插入一次真正的让出：\n\n```js\nbtn.textContent = '加载中…';\nawait new Promise((r) => setTimeout(r, 0));   // ④\n```\n\n④ 包一层 `setTimeout` 而不是 `Promise.resolve()`：`await` 一个已完成的 Promise 只是把续体塞进微任务队列，微任务清空前不渲染，等于没让。只有进入下一个宏任务，浏览器才拿到渲染窗口。\n\n⑤ 更彻底的做法是把 `heavySyncWork` 搬进 Web Worker，主线程连切分都不需要。任务切分只是「不能开 Worker」时的降级方案，别把它当首选。\n\n把 ④ 换成 `queueMicrotask` 或 `Promise.resolve().then` 会怎样：表面上还「等了一次」，实际上续体仍在同一个宏任务里跑完，`heavySyncWork` 紧接着执行，页面照样僵住；把 ④ 整行删掉，连排队都没有，结果更直接。这个替换实验能一秒区分「我以为让出了」和「真的让出了」——看它有没有落到下一个宏任务。\n\n如果把 ③ 挪到 `requestAnimationFrame` 里再写呢？只能保证「下一帧前写入」，中间那段两秒的计算一点没省，页面依旧卡。写在哪一步不重要，**计算占用主线程多久**才重要。\n\n## 四、三个常见误区\n\n### 误区一：`await` 能让出主线程\n\n`await` 只把后续代码变成微任务。一堆微任务之间不会插入渲染，所以 `for` 循环里写 `await Promise.resolve()` 依然能把页面卡死。判断标准很简单：你的让出有没有产生一个新的宏任务？没有，就没有渲染机会。真正有效的是 `setTimeout`、`MessageChannel`，或较新的 `scheduler.yield()`（需特性检测，别直接假设存在）。\n\n但也别把结论推成「微任务有害」。框架正是靠微任务在渲染前合并状态：Vue 的 `nextTick`、React 18 的自动批处理，都要求「这一轮多次 `setState` 只渲染一次」，换成宏任务反而会把一帧拆成好几帧。分界线是——**合并状态用微任务，让出渲染用宏任务**。\n\n### 误区二：`setTimeout(fn, 0)` 就是「立刻执行」\n\n它只是「尽快排到宏任务队列尾部」，前面还压着本轮所有微任务；嵌套五层后最小 4ms；后台标签页还会被节流到一秒以上。反过来，微任务才是「立刻」——这也意味着在微任务里递归排队，可以让渲染永远等不到。\n\n### 误区三：微任务「优先级高」所以更快\n\n微任务不是更快，是「更早被清空」。在微任务里做重活，等于把渲染继续往后推；连续排一千个微任务确实比一千个 `setTimeout` 快得多，但页面一样是死的。选哪个，看你要的是顺序保证，还是让出机会。\n\n## 五、边界与代价\n\n拆分任务不是免费的。每次跨宏任务至少一次调度开销，`setTimeout` 还有 4ms 起的下限，把一个 50ms 的任务切成一百片，总耗时可能翻倍。经验值是每片 5–8ms，用 `performance.now()` 量预算，而不是按条数拍脑袋。\n\n反例一：在框架的更新回调里手动 `setTimeout` 拆分会破坏批处理和状态一致性，本该一次提交的多次修改被拆到多帧，用户会看到中间态闪烁。反例二：纯计算密集型任务应该进 Worker，在主线程上反复切碎只会让总时间更长。\n\n反例三：用 `await` 写「每秒刷新一次」的轮询。微任务轮询会把事件循环占满，而且两次执行之间几乎没有间隔；这里要的是「隔一段时间再来」，`setTimeout` 递归或 `setInterval` 才对。\n\n怎么确认自己把渲染饿死了：Performance 面板里如果只看到一条超长的黄色 Task、中间没有任何 Frame，说明一次都没画；如果 Frame 很密但每帧都超过 16.7ms，那是单帧太重，属于 js-11 的范畴，别混为一谈。这两种症状的改法完全不同。\n\n还有一条隐性代价：依赖「`then` 一定早于 `setTimeout`」这类顺序去写业务逻辑，等于把实现细节当契约。换引擎、换环境（浏览器 SSR 到 Node）就可能翻车；跨环境的顺序保证只有规范明写的部分才算数。\n\n## 六、动手任务\n\n写一个 `runInChunks(items, chunk)`：把 20 万条数据的处理切成每片不超过 8ms 的片段，用 `performance.now()` 控制预算，用 `MessageChannel` 调度下一片，页面上放一个进度条和一个「暂停」按钮。\n\n验收标准：\n\n- 运行期间进度条每帧都在动，点「暂停」能在 100ms 内响应；\n- 把调度从 `MessageChannel` 换成 `Promise.resolve().then`，进度条应立刻冻结——这组对照能证明你理解了渲染门槛；\n- 打印每片耗时，确认没有一片超过 10ms。\n\n再记录两个数：从点击「暂停」到文案真正变化的时间（应在 100ms 内），以及任务被切成了多少片。片数不是越多越好——超过「总耗时 ÷ 8ms」的两倍，就说明切得太碎，调度开销开始吃掉收益。\n\n## 七、一句话总结\n\n- 一轮循环 = 一个宏任务 → 清空微任务 → 有机会才渲染。\n- `await` 与 `then` 只排微任务，不产生渲染机会。\n- `setTimeout(0)` 不是零：排在本轮微任务之后，嵌套五层后至少 4ms。\n- 超过 50ms 的任务都在偷别人的帧，切分预算按 5–8ms 给。",
+          "code": "// 运行环境：Node 20+ 与浏览器 Console 输出一致（Node 20 以上含 Chromium 同款微任务语义）。\n// 先自己按顺序猜一遍，再运行，对照文件末尾的预期输出。\n\nconsole.log('1 sync');                                  // 同步：整段 script 是第一个宏任务\n\nsetTimeout(() => console.log('2 macrotask'), 0);        // 宏任务：排在本轮所有微任务之后\n\nPromise.resolve()\n  .then(() => console.log('3 microtask'))               // 微任务 A\n  .then(() => console.log('4 microtask-chain'));        // A 的回调里再入队，仍在同一轮清空\n\nqueueMicrotask(() => console.log('5 microtask'));       // 微任务 B\n\n(async () => {\n  console.log('6 async-sync');                          // async 函数体是同步执行的\n  await null;                                           // 让出一次：续体变成微任务 C\n  console.log('7 after-await');\n})();\n\nconsole.log('8 sync');                                  // 同步收尾\n\n// 执行过程：\n//   同步阶段跑完 → 1 6 8\n//   清空微任务队列（按入队顺序）→ 3 5 7\n//   3 的回调里排进来的 4 也在这一轮清空 → 4\n//   微任务彻底清空后才取下一个宏任务 → 2\n//\n// 预期输出：1 6 8 3 5 7 4 2\n\n// ---- 对照实验：取消下面注释会让当前标签页卡死 ----\n// 微任务无限自我入队，事件循环永远走不到渲染那一步。\n//\n// function starve() {\n//   Promise.resolve().then(starve);\n// }\n// starve();\n//\n// 换成 setTimeout(starve, 0) 则不会卡死：每轮之间浏览器都有机会渲染。",
+          "quiz": [
+            {
+              "q": "下面代码输出什么？\n\n```js\n\nsetTimeout(() => console.log('A'), 0);\nPromise.resolve().then(() => {\n  console.log('B');\n  Promise.resolve().then(() => console.log('C'));\n});\nconsole.log('D');\n```",
+              "options": [
+                "D B A C",
+                "D B C A",
+                "B D C A",
+                "D A B C"
+              ],
+              "answer": 1,
+              "explain": "同步的 D 先执行，然后开始清空微任务队列：B 执行时又排入 C，而规范要求把微任务队列清到空为止，所以 C 也在同一轮跑完，A 作为宏任务排在最后。选 A 是误以为新排的微任务要等下一轮；选 C 忽略了同步代码先于任何队列；选 D 把宏任务当成了第二轮微任务。"
+            },
+            {
+              "q": "这段代码想让进度条每处理一条就更新一次，实际运行时进度条几乎不动、页面整体卡住。原因是？\n\n```js\n\nasync function showProgress(items) {\n  for (const item of items) {\n    render(item);               // 更新进度条\n    await Promise.resolve();    // 以为能让浏览器画一帧\n  }\n}\n```",
+              "options": [
+                "render 的调用顺序错了，应该挪到 await 后面",
+                "await Promise.resolve() 只是把续体排进微任务队列，微任务清空前不会渲染，应该改为进入下一个宏任务",
+                "应该用 Promise.all 并行处理所有 item",
+                "queueMicrotask 比 await 更快，换成它就行"
+              ],
+              "answer": 1,
+              "explain": "微任务之间不会插入渲染步骤，await 一个已完成的 Promise 等于没让。选项 0 与渲染时机无关；选项 2 把串行改并行，只会让主线程一次性更忙；选项 3 更糟，queueMicrotask 仍然是微任务，渲染照样等不到机会。"
+            },
+            {
+              "q": "关于一次事件循环里微任务队列的清空时机，哪一条正确？",
+              "options": [
+                "每执行完一个微任务就让出一次渲染机会",
+                "当前宏任务结束后彻底清空，期间新入队的微任务也在同一轮执行完",
+                "每 16.7ms 清空一次，与屏幕刷新同步",
+                "每轮只清空一个微任务，剩下的留到下一轮"
+              ],
+              "answer": 1,
+              "explain": "规范的做法是「清到空」：只要微任务队列非空就继续取，因此微任务可以自我繁殖。0 把微任务当成了渲染时机；2 混淆了渲染节奏与队列清空；3 描述的是「每轮一个」，会让 then 链被无限拉长，与实现不符。"
+            },
+            {
+              "q": "要把一段约两秒的数组计算切成小片，并保证进度条每片都更新，下面哪种让出方式有渲染保证？",
+              "options": [
+                "每片后 await Promise.resolve()",
+                "每片后 await new Promise((r) => setTimeout(r, 0))，或用 MessageChannel 调度下一片",
+                "每片后调用 queueMicrotask(next)",
+                "每片后调用 requestIdleCallback(next)"
+              ],
+              "answer": 1,
+              "explain": "只有进入下一个宏任务，浏览器才拿到渲染窗口。0 与 2 都是微任务，等于没让；3 的空闲回调不保证触发，持续动画或主线程忙碌时可能长时间排不上，切分节奏也不受控。"
+            }
+          ]
+        },
+        {
+          "id": "js-10",
+          "title": "内存与性能：闭包泄漏与防抖节流",
+          "minutes": 50,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n一个后台列表页，进去、返回、再进去。测试同学说：来回切二十次以后滚动开始掉帧，浏览器任务管理器里这个标签页的内存从 80MB 涨到 600MB，关掉重开又恢复正常。\n\n打开 DevTools 的 Memory 面板，间隔一分钟拍两次堆快照做对比，增长最多的构造函数是 `HTMLDivElement`，Retainer 链上明晃晃写着 Detached——这些节点早就被移出文档了，但 JS 还攥着它们。最后定位到一行：`window.addEventListener('resize', () => render(that.data))`。注册了，从来没解绑。每进一次页面就多一个监听器，旧组件实例和它背后的整个数据对象，都被这一根线拴在 window 上。\n\n这就是典型的内存泄漏：代码没有报错，功能也正常，只是内存曲线只涨不跌。它的另一半兄弟是「防抖节流写错」——同样不报错，只是请求发多了、或者回调打到了已销毁的组件上。\n\n## 二、原理：它到底怎么运作\n\nGC 的唯一判据是可达性。引擎从根出发（window 与 document、当前调用栈上的局部变量、活跃闭包的环境、引擎内部引用），顺着引用把所有能走到的对象标黑；标不到的就是垃圾。所以循环引用本身不泄漏——那是引用计数时代的老问题。真正的泄漏永远是「从根出发还能到，但你已经不要它了」。\n\nV8 是分代回收：新生代用 scavenge 频繁复制存活对象，老生代用标记-压缩，压力足够大时才做一次完整回收。这解释了堆曲线为什么是锯齿状的——每次回收掉一截，然后接着涨。所以判断泄漏不看锯齿的峰，而看锯齿的谷是不是一次比一次高。\n\n闭包保留的是整个词法环境，不是「用到的那几个变量」。规范如此；V8 会做死变量裁剪，但不能依赖。把一个大数组塞进闭包只读其中一个长度字段，整块都可能活着。\n\n四类高频泄漏：一是监听器，target → listener → 闭包 → 数据，必须成对解除；二是定时器，`setInterval` 的回调闭包，`clearInterval` 得真的被执行到，写在提前 return 的分支后面等于没写；三是模块级缓存，用对象或 DOM 节点做键的 Map 让键永远可达；四是 detached DOM，节点被移出文档但 JS 有引用，子节点还会顺着 parent 指针把整棵树带住。\n\n`WeakMap` 的键是弱引用，键不可达时条目可被回收；规范用 ephemeron 语义，即使「值又反过来引用了键」也不会因此续命。代价是不可枚举、没有 `size`、不能整体清空——所以需要淘汰策略时，仍然得用 Map 加容量上限。\n\nES2021 还提供了 `WeakRef` 与 `FinalizationRegistry`，能做「对象被回收时通知我」。但回收时机完全由引擎决定，规范明确说不要依赖它释放业务资源：拿来给缓存做降级、给诊断做辅助可以，拿来当正确性保证不行。\n\n测量别靠猜。耗时用 `performance.now()` 取差值；长任务用 `PerformanceObserver` 观察 `longtask`；内存看快照里的 Shallow Size（对象自身多大）和 Retained Size（删掉它能连带释放多少），再顺着 Retainer 链看是谁在引用它。\n\n防抖与节流是另一条主线。`debounce` 是「安静下来才执行一次」，`throttle` 是「固定频率内最多执行一次」。两者都该挂一个 `cancel`，否则组件卸载后定时器照样回调到已销毁的实例——这既是性能问题，也是正确性问题。\n\n## 三、代码逐行\n\n```js\nconst ac = new AbortController();\nfunction mountChart(node, data) {\n  const snapshot = data.slice();                                     // ①\n  const onResize = () => redraw(node, snapshot);                     // ②\n  window.addEventListener('resize', onResize, { signal: ac.signal }); // ③\n  const timer = setInterval(() => redraw(node, snapshot), 5000);     // ④\n  return () => { window.removeEventListener('resize', onResize); clearInterval(timer); }; // ⑤\n}\nac.abort(); // ⑥\n```\n\n① `slice` 看似安全，实际把「闭包要不要捕获原数组」换成了「副本有多大」——数据多大它就多大。如果 `redraw` 只用到长度，直接传 `data.length` 比复制整份便宜得多。\n\n② 箭头函数捕获了 `node` 与 `snapshot`。这个函数对象被谁持有，这两个变量就跟着活多久。\n\n③ 注册之后形成一条从 window 出发的强引用链：window → 监听器表 → `onResize` → `snapshot`。之后把节点从文档移除、把组件实例置空，都打不断它。传 `signal` 的好处是把这条链的拆除变成一次 `abort()`。\n\n④ 定时器是第二条独立的链：引擎的定时器表 → 回调闭包 → `node` 与 `snapshot`。它和监听器没有关系，断了一条不等于断另一条。\n\n⑤ 返回清理函数是唯一正确的姿势，而且必须把两条链都断掉；「返回了」不等于「调用了」，得挂到框架的卸载钩子上，并保证异常路径也会走到。\n\n⑥ `abort()` 让该 signal 上的所有监听器立即失效，比逐个记住函数引用再 remove 更抗漏。但它不会顺手清定时器，`clearInterval` 还得自己写。\n\n去掉会怎样：把 ③ 的 `{ signal }` 换回裸 `addEventListener`，代码照样能跑，只是卸载后监听器还在，而且每次重挂都多一个；把 ⑤ 的清理函数整个删掉，泄漏立刻回来。这类缺陷不会在开发时报错——要反复进出几十次才显形，所以更适合靠约定和代码评审拦住，而不是指望测试发现。\n\n## 四、三个常见误区\n\n### 误区一：闭包会导致内存泄漏\n\n闭包本身不是泄漏，它只是让变量活得比函数调用更久，这正是你要的能力。判据永远是「还有没有人能到达它」，所以要断的是那条链，不是「少用闭包」。同理，把变量置 `null` 常常没用：监听器、定时器、缓存里可能各存了一份引用，断一条不解决问题。\n\n### 误区二：对象做键的缓存用 Map 就行\n\n`Map` 强引用键。用 DOM 节点或组件实例做键时，节点即使已经不在文档里，键仍然可达，值又是整块数据——几千行的表格就是几十兆。`WeakMap` 的键弱引用，键没了条目自然消失。但 `WeakMap` 不可遍历、没有 `size`，需要统计命中率或做淘汰时，请显式用 `Map` 加容量上限。判断标准不是「要不要缓存」，而是「键的生命周期由谁决定」：键由你的数据结构掌管就用 Map，键是外部对象（DOM 节点、组件实例）就用 WeakMap。\n\n### 误区三：防抖和节流随便挑一个\n\n语义完全不同。`debounce` 是「停下来才做」，适合搜索输入结束、窗口调整结束；`throttle` 是「固定频率最多做一次」，适合滚动、拖拽、`mousemove` 这类需要连续反馈的场景。给滚动套 debounce，用户会觉得「滚完了内容才动」；给输入联想套 throttle，会发出一堆中间态的请求。而且 debounce 默认丢掉中间所有状态，要保留首尾就得配 `leading` 与 `trailing`。还有一种常见误配：关掉 `trailing` 的防抖会把用户最后一次输入整个丢掉，看起来就像「输入没生效」。\n\n## 五、边界与代价\n\n防抖有个结构性缺陷：只要调用间隔始终小于 wait，回调永远不执行。表单自动保存这类场景必须加 `maxWait` 兜底，否则用户连着输入两分钟，一次都没存上。组件卸载时还要 `cancel()`，不然定时器到点会回调到已经销毁的实例。\n\n节流的代价是「最后一次可能丢」：末尾那次如果落在间隔内就被直接丢弃，需要 `trailing` 补一次。这两个工具都不是免费优化，它们拿延迟换频率，用户能感知到的那段延迟就是代价。\n\n反例：给「支付」按钮套 debounce。用户点下去没反应（第一次调用被静默期吞掉），以为没点上，再点一次才生效——防抖把「用户明确的意图」当成了抖动。同一类错误还有给 `keydown` 做防抖，会直接丢字符。只有「高频、无明确意图、合并后语义不变」的输入才适合防抖。\n\n测量本身也有代价：生产环境用 `PerformanceObserver` 观察 `longtask` 要采样，堆快照会暂停主线程几百毫秒。别在用户正操作的页面上随手拍快照，那一下本身就是卡顿，还容易把快照开销当成泄漏证据。\n\n`WeakMap` 的代价是不可观测：你不知道里面有多少条，内存告警时也没法手动清空。需要监控、需要上限时它就不合适。\n\n最后一条最容易被忽略：内存曲线「看起来在涨」不等于泄漏。堆是分代管理的，缓存预热、懒加载、字符串驻留都会把曲线抬高。判断标准是手动触发 GC 后，基线是否一次比一次高；只看总量就会把正常增长当泄漏，白改一通。\n\n## 六、动手任务\n\n实现 `createDebounced(fn, wait, { leading, trailing })`，返回值上挂 `cancel()` 与 `flush()`，并用 `performance.now()` 记录每次真实调用的时间戳。\n\n验收：\n\n- 连续 5 次、间隔 20ms、wait=100、trailing 模式 → 只执行 1 次，且发生在最后一次调用约 100ms 之后；\n- 打开 leading → 第 1 次立即执行，静默 100ms 后再补最后一次；\n- 调 `cancel()` 后等 300ms，调用次数不再增加；`flush()` 能立刻执行挂起的那次。\n\n再加一步验证内存：写一个用 `WeakMap` 给节点缓存尺寸的函数，循环创建、挂载、移除一万个节点后拍快照，确认 Detached 节点数不再随次数线性增长。\n\n同时记下两个数字：从最后一次输入到回调真正执行的间隔（trailing 模式应接近 wait），以及调用 `cancel()` 之后仍留在队列里的计时器数量（应为 0）。这两个数比「看起来没卡」可靠。\n\n## 七、一句话总结\n\n- 泄漏的判据是可达性，不是引用计数；循环引用无罪。\n- 监听器、定时器、缓存、detached DOM 是四个源头，注册与清理必须成对。\n- 对象做键的缓存用 `WeakMap`；需要淘汰和统计就回到 `Map` 加容量上限。\n- `debounce` 合并、`throttle` 限频，两者都必须提供 `cancel`。\n- 先测量再优化：Shallow 看自身，Retained 看连坐。",
+          "code": "// 运行环境：Node 20+ 或任意浏览器 Console，输出完全确定。\n// 这里用「虚拟时钟」代替真实计时器：时间变成可以手动推进的变量，\n// 才能断言「第几毫秒执行了几次」，而不是靠 sleep 猜。\n\n// ---------- 可控时钟 ----------\nlet now = 0;\nconst timers = []; // { at, fn }\n\nfunction later(fn, ms) {\n  timers.push({ at: now + ms, fn });\n  return fn;\n}\nfunction clearLater(handle) {\n  const i = timers.findIndex((t) => t.fn === handle);\n  if (i !== -1) timers.splice(i, 1);\n}\nfunction advance(ms) {\n  const target = now + ms;\n  for (;;) {\n    timers.sort((a, b) => a.at - b.at);\n    const next = timers[0];\n    if (!next || next.at > target) break;\n    timers.shift();\n    now = next.at;\n    next.fn();\n  }\n  now = target;\n}\n\n// ---------- 防抖：安静 wait 毫秒后只执行最后一次 ----------\nfunction debounce(fn, wait) {\n  let handle = null;\n  const debounced = (...args) => {\n    if (handle) clearLater(handle);            // 关键：每次调用都取消上一次\n    handle = () => {\n      handle = null;\n      fn(...args);                             // 用最后一次的参数\n    };\n    later(handle, wait);\n  };\n  debounced.cancel = () => {\n    if (handle) clearLater(handle);\n    handle = null;                             // 卸载时必须能取消，否则回调打到已销毁的实例\n  };\n  return debounced;\n}\n\n// ---------- 节流：每个 wait 窗口最多执行一次（首尾都补） ----------\nfunction throttle(fn, wait) {\n  let last = -Infinity;\n  let handle = null;\n  let lastArgs;\n  const throttled = (...args) => {\n    lastArgs = args;\n    if (now - last >= wait) {\n      last = now;\n      fn(...args);                             // 窗口起点：立即执行\n      return;\n    }\n    if (handle) return;                        // 窗口内已有尾调用，不重复排队\n    handle = () => {\n      handle = null;\n      last = now;\n      fn(...lastArgs);                         // 窗口末尾补一次，避免丢掉最后一次\n    };\n    later(handle, wait - (now - last));\n  };\n  throttled.cancel = () => {\n    if (handle) clearLater(handle);\n    handle = null;\n    last = -Infinity;\n  };\n  return throttled;\n}\n\n// ---------- 1. 防抖：连续三次输入，只有最后一次活下来 ----------\nconst save = debounce((v) => console.log(`t=${now} save:${v}`), 100);\nsave('a');          // t=0   排队到 100\nadvance(30);\nsave('b');          // t=30  取消上一次，改排到 130\nadvance(30);\nsave('c');          // t=60  取消上一次，改排到 160\nadvance(100);       // 时钟走到 160，正好触发最后一次\n\n// ---------- 2. 节流：四次调用跨三个窗口，窗口末尾各补一次 ----------\nconst tick = throttle(() => console.log(`t=${now} tick`), 100);\nfor (let i = 0; i < 4; i++) {\n  tick();           // t=160 / 200 / 240 / 280\n  advance(40);\n}\nadvance(200);       // 让窗口末尾的补调用有机会执行\n\n// ---------- 3. cancel：取消后不再有任何回调 ----------\nlet fired = 0;\nconst risky = debounce(() => { fired += 1; }, 50);\nrisky();\nrisky.cancel();     // 模拟组件卸载\nadvance(500);\nconsole.log('cancel 之后触发次数:', fired);\n\n// ---------- 4. WeakMap：对象做键的缓存不阻止回收 ----------\nconst sizeCache = new WeakMap();\nconst node = { id: 'row-1' };\nsizeCache.set(node, { height: 40 });\nconsole.log('weakmap 命中:', sizeCache.has(node), sizeCache.get(node));\n\n// 预期输出：\n//   t=160 save:c\n//   t=160 tick\n//   t=260 tick\n//   t=360 tick\n//   cancel 之后触发次数: 0\n//   weakmap 命中: true { height: 40 }",
+          "quiz": [
+            {
+              "q": "下面代码在 200ms 后输出什么？（debounce 为标准的防抖实现）\n\n```js\n\nconst save = debounce((v) => console.log('save', v), 100);\nsave('a');\nsave('b');\nsetTimeout(() => save('c'), 50);\n```",
+              "options": [
+                "save a、save b、save c",
+                "save c",
+                "save a、save c",
+                "save b"
+              ],
+              "answer": 1,
+              "explain": "防抖每次调用都会清掉上一个计时器：a 被 b 取消，b 又被 50ms 时的 c 取消，只有 c 熬过 100ms 静默期，在约 150ms 处执行一次。选「save a、save c」是把第一次调用误当成 leading；选另外两项则是把防抖当成了节流。"
+            },
+            {
+              "q": "输入框加上防抖后，回调里的 this 是 undefined（严格模式），也拿不到输入值。最小修复是？\n\n```js\n\nfunction debounce(fn, wait) {\n  let timer;\n  return function () {\n    clearTimeout(timer);\n    timer = setTimeout(fn, wait);\n  };\n}\ninput.addEventListener('input', debounce(function () {\n  this.classList.add('done');\n  search(this.value);\n}, 300));\n```",
+              "options": [
+                "把 clearTimeout 移到 setTimeout 之后",
+                "在返回的函数里保存 this 与参数，改成 setTimeout(() => fn.apply(this, args), wait)",
+                "把 wait 调大，给浏览器更多缓冲时间",
+                "改用节流，节流不会丢 this"
+              ],
+              "answer": 1,
+              "explain": "setTimeout(fn) 里的 fn 是独立调用，this 丢失、参数为空，必须在返回函数里捕获 this 和 arguments 再转发。选项 0 会破坏防抖语义（永远不清计时器）；选项 2 只影响延迟；选项 3 换节流同样丢 this 和参数。"
+            },
+            {
+              "q": "关于 WeakMap，下面哪一条正确？",
+              "options": [
+                "键是弱引用：键对象不可达时条目可被回收；即使值又引用了键，这条环也不会阻止回收",
+                "键和值都是弱引用，所以不能把 DOM 节点当键",
+                "可以用 for...of 遍历，也能读到 size",
+                "必须手动 delete，否则和 Map 一样永不释放"
+              ],
+              "answer": 0,
+              "explain": "规范用 ephemeron 语义处理「值反过来引用键」的情况，所以键不可达时整条条目都能回收。1 错在值是强引用；2 错在 WeakMap 不可枚举、也没有 size；3 恰好相反，它不需要手动删除。"
+            },
+            {
+              "q": "「自动保存草稿」用 debounce(fn, 800) 实现。用户连续打字三分钟一次没停，会发生什么？",
+              "options": [
+                "每 800ms 保存一次",
+                "一次都不会保存：每次输入都重置计时器，防抖没有执行上界",
+                "第一次输入时保存一次，之后不再保存",
+                "内存泄漏，改用 WeakMap 才能修复"
+              ],
+              "answer": 1,
+              "explain": "默认的防抖只在静默 wait 之后触发，只要间隔始终小于 wait，回调永远轮不到。0 描述的是节流；2 只有打开 leading 才会发生；正确做法是加 maxWait 兜底或改成固定间隔快照。3 与此无关，问题不是内存。"
+            }
+          ]
+        },
+        {
+          "id": "js-11",
+          "title": "渲染性能：重排、重绘与长列表",
+          "minutes": 50,
+          "lang": "js",
+          "content": "## 一、先看一个会出事的场景\n\n监控大盘要做一块五千行的日志表格。第一版全量渲染，滚动条一拖就顿，用户以为是自己电脑卡。录一段 Performance：三秒滚动里每帧 150–200ms，主线程上是一条黄色长任务，展开后是密密麻麻几十次 Layout，中间夹着 Recalculate Style 和 Paint。\n\n滚动处理器只有一处可疑：为了给可见行加高亮，它遍历全部行，先读 `row.offsetTop` 判断有没有进入视口，再写 `row.style.backgroundColor`。看起来是普通的循环，问题是每读一次 `offsetTop`，浏览器都必须把前面刚写的样式和布局立刻算完才能给答案——五千行就是几千次强制同步布局。\n\n同一类翻车还有别的形态：给列表项加 `transition: all .3s`，一个 `width` 动画让整页跟着抖动；给每行都写 `will-change: transform`，滚动反而更慢。它们共同的原因是没弄清「改一个属性，浏览器到底要重做哪几步」。\n\n## 二、原理：它到底怎么运作\n\n一帧的渲染流水线是：JavaScript（改样式）→ Style（重新匹配选择器、算计算样式）→ Layout（算几何：位置与尺寸）→ Paint（生成绘制指令、填像素）→ Composite（把图层合成到屏幕）。改动落在哪一步，成本差一个数量级。\n\n触发 Layout 的是几何相关属性：`width`/`height`、`top`/`left`/`margin`/`padding`、`font-size`、`display`、`position`、边框宽度。文档流里盒子互相依赖，动一个可能让兄弟、祖先、子节点全部重排，所以重排是连锁的。\n\n连锁是具体可感的：一个盒子变宽，可能把兄弟挤到下一行、把父容器撑高、让后面所有内容整体下移，浏览器只能从头重算受影响的子树。这就是为什么改 `width` 的动画比改 `transform` 贵一个数量级——后者根本不参与布局。\n\n只触发 Paint 的是绘制属性：`color`、`background`、`box-shadow`、`border-radius`、`visibility`。布局不变，但要重新画像素；大面积阴影和模糊一样很贵。\n\n只触发 Composite 的是 `transform` 与 `opacity`——前提是这个元素已经被提升为独立合成层。合成在合成线程/GPU 上做，不占主线程，所以动画能稳定跑满帧率。这也是「动画用 transform 不用 left」的真正原因，不只是「少一次重排」。\n\n元素什么时候算「已独立成层」？`transform` 动画进行中、声明了 `will-change`、`filter` 非空、`position: fixed` 等都可能触发，具体规则由浏览器决定且会随版本变。所以别把「transform 一定走合成」当成规范承诺，它是实现层面的优化，退化时它会退回重绘。\n\n一帧里各步的典型占比：脚本 3–5ms、样式与布局 1–3ms、绘制 1–2ms，剩下的才是余量。任何一步翻倍，最先感受到的都是滚动和输入延迟。\n\n然后是读写分离。浏览器本来会把一帧内的样式修改攒起来，等帧末统一算一次。可一旦你读 `offsetWidth`、`offsetTop`、`scrollTop`、`getBoundingClientRect()`、`getComputedStyle()` 里的布局值，它就必须立刻把挂起的写全部结算（强制同步布局），才能返回一个准确的数。读-写-读-写的循环，就是把「一次布局」拆成「N 次布局」。\n\n滚动还有一层：滚动本身由合成线程处理，但 `scroll` 事件要回到主线程派发。处理函数一慢，画面就跟不上手指。所以滚动监听默认加 `{ passive: true }`，并且只在 `requestAnimationFrame` 里读写一次，而不是每次事件都写。\n\n时间预算：60Hz 下一帧 16.7ms，120Hz 只有 8.3ms；超过 50ms 的任务记为 long task。这些任务直接推高 INP（从用户输入到下一次绘制），良好线是 200ms 以内。\n\n长列表的正解是虚拟滚动：只渲染视口内的行加少量 overscan，用一个撑满总高度的元素保证滚动条长度，滚动时按 `scrollTop` 算可见区间，用 `transform` 平移行容器。核心是把「五万个 DOM 节点」变成「二十个 DOM 节点 + 一次算术」。\n\n行高不固定时，总高度只能估算：先量一批样本取平均，边滚边把实测高度写进缓存，滚动条总长随之修正——很多虚拟列表「滚动条会突然跳一下」，根源就在这里。\n\n## 三、代码逐行\n\n```js\nfunction highlight() {\n  const from = list.scrollTop;                  // ①\n  for (const row of rows) {                     // ②\n    const top = row.offsetTop;                  // ③\n    if (top > from && top < from + 400) {\n      row.style.backgroundColor = '#ff0';       // ④\n    }\n  }\n}\nlist.addEventListener('scroll', highlight);     // ⑤\n```\n\n① `scrollTop` 也是布局属性，读它同样要结算。但它在循环外，整趟只结算一次，可以接受——位置对了，次数就对了。\n\n② 这个循环把「读一次」放大成「读 N 次」。规模本身就是成本：五行数据和五千行数据是两类问题，后者才会让一帧超标。\n\n③ 循环里读 `offsetTop`，每一轮都要先把上一轮写入的样式结算完才能返回，N 行就是 N 次强制布局。这是整段代码唯一真正的病灶。\n\n④ 写 `backgroundColor` 只弄脏绘制，不弄脏布局；但它让下一轮的 ③ 必须重新结算，读写交替才是成本相乘的原因。\n\n⑤ `scroll` 一秒可能派发几十次，每次都全量遍历。事件频率乘上单次成本，才是那 150ms 每帧的来源。\n\n改法一，先读后写，两趟分开：第一趟只收集各行的 `top`，第二趟统一写样式。读操作之间没有写，布局只算一次。\n\n改法二，根本别读布局：行高固定时，可见区间用 `Math.floor(scrollTop / rowH)` 直接算，一次布局都不用。换成读 `getBoundingClientRect()` 只会更贵，它要一次带出四个边界值，还得换算滚动容器偏移。\n\n改法三，把高亮从 `backgroundColor` 换成 `opacity` 或 `transform` 上的变化，让它在合成阶段完成。判断标准是：这个改动会不会影响几何。\n\n改法四，处理 ⑤：加 `passive: true` 并把遍历挪进 `requestAnimationFrame`，或者干脆用 `IntersectionObserver` 让浏览器告诉你哪行进入了视口，连遍历都省掉。\n\n## 四、三个常见误区\n\n### 误区一：`transform` 一定不触发重排\n\n`transform` 跳过 Layout 与 Paint 的前提是元素在独立合成层上。动画开始时浏览器会自动提升，但元素本来不在层上时，第一帧仍有提升成本；动画结束层被合并回去，下次动画再提升一次。而 `will-change: transform` 常驻会让每个元素都建层，显存暴涨、合成变慢，反而更卡。正确做法是短时使用，或在动画结束后移除。换句话说，「加 `will-change` 提速」只在动画即将开始的那一小段时间成立：提前一点加上，动画结束就撤掉，而不是当成元素的常驻样式。\n\n### 误区二：`requestIdleCallback` 是拆长任务的正解\n\n它只在浏览器空闲时执行，可能永远不执行（除非给 `timeout`）；持续动画或频繁交互时几乎排不上。用户点击后的紧急更新应该用 `scheduler.postTask` 或 `scheduler.yield`（Chrome 129+，必须特性检测），降级方案是 `MessageChannel` 分片。`postTask` 还能标优先级，`user-blocking` 给交互响应，`background` 给预取。`requestIdleCallback` 适合的是「不紧急、可以延迟到空闲」的工作，比如埋点上报。\n\n### 误区三：重排比重绘贵，所以只要避免重排就行\n\n重绘在复杂场景同样贵：全屏渐变、大面积 `box-shadow`、滤镜模糊都能吃掉整帧预算。合成层多了会撑爆显存，手机 GPU 内存尤其紧张。另外读布局属性本身不触发任何阶段，却会强制结算——它也是成本，只是不在流水线图上。优化目标是每帧总时间，不是单看某一阶段。\n\n## 五、边界与代价\n\n虚拟滚动不是免费的。未渲染的内容搜不到（浏览器查找只覆盖已存在的 DOM），焦点管理、`aria` 语义、屏幕阅读器都要自己补；变高行需要测量缓存加平均高度估算，滚动条比例会失真；首屏 SSR 出来是空白，得配骨架。数据不到两三百行时上虚拟滚动，纯属给自己加 bug。\n\n合成层是资源不是开关。每个层都要显存，移动端更敏感；`will-change` 写多了会触发「层爆炸」，合成线程反而更忙。低端机 GPU 内存只有几百兆，几十个合成层就开始掉帧，而且这种掉帧很难归因——Performance 面板看着一切正常，实际是显存不够。\n\n反例：一个只有二十行的设置页套虚拟滚动，滚动时输入框被回收，用户打一半的字丢了——这类 bug 的修复成本远高于它省下的那点渲染时间。\n\n另一个常被忽略的边界是 `contain: layout paint`：给独立卡片加上它，能把布局影响限制在子树内部，比虚拟滚动便宜得多，适合「数量不多但每块都很重」的场景。\n\n还有一条：INP 优化不等于「所有事都异步化」。点击后的视觉反馈必须在同一帧内出现，把反馈也塞进 `setTimeout` 只会让延迟更明显。该同步的同步，该分片的分片。\n\n## 六、动手任务\n\n拿一个五千行的列表页，做两件事并测量对比。\n\n第一件：把滚动处理器改成「只在 `scroll` 里记录 `scrollTop`，在 `requestAnimationFrame` 里统一写样式」，用 Performance 面板确认每帧的 Layout 次数从几十次降到一次以内。\n\n第二件：实现最小虚拟滚动——固定行高 40px、容器高 400px、overscan 5，用绝对定位或 `transform` 摆放行。\n\n验收标准：\n\n- 滚动到第 4000 行时内容显示正确，`document.querySelectorAll('.row').length` 不超过 20；\n- 录三秒滚动，最长任务小于 50ms，帧率不低于 55fps；\n- 故意把读 `offsetTop` 的代码加回去，能在 Performance 面板里重新看到密集的 Layout，并说清它属于流水线的哪一步。\n\n再加一组对照：把行高从固定 40px 改成自适应，观察滚动条总高度与实际内容的偏差。记录偏差超过一行时你用了什么策略修正——这决定了你的实现在什么数据下会失效。\n\n## 七、一句话总结\n\n- 改几何走 Layout，改颜色走 Paint，改 `transform`/`opacity` 走 Composite。\n- 读布局属性会强制结算，读写必须分趟，最好一次都不读。\n- 一帧 16.7ms，超过 50ms 就是长任务，直接伤 INP。\n- 长列表用虚拟滚动，代价是可搜索性与可访问性要自己补。\n- `will-change` 与合成层是有限资源，不是免费的加速开关。",
+          "code": "// 运行环境：\n//   Node 20+  → 只执行计算部分，打印可见区间，输出完全确定。\n//   浏览器    → 额外渲染 5000 行虚拟列表；页面里需要一个\n//               <div id=\"viewport\" style=\"height:400px;overflow:auto\"></div>\n//\n// 预期输出（Node）：\n//   scrollTop=0      → [0, 20) 共 20 行\n//   scrollTop=1600   → [35, 55) 共 20 行\n//   scrollTop=199600 → [4985, 5000) 共 15 行\n//\n// 浏览器里还会打印「已渲染行数: 20」，并且始终只有 20 个 .row 节点。\n\nconst TOTAL = 5000;\nconst ROW_H = 40;\nconst VIEW_H = 400;\nconst OVERSCAN = 5;\n\n// 只做算术，不碰 DOM：所以可以在 Node 里断言，也可以被单测覆盖\nfunction getVisibleRange(scrollTop, total = TOTAL, rowH = ROW_H, viewH = VIEW_H, overscan = OVERSCAN) {\n  const first = Math.max(0, Math.floor(scrollTop / rowH) - overscan);\n  const count = Math.ceil(viewH / rowH) + overscan * 2; // 视口行数 + 上下各一段缓冲\n  const last = Math.min(total, first + count);\n  return [first, last];\n}\n\nfor (const st of [0, 1600, 199600]) {\n  const [a, b] = getVisibleRange(st);\n  console.log(`scrollTop=${st} → [${a}, ${b}) 共 ${b - a} 行`);\n}\n\n// ---------- 以下只在浏览器执行 ----------\nif (typeof document !== 'undefined') {\n  const viewport = document.querySelector('#viewport');\n  const spacer = document.createElement('div'); // 撑出总高度，滚动条长度才正确\n  spacer.style.cssText = `position:relative;height:${TOTAL * ROW_H}px`;\n  viewport.append(spacer);\n\n  const els = []; // 复用的节点池，长度始终等于可见行数\n\n  function render() {\n    const scrollTop = viewport.scrollTop;          // ① 只在这里读一次布局\n    const [first, last] = getVisibleRange(scrollTop);\n    const need = last - first;\n\n    while (els.length < need) {                    // ② 不够就补节点\n      const el = document.createElement('div');\n      el.className = 'row';\n      el.style.cssText = `position:absolute;top:0;left:0;right:0;height:${ROW_H}px`;\n      spacer.append(el);\n      els.push(el);\n    }\n    while (els.length > need) els.pop().remove();  // ③ 多了就摘掉\n\n    for (let i = 0; i < need; i++) {               // ④ 之后全是写，不再读\n      const index = first + i;\n      els[i].textContent = `第 ${index + 1} 行`;\n      els[i].style.transform = `translateY(${index * ROW_H}px)`; // 只走合成，不触发布局\n    }\n    console.log('已渲染行数:', need);\n  }\n\n  let ticking = false;\n  viewport.addEventListener('scroll', () => {\n    if (ticking) return;                           // ⑤ 一帧只处理一次滚动\n    ticking = true;\n    requestAnimationFrame(() => {\n      ticking = false;\n      render();                                    // ⑥ 写操作统一挪到 rAF 里\n    });\n  }, { passive: true });\n\n  render();\n}\n\n// 对照：把 ④ 换成「每行读一次 offsetTop 再算位置」，滚动时\n// Performance 面板里会重新出现密集的 Layout —— 读布局属性会强制结算。",
+          "quiz": [
+            {
+              "q": "控制台输出什么？\n\n```js\n\nconst box = document.querySelector('#box');\nfor (let i = 1; i <= 3; i++) {\n  box.style.width = i * 10 + 'px';\n  console.log(box.offsetWidth);\n}\n```",
+              "options": [
+                "10 20 30，全程只发生一次布局",
+                "10 20 30，但每次读 offsetWidth 都强制同步布局，共三次",
+                "0 0 0，样式要等到下一帧才生效",
+                "抛出异常，offsetWidth 不能这样读"
+              ],
+              "answer": 1,
+              "explain": "读布局属性时会先把挂起的样式与布局结算完再返回值，所以每次都读到新宽度，代价是三次强制布局。0 忽略了强制结算；2 错在以为写样式要等下一帧（读取会立刻结算）；3 是虚构的限制。"
+            },
+            {
+              "q": "这个动画每帧都要重新布局，掉帧严重。最有效的改法是？\n\n```js\n\nfunction animate() {\n  const x = box.offsetLeft;\n  box.style.left = x + 2 + 'px';\n  requestAnimationFrame(animate);\n}\nrequestAnimationFrame(animate);\n```",
+              "options": [
+                "把 requestAnimationFrame 换成 setInterval(animate, 16)",
+                "left 是几何属性，改用 transform: translateX()，让它走合成阶段",
+                "给元素加上 will-change: left",
+                "把 offsetLeft 缓存到循环外就够了"
+              ],
+              "answer": 1,
+              "explain": "left 参与布局，每帧都要重算几何；transform 在合成层上可以交给合成线程。0 更糟，定时器不跟帧同步还可能堆积；2 无效，left 不是可合成属性；3 只去掉了强制结算，写入仍然触发布局。"
+            },
+            {
+              "q": "下列哪一组改动，在元素已独立成层时只影响合成阶段（不触发 Layout 和 Paint）？",
+              "options": [
+                "width 与 top",
+                "color 与 background-color",
+                "transform 与 opacity",
+                "font-size 与 border-radius"
+              ],
+              "answer": 2,
+              "explain": "width/top 改几何走 Layout；color/background 只重绘；font-size 会改变字号与行盒，属于重排，border-radius 只重绘；只有 transform/opacity 能在合成线程处理。"
+            },
+            {
+              "q": "关于虚拟滚动，哪一条说法正确？",
+              "options": [
+                "它能减少首屏 DOM，所以任何长度的列表都该用",
+                "未渲染的行不在 DOM 里，浏览器自带查找、无障碍与焦点管理会受影响，需要额外补偿",
+                "所有行必须等高，否则无法实现",
+                "用了虚拟滚动就不会再出现长任务"
+              ],
+              "answer": 1,
+              "explain": "0 错在几十行的小列表用它纯属增加复杂度；2 错在可变高度可以用测量缓存加平均高度估算；3 错在滚动时的区间计算与样式重排本身就可能超标，虚拟滚动降低的是节点数，不是所有成本。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
