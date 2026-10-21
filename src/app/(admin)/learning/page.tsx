@@ -298,7 +298,7 @@ function CodeBox({ code, lang, runner }: { code: string; lang: string; runner?: 
         </div>
       </div>
       <pre className="m-0 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs leading-relaxed text-zinc-100 dark:bg-black/60">
-        <code className="whitespace-pre-wrap break-words">{code}</code>
+        <code className="whitespace-pre">{code}</code>
       </pre>
 
       {/* ---- 真运行面板（已接运行器的语言） ---- */}
@@ -372,6 +372,28 @@ function CodeBox({ code, lang, runner }: { code: string; lang: string; runner?: 
   )
 }
 
+/**
+ * 课时正文的阅读排版（只作用于本页的 `.learning-doc`）。
+ *
+ * 不走全局 MD_BODY_CSS：那份样式同时服务笔记 / 练习等页面，
+ * 在这里统一放大字号与段距会顺带改变那些页面的密度。
+ */
+const LEARNING_DOC_CSS = `
+.learning-doc .md-body{font-size:15px;line-height:1.9;letter-spacing:.01em}
+.learning-doc .md-body p{margin:.85em 0}
+.learning-doc .md-body li{margin:.3em 0}
+.learning-doc .md-body ul,.learning-doc .md-body ol{margin:.6em 0}
+.learning-doc .md-body pre{margin:.9em 0;padding:.9rem 1.1rem;line-height:1.8}
+.learning-doc .md-body h2{margin:1.2em 0 .5em}
+.learning-doc .md-body h3{margin:1em 0 .4em}
+.learning-doc .md-body>:first-child{margin-top:0}
+.learning-doc .md-body>:last-child{margin-bottom:0}
+.quiz-explain .md-body{font-size:12px;line-height:1.7}
+.quiz-explain .md-body p{margin:.35em 0}
+.quiz-explain .md-body>:first-child{margin-top:0}
+.quiz-explain .md-body>:last-child{margin-bottom:0}
+`
+
 function LessonView({ lesson, runner, selection, onRecord }: {
   lesson: Lesson
   runner?: Runner
@@ -381,24 +403,25 @@ function LessonView({ lesson, runner, selection, onRecord }: {
 }) {
   return (
     <Card size="small">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-base font-medium text-zinc-800 dark:text-zinc-100">{lesson.title}</span>
-        <span className="flex items-center gap-1 text-xs text-zinc-400 dark:text-zinc-500">
+      <style>{LEARNING_DOC_CSS}</style>
+      <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-zinc-100 pb-3 dark:border-zinc-800">
+        <span className="text-lg font-semibold text-zinc-800 dark:text-zinc-100">{lesson.title}</span>
+        <span className="flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
           <Clock size={12} /> {lesson.minutes} 分钟
         </span>
       </div>
 
-      <MdPreview value={lesson.content} />
+      <div className="learning-doc"><MdPreview value={lesson.content} /></div>
 
       {lesson.code.trim() && (
-        <div className="mt-4">
+        <div className="mt-5">
           <div className="mb-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-200">示例代码</div>
           <CodeBox code={lesson.code} lang={lesson.lang} runner={runner} />
         </div>
       )}
 
       {lesson.quiz.length > 0 && (
-        <div className="mt-5 border-t border-dashed border-zinc-200 pt-4 dark:border-zinc-800">
+        <div className="mt-6 border-t border-dashed border-zinc-200 pt-4 dark:border-zinc-800">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">随堂测试</span>
             <span className="text-xs text-zinc-400 dark:text-zinc-500">{lesson.quiz.length} 题 · 选完立即判定</span>
@@ -510,7 +533,8 @@ function Quiz({ lesson, selection, onRecord }: {
           <div key={qi}>
             <div className="mb-1.5 flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-200">
               <span className="shrink-0 text-zinc-400">{qi + 1}.</span>
-              <span><Inline text={q.q} /></span>
+              {/* 题干含围栏代码块（多数题目都是），必须块级渲染；外层给 min-w-0 才能正常收缩 */}
+              <div className="min-w-0 flex-1"><MdPreview value={q.q} /></div>
             </div>
             <div className="flex flex-col gap-1.5">
               {q.options.map((opt, oi) => {
@@ -539,8 +563,8 @@ function Quiz({ lesson, selection, onRecord }: {
                   ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
                   : "bg-zinc-50 text-zinc-600 dark:bg-zinc-800/60 dark:text-zinc-300"
               }`}>
-                <span className="font-medium">{chosen === q.answer ? "答对了。" : `答错了，正确答案是 ${"ABCD"[q.answer] || q.answer + 1}。`}</span>
-                <Inline text={q.explain} />
+                <div className="font-medium">{chosen === q.answer ? "答对了。" : `答错了，正确答案是 ${"ABCD"[q.answer] || q.answer + 1}。`}</div>
+                <div className="quiz-explain mt-1"><MdPreview value={q.explain} /></div>
               </div>
             )}
           </div>
