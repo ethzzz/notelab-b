@@ -191,6 +191,20 @@ export function SearchBox() {
 `"use client"` 会让整棵子树进客户端包。把交互收缩到叶子，数据留在服务端取，交互组件只拿它真正需要的那点数据。
 :::
 
+:::solution 边界画在哪一层
+```text
+app/orders/
+├── page.tsx        无指令 = 服务端组件：await db，把纯数据作为 props 传下去
+├── search-box.tsx  "use client"：只有 useState + onChange
+└── big-table.tsx   无指令 = 服务端组件：只接收可序列化的 rows
+```
+```bash
+# 量化：拆分前后各跑一次，比同一个路由的 First Load JS
+npx next build 2>&1 | grep -E '/orders'
+# 再在浏览器 Network 里按 JS 过滤看首次加载总量；两个数字都记下，第 9 周当基线
+```
+:::
+
 :::error 把函数或类实例传给客户端组件
 ```text
 Functions cannot be passed directly to Client Components unless you explicitly expose it by marking it with "use server".
@@ -228,6 +242,40 @@ export default async function PostPage({ params, searchParams }: Props) {
 
 :::hint 先 await，再取值
 `params` / `searchParams` 在 15 之后都是 Promise，`await` 一次拿到普通对象再用。布局只拿 `params`，查询参数和路径名留给 page 或客户端组件。
+:::
+
+:::solution 三个 prop 的正确取法
+```tsx
+// app/posts/[slug]/layout.tsx —— 布局只收 params，收不到 searchParams，也拿不到路径名
+export default async function PostLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  return (
+    <>
+      <aside data-slug={slug}>目录</aside>
+      {children}
+    </>
+  )
+}
+```
+```tsx
+// generateMetadata 同样收到 Promise，别写成 params.slug
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params
+  return { title: `文章 ${slug}` }
+}
+```
+```bash
+# 数组型 searchParams 与 404 各验一次
+curl -s "localhost:3000/posts/hello?tab=a&tab=b" | grep -o 'data-slug="hello"'   # 应命中
+curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/posts                     # 404
+```
+要在布局之外跟着导航高亮当前路径，正确做法是放进客户端组件用 `usePathname()`。
 :::
 
 **自测**（合上文档回答）
@@ -301,6 +349,40 @@ export default function NotFound() {
 `loading` 管慢、`error` 管错、`not-found` 管不存在；三者都只覆盖**本段及其下层**，同段上方的布局不在管辖内。
 :::
 
+:::solution 三个文件各自的位置与覆盖面
+```text
+app/
+├── global-error.tsx   "use client" + 自带 <html>/<body>：根布局自己抛错时的兜底
+└── probe/
+    ├── layout.tsx
+    ├── loading.tsx    盖 page / not-found / 下层布局；不盖同段 layout / error
+    ├── error.tsx      "use client"：盖 loading / not-found / page；不盖同段 layout
+    ├── not-found.tsx  由 notFound() 触发，不接 props
+    └── page.tsx
+```
+```tsx
+// app/global-error.tsx —— 唯一必须自己输出 <html>/<body> 的错误边界
+"use client"
+export default function GlobalError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string }
+  reset: () => void
+}) {
+  return (
+    <html lang="zh">
+      <body>
+        <h1>整站出错</h1>
+        <p>排障编号：{error.digest ?? "无"}</p>
+        <button onClick={() => reset()}>重试</button>
+      </body>
+    </html>
+  )
+}
+```
+:::
+
 #### 步骤 2.2 并行路由做弹窗
 
 目标：`/posts` 列表点进 `/posts/1` 时详情以弹窗出现，地址栏同步变化；直接刷新 `/posts/1` 或把链接发给别人，打开的是整页详情。
@@ -360,6 +442,28 @@ export default async function InterceptedPost({ params }: { params: Promise<{ id
 
 :::hint `(.)` 按路由段算，`@slot` 不算段
 `app/@modal/(.)posts/[id]` 拦的是根级 `posts/[id]`；`@modal` 只是插槽，不进 URL。硬导航缺 `default.tsx` 就是 404。
+:::
+
+:::solution 两个必补文件与验收口径
+```tsx
+// app/@modal/default.tsx —— 硬导航时渲染 null，缺了它刷新就是 404
+export default function Default() {
+  return null
+}
+
+// app/@modal/[...catchAll]/page.tsx —— 导航到不匹配插槽的地址时把弹窗收掉
+export default function CatchAll() {
+  return null
+}
+```
+```bash
+# 硬导航应是整页详情（200），既不是弹窗也不是 404
+curl -s -o /dev/null -w 'hard   %{http_code}\n' localhost:3000/posts/1
+# 临时移走 default.tsx 再 build，同一 URL 应变成 404（验完记得移回）
+mv app/@modal/default.tsx /tmp/ && npx next build
+curl -s -o /dev/null -w 'no-def %{http_code}\n' localhost:3000/posts/1
+mv /tmp/default.tsx app/@modal/
+```
 :::
 
 :::error 刷新详情页变成 404
@@ -527,6 +631,20 @@ export default async function PostsPage() {
 `○` 的路由在请求期不执行你的组件；先确认这一点，再去调 `fetch` 的选项，否则永远在错的层上改。
 :::
 
+:::solution 四层对照表
+```text
+层  是什么                                 开关 / 失效方式                          怎么观察
+①   请求记忆化：同一次渲染同 URL 只发一次    React cache()（不用 fetch 取数时）        同一渲染里两次调用只打一行日志
+②   数据缓存：fetch 结果按 URL + 选项存     next.revalidate / next.tags / no-store   终端打印 [render] 但数据是旧的
+③   全路由缓存：构建期产出的 HTML + RSC     段级 revalidate / 动态 API / force-dynamic 终端没有 [render]
+④   客户端路由缓存：浏览器里的 RSC payload  experimental.staleTimes / 硬刷新       curl 拿到新内容、浏览器还是旧的
+```
+```bash
+# 先分清 ③：○ 静态 / ƒ 动态 / ◐ 部分预渲染
+npx next build 2>&1 | grep -E '(○|ƒ|◐) /'
+```
+:::
+
 #### 步骤 3.2 流式渲染：先出骨架，再出数据
 
 流式的目标不是「让数据变快」，而是「让用户更早看到东西」。App Router 把一次渲染拆成外壳和若干 Suspense 段：外壳先作为响应体发出去，慢组件的 RSC payload 到了再补进同一个响应。所以 TTFB 只等于外壳的时间，跟慢接口无关。
@@ -569,6 +687,19 @@ async function SlowStats() {
 页面顶层 `await` 慢数据，外壳就要等；必须把慢的部分下沉到 Suspense 内的子组件，流式才有东西可流。
 :::
 
+:::solution 用 TTFB 证明「骨架先到」
+```bash
+# 1) force-dynamic + 慢数据下沉到 Suspense 子组件：TTFB 只等外壳
+curl -s -o /dev/null -w 'ttfb %{time_starttransfer}\n' localhost:3000/dashboard
+
+# 2) 把 await fetchStats() 提到 Dashboard 函数体，同一命令再跑：TTFB 涨到 3s 量级
+
+# 3) 加 -N 关掉缓冲，能看到外壳与补充块分批到达
+curl -sN localhost:3000/dashboard | head -c 400
+```
+对照结论：TTFB 从 3s 量级掉到几百毫秒，但「完整内容」的时间不变——Suspense 换的是用户看到东西的时间，不是接口变快。
+:::
+
 #### 步骤 3.3 改了不生效：按四层顺序排查
 
 排查顺序比记住 API 更有用。
@@ -604,6 +735,10 @@ export default nextConfig
 ```
 
 要看清每一步到底命中了哪层，用 `NEXT_PRIVATE_DEBUG_CACHE=1 npm run start` 启动，缓存读写会打进日志；它同时覆盖 ISR 与数据缓存。
+
+:::hint 四层由外向内排，先排掉最外层
+先硬刷新或用 `curl` 排掉 ④，再看终端有没有 `[render]` 排掉 ③，然后才查 ② 的 `fetch` 选项，最后才是 ① 的重复取数。顺序反了就会在错的层上改半天。
+:::
 
 :::solution 一条命令链复现「谁在挡」
 ```bash
@@ -802,6 +937,21 @@ console.log("页面含新标题：", html.includes(process.env.EXPECT_TITLE ?? "
 
 :::hint 验签顺序
 先取原文、再算摘要、最后才解析 JSON；顺序反了既验不过签，也会因为 body 只能读一次而报错。
+:::
+
+:::solution 三种签名各自的预期
+```text
+请求                 期望状态码   期望响应
+无签名               401         {"code":"unauthorized",...}
+x-signature: 假值    401         {"code":"unauthorized",...}
+正确签名             200         {"ok":true,"tags":[...]}
+正确签名再发一次      200        同上，幂等，不额外报错
+```
+```bash
+# 把期望写成退出码，CI 才认
+node --env-file=.env.local scripts/revalidate.mjs hello | tee /tmp/reval.log
+grep -q '页面含新标题： true' /tmp/reval.log || { echo '发布后 1 秒内不可见'; exit 1; }
+```
 :::
 
 :::error 把 revalidateTag 写进客户端组件
@@ -1005,6 +1155,39 @@ export function http<T>(r: Result<T>) {
 
 :::hint 两条路，一个出口
 判断标准很简单：调用方是「别人家的服务器」就用 Route Handler，是「你自己的 React 组件」就用 Action；但两者最终都要落到同一个 `Result` 上，否则每加一个入口就多一套错误处理。
+:::
+
+:::solution 同一个业务函数，两个边界各转一次
+```ts
+// app/actions/create-comment.ts
+"use server"
+import { fail, type Result } from "@/lib/result"
+import { db } from "@/lib/db"
+
+export async function createComment(postId: string, content: string): Promise<Result<{ id: string }>> {
+  const len = content.trim().length
+  if (len < 1 || len > 500) return fail("validation", "内容需 1–500 字")
+  const user = await getSession()
+  if (!user) return fail("unauthorized", "请先登录")
+  try {
+    const row = await db.comment.create({ data: { postId, content, userId: user.id } })
+    return { ok: true, data: { id: row.id } }
+  } catch {
+    return fail("internal", "写入失败，请重试")
+  }
+}
+```
+```ts
+// app/api/comments/route.ts —— 唯一决定状态码的地方
+import { http } from "@/lib/result"
+import { createComment } from "@/app/actions/create-comment"
+
+export async function POST(req: Request) {
+  const { postId, content } = await req.json()
+  return http(await createComment(postId, content))
+}
+```
+判据：业务层只认 `code`，`STATUS` 表只被 `http()` 读一次；同一个校验失败，Action 返回 `code: "validation"`、Handler 返回 400，前端提示文案必须是同一句。
 :::
 
 :::error 先 req.json() 再验签
@@ -1226,6 +1409,25 @@ export function CommentList({ postId, comments }: { postId: string; comments: Co
 它活在 transition 里，transition 结束就没了。你要做的是保证「结束时服务端状态是对的」，而不是去清理那份预测。
 :::
 
+:::solution 四个断言与配套的服务端去重
+```text
+场景                  期望
+连点 5 次「发布」      只落 1 条评论，第 2–5 次响应 duplicated: true
+服务端返回 500        乐观项在 transition 结束后消失，页面出现 role="alert" 文案
+失败后点重试          复用同一个 requestId，不产生第二条
+弱网下响应乱序        按 requestId 匹配替换，不按「谁最后返回」覆盖整个列表
+```
+```ts
+// app/actions/create-comment.ts —— requestId 建唯一索引，重复提交只会命中已有行
+export async function createComment(postId: string, content: string, requestId: string) {
+  const seen = await db.comment.findUnique({ where: { requestId } })
+  if (seen) return { ok: true as const, duplicated: true, id: seen.id }
+  const row = await db.comment.create({ data: { postId, content, requestId } })
+  return { ok: true as const, duplicated: false, id: row.id }
+}
+```
+:::
+
 :::error 在 onClick 里直接调 addOptimistic
 控制台报错原文（React 19 验证）：`An optimistic state update occurred outside a transition or action. To fix, move the update to a transition or startTransition function.`
 根因：`useOptimistic` 的更新必须发生在一个 pending 的 transition 中，否则 React 无法判断这批预测值何时该被真实结果替换。
@@ -1406,6 +1608,41 @@ export async function verifySessionEdge(token: string, secret: string) {
 密钥还要能轮换：payload 里带一个 `kid` 字段，验证时按 `kid` 选密钥，新旧密钥并存一个发布周期，用户就不用集体重新登录一次。真实系统里这事迟早会发生，先留字段比事后改 token 格式便宜得多。签名用的 secret 只能来自服务端环境变量，绝不能是 `NEXT_PUBLIC_` 开头——那个前缀会被打进浏览器包，等于把印章交给用户。
 
 落地上拆成两个函数最省事：`getSession()` 只做验签与过期判断，返回 payload 或 `null`，middleware 与页面都能调用；`requireUser()` 在 `getSession()` 之后再去数据库确认账号状态，只在服务端组件与 Route Handler 里用。为什么不在 middleware 里查库？因为边缘运行时没有数据库驱动、也建不了连接池，就算用 HTTP 数据层硬查，每个静态资源请求都多一次外网往返，延迟立刻体现出来。
+
+:::hint 有 cookie 只证明浏览器带了东西
+伪造、过期、被踢下线这三种情况，验签能挡第一种，后两种必须再查一次账号状态。middleware 只做验签（无状态、能跑在边缘），「账号是否仍有效」留给服务端组件和 Route Handler。
+:::
+
+:::solution 签发端与服务端复核
+```ts
+// lib/session.ts —— 只在 Node 侧跑：签发与复核成对出现
+import { createHmac, timingSafeEqual } from "node:crypto"
+
+const b64 = (b: Buffer) => b.toString("base64url")
+
+export function signSession(payload: { sub: string; exp: number; kid?: string }) {
+  const body = b64(Buffer.from(JSON.stringify(payload)))
+  return `${body}.${b64(createHmac("sha256", process.env.SESSION_SECRET!).update(body).digest())}`
+}
+
+export function verifySession(token: string) {
+  const [body, sig] = token.split(".")
+  if (!body || !sig) return null
+  const want = createHmac("sha256", process.env.SESSION_SECRET!).update(body).digest()
+  const got = Buffer.from(sig, "base64url")
+  if (got.length !== want.length || !timingSafeEqual(got, want)) return null
+  const data = JSON.parse(Buffer.from(body, "base64url").toString()) as { sub: string; exp: number }
+  return data.exp * 1000 > Date.now() ? data : null
+}
+```
+```bash
+# 四种 cookie 打同一个受保护页面：期望 307 / 307 / 307 / 200
+for c in "" "session=abc.def" "session=$EXPIRED" "session=$VALID"; do
+  curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" ${c:+-b "$c"} localhost:3000/dashboard
+done
+```
+注意 `Buffer` 的 `base64url` 编码在边缘运行时不存在，middleware 那边只能用上面的 `verifySessionEdge`；两边共享同一份 payload 结构，签发集中在一处。
+:::
 
 :::error 无限重定向：ERR_TOO_MANY_REDIRECTS
 现象：打开 `/login` 浏览器报 `ERR_TOO_MANY_REDIRECTS`，Network 面板里 `/login` 连续 307 指向自己。
@@ -1599,6 +1836,36 @@ export async function switchOrg(formData: FormData) {
 
 切完组织，旧标签页还能不能读旧组织的数据？不能：查询里的 `orgId` 来自会话，下一次请求就会被判成「不在该组织」，返回 404。这正是「从会话取租户」比「从 URL 取」值钱的地方——URL 能被改，签名的 cookie 不能。
 
+:::hint 切换组织是一次「重新签发」，不是改 URL
+租户要从会话里取，URL 那段只负责路由与展示。校验成员身份、重写签名 cookie、失效布局缓存这三件事必须一起做完，漏一件就会读到别的组织的数据。
+:::
+
+:::solution 读租户的出口只留一个
+```ts
+// lib/tenant.ts —— 页面与接口都从这里取租户，不要再从 params 取
+import { cache } from "react"
+import { requireUser } from "./session"
+
+export const getActiveOrg = cache(async () => {
+  const user = await requireUser()        // 已含验签 + 账号状态复核
+  if (!user.orgId) throw new Error("no active org")
+  return user.orgId
+})
+
+// 写入前再比对一次：多标签页下表单里的 orgId 可能已经过期
+export async function assertSameOrg(formOrgId: string) {
+  const active = await getActiveOrg()
+  if (formOrgId !== active) throw new Error("org changed in another tab")
+  return active
+}
+```
+```ts
+// tag 也要带组织，否则 A 公司改一单会把 B 公司的列表缓存一起打掉
+revalidateTag(`orders:${orgId}`, "max")
+```
+验收口径：切到 B 组织后回到旧标签页刷新 → 404。因为查询里的 `orgId` 来自会话，改 URL 改不动它。
+:::
+
 :::error cookies 报 outside a request scope
 现象：运行时报 `Error: cookies was called outside a request scope`，或构建期报 `Route /xxx couldn't be rendered statically because it used cookies`。
 根因：在模块顶层、`generateStaticParams`、或客户端组件里调了 `cookies()`。前者没有请求上下文，后者根本没有请求头。
@@ -1739,6 +2006,25 @@ export default function Hero() {
 
 顺带两个几乎零成本的收益：图片走同一域名的 CDN 并带上 `Cache-Control: public, max-age=31536000, immutable`（文件名里有 hash 才能这么激进）；第三方脚本能自托管就自托管，省一次 DNS 与 TLS，也顺手绕开对方的可用性事故——统计脚本挂掉不该让你的首屏跟着一起等。
 
+:::solution 首屏三件套的最小验证
+```bash
+# 1) 先让 Lighthouse 点名 LCP 元素，别把整页图片都加 priority
+npx --yes lighthouse localhost:3000/ --only-categories=performance --output=json --output-path=./lh.json
+node -e 'const a=require("./lh.json").audits;console.log(a["largest-contentful-paint-element"].details.items[0])'
+
+# 2) 首屏图必须预加载：HTML 里应能搜到 fetchpriority="high"
+curl -s localhost:3000/ | grep -o 'fetchpriority="high"'
+```
+```ts
+// next.config.ts —— 远程图没登记会在运行时报 hostname is not configured
+const nextConfig = {
+  images: { remotePatterns: [{ protocol: "https", hostname: "cdn.example.com" }] },
+}
+export default nextConfig
+```
+口径：`priority` 只给 LCP 那一张；字体用 `next/font` 自托管 + `display: "swap"`；统计类脚本一律 `afterInteractive` / `lazyOnload`，`beforeInteractive` 只留给同意管理。
+:::
+
 :::error CI 里 Lighthouse 报 NO_FCP / Chrome launch failed
 现象：本地跑得好好的，CI 上直接失败，报 `Runtime error encountered: Chrome launch failed` 或 `The page did not paint any content (NO_FCP)`。
 根因：容器里没有 Chrome，或有 Chrome 但没加 `--no-sandbox`；NO_FCP 多半是测到了 `next dev` 首次编译——页面十秒内还是空白。
@@ -1791,6 +2077,24 @@ INP 也不适合塞进这个脚本：它必须在真实交互里才产生数据�
 ```
 
 这一段里的 `wait-on` 不能省，也不能用 `sleep 10` 代替——冷启动时间在不同机器上能差一倍，睡短了连接被拒，睡长了每次 CI 白等。等到服务真的应答 200，再让 Lighthouse 进去。
+
+:::hint 门禁要先能红，再谈守护
+没红过的检查等于没有检查：先把阈值压到不可能通过的值跑一次，确认退出码是 1，再改回来。
+:::
+
+:::solution 先证明它会失败
+```bash
+# 1) 把 BUDGET.lcpMs 临时改成 1，跑一次：期望 exit=1 且列出超了哪一项
+node scripts/check-budget.mjs; echo "exit=$?"
+
+# 2) 改回真实阈值，同一份 lh.json 再跑：期望 exit=0 并打印 ✓
+node scripts/check-budget.mjs; echo "exit=$?"
+
+# 3) 确认 CI 里没有 `|| true` 把退出码吞掉
+grep -n 'check-budget' .github/workflows/*.yml
+```
+三条预算分三档落地：首屏 JS 与 LCP 进 CI（前者构建后即可算，后者要先起服务），错误率进线上告警，INP 只看周趋势。混在一个脚本里，任何一项环境抖动都会把整条流水线拖红。
+:::
 
 **自测**（合上文档回答）
 
@@ -1970,6 +2274,20 @@ CI 红了不要第一反应去调高数字。先看是哪个 chunk 涨的，再�
 
 :::hint 预算卡的是「新增」，不是「存量」
 老项目第一次接入时，先把当前体积当基线，之后只允许下降或持平。一上来就按理想值卡，只会逼着大家加 `--no-verify`。
+:::
+
+:::solution 反向验证三条命令
+```bash
+# 1) 先算基线，再把实测值写进 size-limit（卡新增，不卡理想值）
+npm run build && npx size-limit
+
+# 2) 证明它真的会红：把 package.json 里某条 limit 临时改成 "1 kB"
+npm run budget; echo "exit=$?"     # 期望非 0，且报出超限文件与超出多少
+
+# 3) 改回真实预算，CI 里就只留这一步
+npm run build && npm run budget
+```
+口径：一个路由一条 `limit`，各自反映职责；表里写清是 Brotli 还是 gzip；红了先查是哪个 chunk 涨的，再决定要不要调数字。
 :::
 
 :::error 三个真实会撞上的报错
@@ -2183,6 +2501,28 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 配置漂移是另一个常见坑：预发和生产跑着同一个镜像，但某个人手动改过一台机器的环境变量，两边行为就不一致了。解法是把环境变量当代码管理：`.env.example` 列全所有键（只写键名和说明，不写值），部署脚本从密钥管理系统拉值，谁改了值有审计记录。这样「这台机器为什么和别人不一样」才有答案。
 
 镜像 tag 也别用 `latest`。用 git 短 sha 或发布号，回滚时才能精确指到上一个版本；`latest` 在多环境里几乎必然指错，尤其是有人手动 `docker pull` 过之后。还有一个细节：standalone 的启动脚本会把 `NODE_ENV` 固定成 production，别指望用环境变量把它改成 development 来调试，要调试就在本地跑 dev。
+
+:::hint 会进产物的变量必须跨环境一致
+`NEXT_PUBLIC_*`、`basePath`、图片域名在构建期就被写死进 bundle，换环境只能重新构建；只有服务端读的变量才留得到运行期注入。这条一混，build once 就不成立。
+:::
+
+:::solution 用同一个 image id 起两次
+```bash
+TAG=app:$(git rev-parse --short HEAD)
+docker build -t "$TAG" .
+ID=$(docker image inspect "$TAG" --format '{{.Id}}')
+
+# 只换运行期变量，镜像不动
+docker run -d --name app-a -p 3001:3000 -e RELEASE=v1 -e DATABASE_URL="$DB_A" "$TAG"
+docker run -d --name app-b -p 3002:3000 -e RELEASE=v2 -e DATABASE_URL="$DB_B" "$TAG"
+
+# 断言：版本号不同，image id 相同
+curl -s localhost:3001 | grep -o 'v1'
+curl -s localhost:3002 | grep -o 'v2'
+docker image inspect "$TAG" --format '{{.Id}}'   # 与开头记下的 $ID 一致
+```
+如果第三步失败（版本号没变，或两个环境得分别构建才有差异），说明 bundle 里藏着环境字面量——去客户端产物里 `grep` 那个值就能定位。
+:::
 
 :::error 容器里最常见的四个错
 ```text

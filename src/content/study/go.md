@@ -2071,6 +2071,11 @@ func TestGetAsset(t *testing.T) {
 
 三个指标各管一件事：`ns/op` 是单次耗时，`B/op` 是每次迭代分配多少字节，`allocs/op` 是分配了几次。后两个才是 Go 里更该看的——GC 的 CPU 花在分配速率上，`allocs/op` 从 8 降到 1，往往比 `ns/op` 降 10% 更值钱（第 9 周用 `gctrace` 验证这句话）。
 
+:::hint 先降分配，再谈耗时
+把 setup 挪出循环、用 `b.ReportAllocs()`（或 `-benchmem`）打开分配统计；比较时先看 `allocs/op`、`B/op`，再用 profile 定位到具体行。单次读数不可信，至少 `-count=5` 看波动。
+:::
+
+:::solution 基准代码、pprof 命令与读法
 ```go
 var sink string // 包级变量，防止结果被优化掉
 
@@ -2114,6 +2119,7 @@ go tool pprof -list=BenchmarkConcatPlus cpu.out        # 逐行看时间花在�
 `-top` 按累计耗时排序，第一行通常就是答案；`-list` 把函数的每一行和它的开销并排列出来，能直接看出是 `+=` 那行还是 `WriteString` 那行。`memprofile` 默认按 `inuse_space` 展示，做基准时你关心的是分配速率，所以要显式切到 `alloc_space`。
 
 `-count=5` 得到的五行数字不会一模一样：内核调度、CPU 频率、GC 恰好插在哪一轮，都会带来几个百分点的抖动。两条基准差距小于 10% 时，先怀疑测量而不是代码；要把「快了」写成结论，就把多轮输出喂给 `benchstat`（`go install golang.org/x/perf/cmd/benchstat@latest`），它给出中位数和变化幅度，比肉眼看五行可靠。被测函数如果用到了 CPU 数（比如并发），再加 `-cpu=1,4` 各跑一遍，避免「在我这台 8 核机器上」这种不可复现的结论。
+:::
 
 
 #### 步骤 7.3 用失败替身测 500 与超时，把检查收成一条命令
@@ -2124,6 +2130,11 @@ go tool pprof -list=BenchmarkConcatPlus cpu.out        # 逐行看时间花在�
 
 超时分支同理：`httptest.NewRequest` 之后用 `req = req.WithContext(ctx)` 换掉上下文，cancel 之后 `st.Get(r.Context(), id)` 会拿到 `context.Canceled`。这时别纠结「该返回哪个状态码」（客户端早断开了，没人收），该断言的是**函数在 50ms 内返回**——不返回就说明有人在等一个已经没人要的结果。下面这段先写 500 那条，超时那条照着改三行即可。
 
+:::hint 用替身制造失败，而不是等失败
+给 `Store` 换一个永远返回错的实现，就能稳定走到 500；超时分支则换掉请求的 context。断言除了状态码，还要包含「响应体不出现内部错误」这一条。
+:::
+
+:::solution 500 测试代码与一条检查命令
 ```go
 type failingStore struct{ err error }
 
@@ -2162,6 +2173,7 @@ gofmt -l . && go vet ./... && go test -race -cover ./... && go test -run=^$ -ben
 `-race` 会插桩内存访问，慢 5–10 倍，但能抓住「测试里恰好没撞上」的并发 bug（第 4 周的教训：结果对不代表没竞争）。`-cover` 给行覆盖率，别追 100%：分支有没有 case 比百分比重要，一个 handler 的 70% 往往比一个工具包的 100% 值钱。
 
 CI 里再加一条 `-short`：慢的集成测试（要起数据库、要连外网）在函数开头写 `if testing.Short() { t.Skip("needs db") }`，日常提交只跑契约测试，几秒出结果；发版前再跑全量。单元测试不该花时间等一个容器起来，这是保持「随手就能跑一下」的关键。
+:::
 
 :::error 三个高频失败
 ```text
@@ -2217,6 +2229,11 @@ Go 的编译器自带所有目标平台的后端，纯 Go 代码不需要交叉�
 
 `-ldflags="-s -w"`：`-s` 去掉 ELF 符号表和调试信息，`-w` 去掉 DWARF，体积通常小 25%–30%。Go 自己的函数名和行号在 `pclntab` 里，不受影响，所以 panic 栈和 `go tool pprof` 照样能显示函数名；不能用的只是 `go tool nm`、gdb 这类依赖 ELF 符号表的工具。
 
+:::hint 一条命令产出可拷走的二进制
+关 CGO、去路径、去符号，产物就是静态链接的 ELF，不依赖目标机的 `.so`。构建完先 `go version -m` 自检构建参数，再 `file` 确认 `statically linked`。
+:::
+
+:::solution 交叉编译与产物自检
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -buildvcs=false -ldflags="-s -w" -o app ./cmd/server
@@ -2232,6 +2249,7 @@ PowerShell 没有行内环境变量前缀，要写成 `$env:CGO_ENABLED="0"; $en
 不确定目标平台怎么写时，`go tool dist list` 会列出全部 `os/arch` 组合，`linux/arm64` 就是多数 ARM 云主机和树莓派的目标。
 
 `-buildvcs=false` 是给「在别人的 git 仓子目录里构建」准备的。Go 1.18 起会把 VCS 信息编进二进制，如果当前目录属于某个 git 仓但状态不干净（未提交改动、可疑所有权），构建会直接失败，而报错跟代码毫无关系。
+:::
 
 :::error 拷到服务器上跑不起来
 ```text
@@ -2254,6 +2272,11 @@ error obtaining VCS status: exit status 128
 
 systemd 的 unit 是一份「进程监护契约」：`Restart=always` 保证崩了 2 秒后回来；`systemctl stop` 默认发 `SIGTERM`，第 5 周那句 `signal.NotifyContext(ctx, syscall.SIGTERM)` 就是在这里被触发的；`EnvironmentFile` 让密码和 DSN 留在 `/opt/assetd/.env`（`chmod 600`），不进仓库、不进命令行、不进 `ps`。
 
+:::hint 进程只对本地端口负责
+服务只监听 `127.0.0.1`，生命周期交给 systemd，公网入口交给 nginx；压测时同时记 QPS、p99 与 RSS，再拿 `/healthz` 做对照。
+:::
+
+:::solution unit、nginx 与压测的完整配置
 ```ini
 [Unit]
 Description=assetd (read-only asset service)
@@ -2304,6 +2327,7 @@ wrk -t2 -c50 -d30s --latency 'http://127.0.0.1:8081/api/assets?dir=spire/art'
 `-t2` 两个线程、`-c50` 50 个并发连接、`-d30s` 跑 30 秒；`--latency` 会打延迟分布，你要看的是 `99%` 那一行。压测时另开一个终端 `top -p $(pgrep -f /opt/assetd/app)` 记 CPU 和 RSS——只说 QPS 不说资源，等于只说车速不说油耗。wrk 只有 Linux/macOS 的原生包，Windows 上走 WSL。
 
 压测要有对照：先压 `/healthz`（几乎不做事）拿到这套配置的框架上限，再压 `/api/assets`，两者的差就是业务成本。只压一次真实接口，你分不清瓶颈在网络框架、JSON 编码还是文件系统；有对照，才知道优化该往哪儿使劲。每轮之间停 30 秒，让上一轮的内存回收、连接退干净，否则第二轮的数字被第一轮污染。
+:::
 
 #### 步骤 8.3 给 NoteLab 写一个素材服务（真实任务）
 
@@ -2387,6 +2411,11 @@ curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:8081/api/assets?dir=n
 
 回滚的关键是**别覆盖旧二进制**：上传成 `app.new`，在服务器上再替换，用 `mv` 而不是 `cp`（同一文件系统上 `mv` 是 rename，不会出现半个文件被执行的窗口），重启后探活，失败就把 `app.prev` 换回来再重启。整个过程 20 秒内完成，比「现场重编一遍看看」可靠得多。
 
+:::hint 每步都能退回去
+新版本先落成 `app.new`，`mv` 原子替换；探活失败就把 `app.prev` 换回来。探活只查进程能不能回 HTTP，不查数据库。
+:::
+
+:::solution 发布与回滚脚本
 ```bash
 # 本机：只上传，不动线上正在跑的文件
 scp app server:/opt/assetd/app.new
@@ -2413,6 +2442,7 @@ exit 1
 ```
 
 `set -euo pipefail` 让任何一步失败都立刻停，别带着半成品往下走；探活重试 5 次、每次 1 秒，是给进程启动留时间。启动耗时不用 `time` 测——它在后台跑；在 `main` 里记 `start := time.Now()`，`ListenAndServe` 之前 `slog.Info("started", "in", time.Since(start).String())`，重启后 `journalctl` 里就能读到，这个数字第 9 周还要用。
+:::
 
 :::error nginx 502 与 unit 起不来
 ```text
@@ -2526,6 +2556,10 @@ Go 的 GC 是并发的三色标记加混合写屏障。标记阶段大部分和�
 触发时机由 `GOGC` 决定：`GOGC=100`（默认）表示「堆涨到上次回收后存活量的 2 倍就开一轮」。注意基准是**存活量**而不是堆总量，所以一个长期持有大量对象的服务，目标堆也会跟着水涨船高。Go 1.19 起还有 `GOMEMLIMIT`（`debug.SetMemoryLimit`）作为软上限：接近它时 GC 会提前并更频繁地跑，超过也不会 OOM kill——它是「预算」，不是「闸门」。
 
 把 `GOGC` 设成 `off`（`GOGC=off` 或 `debug.SetGCPercent(-1)`）只适合「进程活不过几秒」的批处理：跑完就退，让 OS 一次性回收，省掉全部 GC 开销。常驻服务这么干等于把内存交给运气。
+
+:::hint 先看 STW，再看百分比
+trace 里只有两段 STW 真正停住应用；GC 占用 CPU 的百分比高而堆不大时，通常是分配太快，先减少分配，再考虑调 `GOGC`。
+:::
 
 :::solution 制造分配并读 trace
 ```go

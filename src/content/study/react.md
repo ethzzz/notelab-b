@@ -1879,6 +1879,38 @@ Warning: The result of getSnapshot should be cached to avoid an infinite loop
 根因：`useSyncExternalStore` 的 `getSnapshot` 每次调用都返回新对象/新数组，React 用 `Object.is` 比较，永远认为「变了」，于是无限重渲染。返回原始值，或把派生对象缓存起来（同一份 state 给同一个引用）；要按选择器订阅就用 `useSyncExternalStoreWithSelector`，别手写。
 :::
 
+:::hint 状态放哪一层，先问「谁要读」和「它多久变一次」
+只影响自己的放组件内 state；低频全局值（主题 / 登录态）放 Context；高频且要按字段订阅的放外部 store；要分享、要回退的放 URL。选错层的代价，是后面所有 `memo` 都在补墙。
+:::
+
+:::solution 参考实现：Context 只放引用，会变的状态进 store
+
+本仓 `modeler/` 的答案就是把两层分开——Context 只放一个创建后不再变的 `RefObject`，会变的场景状态（模型列表、选中项、视图）放极小外部 store，React 侧按字段订阅：
+
+```ts
+// modeler/state/context.tsx：Context 只放引擎实例引用，创建后永不变化 → 不触发重渲染
+const EngineContext = createContext<RefObject<Engine> | null>(null)
+
+// modeler/state/store.ts：会变的状态放外部 store，订阅细到单个字段
+export const useSelectedId = () => useSyncExternalStore(subscribe, () => state.selectedId)
+export const useModelIds = () => useSyncExternalStore(subscribe, () => state.modelIds)
+```
+
+`getSnapshot` 必须返回**稳定引用**（原始值，或缓存过的对象），否则就是上面 `:::error` 里那条无限重渲染警告。
+
+毕业自评按五维逐项打分，每项都要能当场复现（对应下方「验收」清单，不达标就写清回第几周补什么）：
+
+| 维度 | 达标线（L3） | 本周拿什么证据 |
+|---|---|---|
+| 性能 | 压进预算并给对照数据 | 5000 行输入 5 个字符：最长长任务 >200ms → <50ms |
+| 正确性 | 能想到竞态与降级 | 一次输入的重渲染组件数（改前 / 改后）+ 最贵组件毫秒数 |
+| 可访问性 | 全站键盘可达、读屏可读 | 只用键盘从地址栏走到 `/learn/java` |
+| SEO | sitemap / robots 正确 | `curl` 见 title；sitemap 含 `/roadmap`、不含 `/me` |
+| 交付 | 有回滚与监控 | 一次发布 + 一次回滚的日志；线上无 `/lab` |
+
+五维里 ≥4 项达到 L3、且没有「不合格」，才算 L3 毕业。
+:::
+
 **自测**（合上文档回答）
 
 1. `startTransition` 与 debounce 各自解决什么问题、代价分别是什么？为什么说它们不能互相替代？

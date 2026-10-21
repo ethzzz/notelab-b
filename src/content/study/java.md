@@ -2598,6 +2598,25 @@ com.example.task.mapper.TaskMapper.selectById
 
 复现方式很直接：Controller 调 `outer()`，`outer()` 用 `this` 调带注解的 `inner()`，`inner()` 先插一条再抛异常。预期是回滚，实际表里多一行。修法有三种：拆到另一个 Bean（推荐，边界最清楚）、注入自身代理（`@Lazy`，能跑但绕）、用 `TransactionTemplate` 手动划边界（适合一段代码而不是一个方法）。拆 Bean 之所以最好，是因为它让「事务方法」成为一个可被独立调用、独立测试的单元。
 
+第一段里 `this.saveAndNotify` 和直接写方法体没有区别，注解只是元数据。第二段把事务方法挪到另一个 Bean，`TaskService` 拿到的是 `TaskTxService` 的代理，调用才会进事务拦截器。注意 `@Transactional` 要写在 `public` 方法上，且被 Spring 管理的 Bean 调用；在 `new` 出来的对象上调用同样不生效。
+
+判断事务有没有生效，别靠肉眼看代码：更可靠的是在测试里用 `JdbcTemplate` 查一次，或者在 SQL 日志里确认插入之后确实回滚了。事务里不要做 HTTP 调用、不要 `sleep`，长事务会占着连接和行锁，把整个库拖慢。
+
+:::hint 为什么自调用失效
+Spring 的事务靠**代理对象**：外部调用先进代理 → 开事务 → 调真实方法。类内部 `this.xxx()` 走的是原始对象，绕过了代理，注解等于没写。修法：拆到另一个 Bean，或注入自己（`@Lazy`），或改用 `TransactionTemplate`。
+:::
+
+:::error 抛了异常但没回滚
+```text
+java.lang.IllegalStateException: 通知服务不可用
+    at com.example.task.TaskService.saveAndNotify(TaskService.java:41)
+```
+**现象**：接口返回 500，日志里有这行异常，但 `task` 表多了一行。
+**三个原因，按顺序查**：① 自调用——同一个类里 `this.inner()`，绕过了代理；② 异常被吞——`catch (Exception e) { log.warn(...) }`，代理根本看不到异常；③ 只回滚运行时异常——受检异常要写 `@Transactional(rollbackFor = Exception.class)`。
+**修复**：先把事务方法拆到独立 Bean 再复测；仍不回滚就检查有没有 catch，以及异常类型是不是受检异常。
+:::
+
+:::solution 代码
 ```java
 @Service
 public class TaskService {
@@ -2637,23 +2656,6 @@ public class TaskService {
     public void create(Task task) { tx.saveAndNotify(task); }
 }
 ```
-
-第一段里 `this.saveAndNotify` 和直接写方法体没有区别，注解只是元数据。第二段把事务方法挪到另一个 Bean，`TaskService` 拿到的是 `TaskTxService` 的代理，调用才会进事务拦截器。注意 `@Transactional` 要写在 `public` 方法上，且被 Spring 管理的 Bean 调用；在 `new` 出来的对象上调用同样不生效。
-
-判断事务有没有生效，别靠肉眼看代码：更可靠的是在测试里用 `JdbcTemplate` 查一次，或者在 SQL 日志里确认插入之后确实回滚了。事务里不要做 HTTP 调用、不要 `sleep`，长事务会占着连接和行锁，把整个库拖慢。
-
-:::hint 为什么自调用失效
-Spring 的事务靠**代理对象**：外部调用先进代理 → 开事务 → 调真实方法。类内部 `this.xxx()` 走的是原始对象，绕过了代理，注解等于没写。修法：拆到另一个 Bean，或注入自己（`@Lazy`），或改用 `TransactionTemplate`。
-:::
-
-:::error 抛了异常但没回滚
-```text
-java.lang.IllegalStateException: 通知服务不可用
-    at com.example.task.TaskService.saveAndNotify(TaskService.java:41)
-```
-**现象**：接口返回 500，日志里有这行异常，但 `task` 表多了一行。
-**三个原因，按顺序查**：① 自调用——同一个类里 `this.inner()`，绕过了代理；② 异常被吞——`catch (Exception e) { log.warn(...) }`，代理根本看不到异常；③ 只回滚运行时异常——受检异常要写 `@Transactional(rollbackFor = Exception.class)`。
-**修复**：先把事务方法拆到独立 Bean 再复测；仍不回滚就检查有没有 catch，以及异常类型是不是受检异常。
 :::
 
 #### 步骤 10.3 分页插件与 count 查询
@@ -2902,6 +2904,21 @@ Service 测试全绿，不代表接口对：状态码可能写错、异常可能
 
 不要用 `curl -f`：它把 4xx/5xx 当成传输失败，直接退出并丢掉响应体，你既看不到状态码也看不到错误信息。也不要在脚本里 `set -e` 之后用 `grep ... && 报错` 这种写法——`grep` 没匹配到会返回 1，整个脚本会莫名其妙退出；用 `if grep -q ...; then ... fi`。Windows 上用 Git Bash 跑，PowerShell 里对应的 `Invoke-WebRequest` 要加 `-SkipHttpErrorCheck`（PowerShell 7）才能拿到 4xx 的响应体。
 
+`code` 把参数原样转给 `curl`，所以 `-X POST`、`-H`、`-d` 都能直接写。`expect` 的第一个参数是命令替换的结果（状态码），第二个是期望值，第三个只用于打印。`grep -qi` 的 `-i` 让大小写都命中，`com\.example` 用来抓包名泄露。最后删临时文件；如果中途 `exit`，文件留在 `/tmp`，影响不大。
+
+:::hint 冒烟脚本是接口的回归测试
+不用启动 Spring 测试上下文，只要服务在跑，一条 `bash smoke.sh` 就能验证状态码、错误码、有没有泄露堆栈。改接口前先跑一遍，改完再跑一遍。
+:::
+
+:::error curl 看不到 400 的响应体
+```text
+curl: (22) The requested URL returned error: 400
+```
+**根因**：命令里带了 `-f`（或 `--fail`）。`curl` 把 4xx 当失败，直接以非 0 退出，并且不输出响应体；脚本里只会看到一句错误，拿不到 `PARAM_INVALID`。
+**修复**：去掉 `-f`，用 `-s -o 文件 -w '%{http_code}'` 自己判断状态码。确实需要失败即退出时，用 `--fail-with-body`（curl 7.76+）保留响应体。
+:::
+
+:::solution 代码
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
@@ -2927,19 +2944,6 @@ expect "$(code -X POST "$base" -H 'Content-Type: application/json' \
 echo "4/4 通过"
 rm -f "$body"
 ```
-
-`code` 把参数原样转给 `curl`，所以 `-X POST`、`-H`、`-d` 都能直接写。`expect` 的第一个参数是命令替换的结果（状态码），第二个是期望值，第三个只用于打印。`grep -qi` 的 `-i` 让大小写都命中，`com\.example` 用来抓包名泄露。最后删临时文件；如果中途 `exit`，文件留在 `/tmp`，影响不大。
-
-:::hint 冒烟脚本是接口的回归测试
-不用启动 Spring 测试上下文，只要服务在跑，一条 `bash smoke.sh` 就能验证状态码、错误码、有没有泄露堆栈。改接口前先跑一遍，改完再跑一遍。
-:::
-
-:::error curl 看不到 400 的响应体
-```text
-curl: (22) The requested URL returned error: 400
-```
-**根因**：命令里带了 `-f`（或 `--fail`）。`curl` 把 4xx 当失败，直接以非 0 退出，并且不输出响应体；脚本里只会看到一句错误，拿不到 `PARAM_INVALID`。
-**修复**：去掉 `-f`，用 `-s -o 文件 -w '%{http_code}'` 自己判断状态码。确实需要失败即退出时，用 `--fail-with-body`（curl 7.76+）保留响应体。
 :::
 
 **自测**（合上文档回答）
