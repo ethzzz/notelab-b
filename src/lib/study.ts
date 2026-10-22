@@ -65,6 +65,14 @@ export const STUDY_LANGS = Object.keys(STUDY_DOCS)
 
 export type FoldKind = "hint" | "solution" | "error" | "check"
 
+/** 折叠块的统一叫法（路线页、实践项目页共用） */
+export const FOLD_LABELS: Record<FoldKind, string> = {
+	hint: "思路",
+	solution: "参考实现",
+	error: "常见报错",
+	check: "验收脚本",
+}
+
 export type StudyPart = { type: "md"; html: string } | { type: "fold"; kind: FoldKind; title: string; html: string }
 
 export type StudyStep = {

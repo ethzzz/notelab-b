@@ -20,6 +20,7 @@ import markdown from "highlight.js/lib/languages/markdown"
 import xml from "highlight.js/lib/languages/xml"
 import plaintext from "highlight.js/lib/languages/plaintext"
 import type { FoldKind, StudyData, StudyPart, StudyStep, StudyWeek, TocItem } from "@/lib/study"
+import { decorateCodeBlocks } from "@/lib/doc-html"
 
 // 只注册文档里实际用到的语言：全量 highlight.js 有 190+ 种，构建时间和内存都白花
 const LANGS = { java, go, typescript, javascript, json, bash, powershell, sql, yaml, ini, markdown, xml, plaintext }
@@ -94,12 +95,13 @@ function escapeHtml(s: string): string {
  */
 function renderMd(text: string, used: Set<string>, toc?: TocItem[]): string {
 	const raw = marked.parse(text) as string
-	return raw.replace(/<h([23])>([\s\S]*?)<\/h\1>/g, (_m, level: string, inner: string) => {
+	const withIds = raw.replace(/<h([23])>([\s\S]*?)<\/h\1>/g, (_m, level: string, inner: string) => {
 		const plain = inner.replace(/<[^>]+>/g, "").trim()
 		const id = makeId(plain, used)
 		toc?.push({ id, text: plain, level: Number(level) })
 		return `<h${level} id="${id}">${inner}</h${level}>`
 	})
+	return decorateCodeBlocks(withIds)
 }
 
 // ---------------------------------------------------------------------------

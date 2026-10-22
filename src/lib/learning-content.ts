@@ -255,3 +255,62 @@ export function trackCompletion(doc: ProgressDoc, stages: Stage[]): number {
   }
   return n > 0 ? sum / n : 0
 }
+
+// ---------------- 课程导航：扁平课时表 ----------------
+
+export type LessonRef = {
+  lesson: Lesson
+  stage: Stage
+  /** 在整门语言里的序号（1 起），侧栏与课时头都用它 */
+  no: number
+}
+
+/** 按内容顺序摊平：阶段 → 课时。上一课 / 下一课、全量侧栏都基于这一份 */
+export function flattenLessons(track: Track): LessonRef[] {
+  const out: LessonRef[] = []
+  for (const stage of track.stages) {
+    for (const lesson of stage.lessons) {
+      out.push({ lesson, stage, no: out.length + 1 })
+    }
+  }
+  return out
+}
+
+/** 任意课时的前后邻居（跨阶段连续） */
+export function lessonNeighbors(track: Track, lessonId: string): { prev?: LessonRef; next?: LessonRef } {
+  const flat = flattenLessons(track)
+  const i = flat.findIndex((r) => r.lesson.id === lessonId)
+  if (i < 0) return {}
+  return { prev: flat[i - 1], next: flat[i + 1] }
+}
+
+// ---------------- 「继续学习」入口 ----------------
+// 与课程进度分开存：`ProgressDoc.last` 只回答「这门课学到哪」，
+// 首页要的是「最近打开的是哪门课的哪一节」，而对象键顺序在重写同 key 时不会刷新，
+// 所以另用一个极小的 key 记录最近一次打开的课时。
+
+const RECENT_KEY = "notelab-b.learning.recent"
+
+export type RecentSpot = { track: string; lesson: string }
+
+export function loadRecent(): RecentSpot | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(RECENT_KEY) || "null") as unknown
+    if (!raw || typeof raw !== "object") return null
+    const o = raw as { track?: unknown; lesson?: unknown }
+    if (typeof o.track !== "string" || typeof o.lesson !== "string" || !o.track || !o.lesson) return null
+    return { track: o.track, lesson: o.lesson }
+  } catch {
+    return null
+  }
+}
+
+export function saveRecent(track: string, lesson: string) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify({ track, lesson }))
+  } catch {
+    /* 隐私模式写不进去不影响学习 */
+  }
+}
