@@ -31,6 +31,8 @@ type Post = {
   is_pinned: number; is_featured: number
   view_count: number; comment_count: number; like_count: number
   created_at: string; updated_at: string; last_reply_at: string | null
+  /** 只有详情接口（GET /posts/{id}）返回正文字段；列表行没有，所以是可选 */
+  content_md?: string
 }
 
 const STATUS_META: Record<string, { text: string; color: string }> = {
