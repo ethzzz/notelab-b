@@ -216,13 +216,14 @@ export default function CommunityAdminPage() {
     {
       title: "板块",
       dataIndex: "board_name",
-      width: 100,
+      width: 130,
       render: (v: string, r: Post) => (
         <span className="text-zinc-500">
           {v}
+          {/* 讨论区标记用小图标而不是文字：文字会把这一列挤成竖排（"讨论区"逐字换行） */}
           {r.link_type === "blog" && (
-            <Tooltip title={r.link_key}>
-              <span className="ml-1 text-[10px] text-indigo-500">讨论区</span>
+            <Tooltip title={`文章讨论区：${r.link_key}`}>
+              <MessageSquare size={11} className="ml-1 inline text-indigo-500" />
             </Tooltip>
           )}
         </span>
