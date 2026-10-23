@@ -14,7 +14,7 @@ import {
   Button, Drawer, Form, Input, InputNumber, Popconfirm, Select, Space, Tag, Tooltip,
 } from "antd"
 import {
-  Download, LayoutGrid, Lock, LockOpen, Pencil, Pin, Plus, Sparkles, Trash2, MessageSquare,
+  Download, EyeOff, Flag, LayoutGrid, Lock, LockOpen, Pencil, Pin, Plus, Sparkles, Trash2, MessageSquare,
 } from "lucide-react"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
@@ -64,6 +64,11 @@ export default function CommunityAdminPage() {
   const [boardEditing, setBoardEditing] = useState<Board | null>(null)
   const [boardFormOpen, setBoardFormOpen] = useState(false)
   const [boardSaving, setBoardSaving] = useState(false)
+
+  // 举报队列（M4）
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reports, setReports] = useState<any[] | null>(null)
+  const [reportStatus, setReportStatus] = useState("pending")
 
   const fetchBoards = useCallback(() => {
     apiJson<{ boards: Board[] }>("/api/community-admin/boards")
@@ -198,6 +203,40 @@ export default function CommunityAdminPage() {
     }
   }
 
+  // ---------- 举报队列 ----------
+
+  const fetchReports = useCallback((st: string) => {
+    setReports(null)
+    apiJson<{ items: any[] }>(`/api/community-admin/reports?status=${st}&limit=50`)
+      .then((j) => setReports(j.items || []))
+      .catch((e) => { setReports([]); toast.error(e.message || "读取举报失败") })
+  }, [])
+
+  useEffect(() => {
+    if (reportOpen) fetchReports(reportStatus)
+  }, [reportOpen, reportStatus, fetchReports])
+
+  async function handleReport(id: number, status: "accepted" | "rejected") {
+    try {
+      await postJson(`/api/community-admin/reports/${id}/handle`, { status })
+      toast.success(status === "accepted" ? "已接受（内容未自动折叠，需手动操作）" : "已驳回")
+      fetchReports(reportStatus)
+    } catch (e: any) {
+      toast.error(e.message || "操作失败")
+    }
+  }
+
+  /** 折叠被举报的内容。折叠与处理举报**分开**是刻意的：误点"接受"不该连带藏内容。 */
+  async function hideTarget(r: any, hidden: boolean) {
+    try {
+      await postJson(`/api/community-admin/${r.target_type === "post" ? "posts" : "comments"}/${r.target_id}/hidden`, { hidden })
+      toast.success(hidden ? "已折叠" : "已恢复")
+      fetchPosts()
+    } catch (e: any) {
+      toast.error(e.message || "操作失败")
+    }
+  }
+
   const boardOptions = boards.map((b) => ({ value: b.slug, label: `${b.icon || "💬"} ${b.name}` }))
 
   const columns = [
@@ -297,6 +336,7 @@ export default function CommunityAdminPage() {
       description="C 端 /community 的板块与主题内容。官方发帖以「NoteLab 官方」身份出现；种子讨论区按博客文章生成，无人回复时不在 C 端列表显示。"
       extra={
         <Space>
+          <Button icon={<Flag size={14} />} onClick={() => setReportOpen(true)}>举报队列</Button>
           <Button icon={<LayoutGrid size={14} />} onClick={() => setBoardOpen(true)}>板块管理</Button>
           <Tooltip title="读博客 RSS，为还没有讨论区的文章补建。有回复的讨论区不会被删除。">
             <Button icon={<Download size={14} />} loading={importing} onClick={importSeeds}>
@@ -414,6 +454,60 @@ export default function CommunityAdminPage() {
           ))}
           {boards.length === 0 && <p className="text-xs text-zinc-400">还没有板块。</p>}
         </div>
+      </Drawer>
+
+      {/* 举报队列（M4） */}
+      <Drawer
+        title="举报队列"
+        width={680}
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        extra={
+          <Select
+            size="small" style={{ width: 110 }} value={reportStatus}
+            onChange={(v) => setReportStatus(v)}
+            options={[
+              { value: "pending", label: "待处理" },
+              { value: "accepted", label: "已接受" },
+              { value: "rejected", label: "已驳回" },
+            ]}
+          />
+        }
+      >
+        {reports === null ? (
+          <p className="text-xs text-zinc-400">读取中…</p>
+        ) : reports.length === 0 ? (
+          <p className="text-xs text-zinc-400">{reportStatus === "pending" ? "没有待处理的举报。" : "没有记录。"}</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {reports.map((r) => (
+              <div key={r.id} className="flex flex-col gap-1.5 rounded-xl border border-black/5 bg-white px-3 py-2.5">
+                <div className="flex items-center gap-1.5">
+                  <Tag color={r.target_type === "post" ? "blue" : "default"}>
+                    {r.target_type === "post" ? "主题" : "回复"} #{r.target_id}
+                  </Tag>
+                  <span className="text-xs text-zinc-500">由 {r.reporter_name} 举报</span>
+                  <span className="ml-auto text-[11px] text-zinc-400">{String(r.created_at).slice(0, 16)}</span>
+                </div>
+                <div className="line-clamp-2 text-xs leading-relaxed text-zinc-600">
+                  {r.post_title || r.comment_text || "（内容已被删除，无法读取）"}
+                </div>
+                {r.detail && <div className="text-[11px] text-zinc-400">补充：{r.detail}</div>}
+                {r.status === "pending" ? (
+                  <Space size={4}>
+                    <Button size="small" type="primary" onClick={() => handleReport(r.id, "accepted")}>接受</Button>
+                    <Button size="small" onClick={() => handleReport(r.id, "rejected")}>驳回</Button>
+                    <Button size="small" icon={<EyeOff size={12} />} onClick={() => hideTarget(r, true)}>折叠内容</Button>
+                  </Space>
+                ) : (
+                  <Tag color={r.status === "accepted" ? "red" : "default"}>
+                    {r.status === "accepted" ? "已接受" : "已驳回"}
+                  </Tag>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Drawer>
 
       <ModalForm
