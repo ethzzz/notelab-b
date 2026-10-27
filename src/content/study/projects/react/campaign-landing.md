@@ -43,37 +43,122 @@ summary: 一次投放的成败在首屏两秒内决定；图片、字体、统�
 
 ## 参考实现
 
-:::solution 图片、字体、脚本三件事
+:::solution 关键实现：LCP 图预加载 + 固定尺寸防 CLS + 文案缓存兜底 + 埋点旁路
+`app/campaign/page.tsx`
 ```tsx
-// 1) 主视觉：给定尺寸 + 优先加载（首屏图不要 lazy）
-<img
-  src="/campaign/hero.webp"
-  width={1200}
-  height={600}
-  fetchPriority="high"
-  decoding="async"
-  alt="活动主视觉"
-/>
+import { CampaignHero } from './CampaignHero'
+import { getCampaignCopy } from '@/lib/campaign'
 
-// 2) 字体：swap + 预加载
-<link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossOrigin="" />
+// 活动页适合 ISR：文案由运营改，页面按 tag 失效（见 nextjs 的 ISR 项目）
+export const revalidate = 300
+
+export default async function CampaignPage() {
+  const copy = await getCampaignCopy('double11')
+  return (
+    <main>
+      {/* 主视觉是 LCP 元素：用 priority + 显式尺寸，别用 CSS 背景图（无法预加载、无法提 priority） */}
+      <CampaignHero copy={copy} />
+      <section className="p-6">{copy.sections.map((s) => <p key={s.title}>{s.body}</p>)}</section>
+    </main>
+  )
+}
 ```
-```css
-@font-face { font-family: Inter; src: url(/fonts/inter.woff2) format("woff2"); font-display: swap; }
-```
+`app/campaign/CampaignHero.tsx`
 ```tsx
-// 3) 统计：首屏之后执行，且失败不影响页面
-import Script from "next/script"
-<Script src="/analytics.js" strategy="afterInteractive" onError={() => {}} />
-```
-:::
+import Image from 'next/image'
+import type { CampaignCopy } from '@/lib/campaign'
 
-:::error 上线后才发现的问题
-```text
-Lighthouse：LCP 4.2s，LCP 元素是「一张背景图 + 一段标题」
+export function CampaignHero({ copy }: { copy: CampaignCopy }) {
+  return (
+    <div className="relative">
+      {/*
+        width/height 必须给真实比例：CLS 的头号来源就是「图加载完才撑开高度」。
+        sizes 决定移动端只下 1x 图，首屏 JS/图片预算才守得住。
+      */}
+      <Image
+        src={copy.heroSrc}
+        alt={copy.heroAlt}
+        width={1200}
+        height={720}
+        priority
+        sizes="(max-width: 768px) 100vw, 1200px"
+        className="h-auto w-full"
+      />
+      <h1 className="absolute bottom-4 left-4 text-2xl font-bold text-white drop-shadow">
+        {copy.title}
+      </h1>
+    </div>
+  )
+}
 ```
-**原因**：背景图写在 CSS 里，浏览器要等 CSS 解析完才发现它，优先级也低。
-**改法**：首屏主视觉改成 `<img>` 并给 `fetchPriority="high"`；装饰性背景图延后或内联为渐变。
+`lib/campaign.ts`
+```ts
+// 断网兜底：文案在服务端渲染进 HTML（不是客户端 fetch），
+// 同时在客户端存一份 localStorage，二次访问即使断网也能看到标题与主视觉说明
+export type CampaignCopy = {
+  title: string
+  heroSrc: string
+  heroAlt: string
+  sections: { title: string; body: string }[]
+}
+
+const CACHE_KEY = 'campaign:double11:copy'
+
+export async function getCampaignCopy(slug: string): Promise<CampaignCopy> {
+  try {
+    const res = await fetch(`${process.env.CMS_BASE}/campaigns/${slug}`, { next: { tags: [`campaign:${slug}`] } })
+    if (!res.ok) throw new Error(String(res.status))
+    const copy = (await res.json()) as CampaignCopy
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(copy)) } catch {}
+    }
+    return copy
+  } catch {
+    // 服务端拿不到时给一个最小可用的兜底，绝不白屏
+    return { title: '活动进行中', heroSrc: '/campaign/fallback.webp', heroAlt: '活动主视觉', sections: [] }
+  }
+}
+
+export function readCachedCopy(): CampaignCopy | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    return raw ? (JSON.parse(raw) as CampaignCopy) : null
+  } catch {
+    return null
+  }
+}
+```
+`lib/vitals.ts`
+```ts
+// LCP/CLS/INP 用浏览器原生 PerformanceObserver 采，不引第三方库（省 30KB+，也省一次阻塞）
+export function reportVitals(): void {
+  if (typeof PerformanceObserver === 'undefined') return
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        // @ts-expect-error 只有部分浏览器有 element
+        const el = entry.element?.tagName ?? 'unknown'
+        navigator.sendBeacon?.('/api/vitals', JSON.stringify({ name: 'LCP', value: entry.startTime, el }))
+      }
+    }).observe({ type: 'largest-contentful-paint', buffered: true })
+
+    let cls = 0
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as (PerformanceEntry & { value: number; hadRecentInput: boolean })[]) {
+        if (!entry.hadRecentInput) cls += entry.value
+      }
+    }).observe({ type: 'layout-shift', buffered: true })
+
+    addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        navigator.sendBeacon?.('/api/vitals', JSON.stringify({ name: 'CLS', value: cls }))
+      }
+    })
+  } catch {
+    // 采集失败不影响页面
+  }
+}
+```
 :::
 
 ## 验收脚本

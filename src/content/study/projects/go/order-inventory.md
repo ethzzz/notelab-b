@@ -44,15 +44,41 @@ summary: 同一个业务，用 Go 再写一遍：没有注解和 AOP，事务边
 
 ## 参考实现
 
-:::solution 事务 + 条件更新 + 唯一索引
+:::solution 关键实现：一个事务里「条件扣减 + 唯一键插入」，两处都不靠读校验
+`schema.sql`
+```sql
+CREATE TABLE stock (
+  sku VARCHAR(64) PRIMARY KEY,
+  qty INT NOT NULL,
+  CONSTRAINT ck_stock_nonneg CHECK (qty >= 0)   -- 兜底：条件更新写错也不会扣成负
+) ENGINE=InnoDB;
+
+CREATE TABLE orders (
+  id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+  request_id VARCHAR(64) NOT NULL,
+  sku        VARCHAR(64) NOT NULL,
+  qty        INT NOT NULL,
+  status     VARCHAR(16) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uk_request (request_id)            -- 幂等的唯一依据
+) ENGINE=InnoDB;
+```
+`internal/order/service.go`
 ```go
+// 事务边界一眼可见：BeginTx 之后所有 return 都会被 defer Rollback 兜住
 func (s *Service) Create(ctx context.Context, sku string, qty int, reqID string) (*Order, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	// 快路径：已经下过这一单就直接返回（省一次事务；并发下仍要靠唯一键兜底）
+	if old, err := s.findByRequestID(ctx, reqID); err == nil && old != nil {
+		return old, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() // Commit 之后是 no-op
 
+	// 条件更新即并发控制：没有「先 SELECT 再判断」，所以不存在检查-扣减之间的窗口
 	res, err := tx.ExecContext(ctx,
 		`UPDATE stock SET qty = qty - ? WHERE sku = ? AND qty >= ?`, qty, sku, qty)
 	if err != nil {
@@ -67,17 +93,81 @@ func (s *Service) Create(ctx context.Context, sku string, qty int, reqID string)
 		`INSERT INTO orders (request_id, sku, qty, status) VALUES (?, ?, ?, ?)`,
 		o.RequestID, o.SKU, o.Qty, o.Status)
 	if err != nil {
+		if isDuplicate(err) { // 并发同 requestId：回滚本次扣减，返回先到的单
+			return nil, ErrDuplicateRequest
+		}
 		return nil, err
 	}
 	o.ID, _ = res.LastInsertId()
 	return o, tx.Commit()
 }
+
+func isDuplicate(err error) bool {
+	var me *mysql.MySQLError
+	// 1062 = ER_DUP_ENTRY
+	return errors.As(err, &me) && me.Number == 1062
+}
 ```
+`internal/order/handler.go`
 ```go
-// 幂等：唯一键冲突时返回原订单
-if isDuplicate(err) {
-	old, _ := s.findByRequestID(ctx, reqID)
-	return old, nil
+// 错误 → 状态码必须一一对应：库存不足是 409（可重试的业务冲突），不是 500
+func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SKU       string `json:"sku"`
+		Qty       int    `json:"qty"`
+		RequestID string `json:"requestId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RequestID == "" {
+		http.Error(w, `{"error":"requestId 必填"}`, http.StatusBadRequest)
+		return
+	}
+	o, err := h.svc.Create(r.Context(), req.SKU, req.Qty, req.RequestID)
+	switch {
+	case errors.Is(err, ErrInsufficientStock):
+		http.Error(w, `{"error":"insufficient stock"}`, http.StatusConflict)
+	case errors.Is(err, ErrDuplicateRequest):
+		// 并发下先到的那一单赢了，把它返回给调用方（对客户端仍是成功）
+		if old, e2 := h.svc.FindByRequestID(r.Context(), req.RequestID); e2 == nil && old != nil {
+			writeJSON(w, map[string]any{"orderId": old.ID, "reused": true})
+			return
+		}
+		http.Error(w, `{"error":"duplicate request"}`, http.StatusConflict)
+	case err != nil:
+		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+	default:
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"orderId": o.ID})
+	}
+}
+```
+`internal/order/service_test.go`
+```go
+// 这条测试是「20 并发抢 10 件」的可执行版本：go test -race 必须过
+func TestCreateConcurrent(t *testing.T) {
+	svc, cleanup := newTestService(t) // 内部建表并写入 qty=10 的 sku
+	defer cleanup()
+
+	var ok, conflict int32
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := svc.Create(context.Background(), "demo", 1, fmt.Sprintf("c-%d", i))
+			switch {
+			case err == nil:
+				atomic.AddInt32(&ok, 1)
+			case errors.Is(err, ErrInsufficientStock):
+				atomic.AddInt32(&conflict, 1)
+			default:
+				t.Errorf("意外错误: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if ok != 10 || conflict != 10 {
+		t.Fatalf("期望 10 成功 / 10 冲突，实际 %d / %d", ok, conflict)
+	}
 }
 ```
 :::

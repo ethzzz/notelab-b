@@ -68,32 +68,112 @@ CREATE TABLE reservation (
 
 ## 参考实现
 
-:::solution 预占 / 确认 / 释放
+:::solution 关键实现：预占/确认/释放三个条件更新，状态机保证不会重复加减
+`StockService.java`
 ```java
-@Transactional
-public long reserve(String sku, int qty, long orderId) {
-    if (stockMapper.hold(sku, qty) == 0) throw new InsufficientStockException();
-    return reservationMapper.insert(orderId, sku, qty, now().plusMinutes(15));
-}
+@Service
+public class StockService {
+    private final JdbcClient db;
 
-@Transactional
-public void confirm(long id) {
-    if (reservationMapper.markConfirmed(id) == 0) return; // 已处理/已释放：幂等返回
-    stockMapper.commitReserved(reservationMapper.skuOf(id), reservationMapper.qtyOf(id));
-}
+    /**
+     * 预占：available 减少、reserved 增加，一步完成。
+     * 用条件更新保证 available 不会被扣成负数，不需要先 SELECT。
+     */
+    @Transactional
+    public long reserve(String sku, int qty, String requestId) {
+        Optional<Long> old = db.sql("SELECT id FROM reservation WHERE request_id = ?")
+                .param(requestId).query(Long.class).optional();
+        if (old.isPresent()) return old.get();
 
-@Transactional
-public void release(long id) {
-    if (reservationMapper.markReleased(id) == 0) return;  // 只有 HELD 能释放
-    stockMapper.releaseReserved(reservationMapper.skuOf(id), reservationMapper.qtyOf(id));
+        int ok = db.sql("""
+                UPDATE stock SET available = available - ?, reserved = reserved + ?
+                 WHERE sku = ? AND available >= ?
+                """).params(qty, qty, sku, qty).update();
+        if (ok == 0) throw new BizException(409, "库存不足");
+
+        KeyHolder keys = new GeneratedKeyHolder();
+        db.sql("""
+                INSERT INTO reservation (request_id, sku, qty, status, expire_at)
+                VALUES (?, ?, ?, 'RESERVED', NOW() + INTERVAL 15 MINUTE)
+                """).params(requestId, sku, qty).update(keys);
+        return keys.getKey().longValue();
+    }
+
+    /** 支付确认：RESERVED → CONFIRMED，reserved 转成实扣。非 RESERVED 一律 409。 */
+    @Transactional
+    public void confirm(long reservationId) {
+        int moved = db.sql("""
+                UPDATE reservation SET status = 'CONFIRMED', confirmed_at = NOW()
+                 WHERE id = ? AND status = 'RESERVED'
+                """).param(reservationId).update();
+        if (moved == 0) throw new BizException(409, "预占已释放或已确认");
+
+        db.sql("""
+                UPDATE stock s JOIN reservation r ON r.sku = s.sku
+                   SET s.reserved = s.reserved - r.qty
+                 WHERE r.id = ?
+                """).param(reservationId).update();
+    }
+
+    /** 释放：只有 RESERVED 且已过期才能释放；同一行只能被释放一次（条件更新天然防重） */
+    @Transactional
+    public boolean release(long reservationId) {
+        int moved = db.sql("""
+                UPDATE reservation SET status = 'RELEASED', released_at = NOW()
+                 WHERE id = ? AND status = 'RESERVED'
+                """).param(reservationId).update();
+        if (moved == 0) return false;   // 已确认/已释放：什么都不做
+
+        db.sql("""
+                UPDATE stock s JOIN reservation r ON r.sku = s.sku
+                   SET s.available = s.available + r.qty, s.reserved = s.reserved - r.qty
+                 WHERE r.id = ?
+                """).param(reservationId).update();
+        return true;
+    }
 }
 ```
+`ReleaseJob.java`
 ```java
-// 扫表释放：每 10 秒一批，limit 防一次扫太多
-@Scheduled(fixedDelay = 10_000)
+/**
+ * 定时释放：扫「已过期但仍 RESERVED」的预占。
+ * 不能只靠内存定时器 —— kill -9 之后内存里的任务全丢（验收里专门测这条）。
+ */
+@Scheduled(fixedDelay = 5_000)
 public void releaseExpired() {
-    reservationMapper.findExpired(200).forEach(r -> release(r.getId()));
+    List<Long> ids = db.sql("""
+            SELECT id FROM reservation
+             WHERE status = 'RESERVED' AND expire_at < NOW()
+             LIMIT 200
+            """).query(Long.class).list();
+    for (Long id : ids) {
+        // release 内部是条件更新：并发/重复调度都不会把库存加两次
+        if (service.release(id)) log.info("[stock] 释放预占 {}", id);
+    }
 }
+```
+`schema.sql`
+```sql
+CREATE TABLE stock (
+  sku       VARCHAR(64) PRIMARY KEY,
+  available INT NOT NULL,
+  reserved  INT NOT NULL DEFAULT 0,
+  CONSTRAINT ck_available CHECK (available >= 0),
+  CONSTRAINT ck_reserved  CHECK (reserved  >= 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE reservation (
+  id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+  request_id   VARCHAR(64) NOT NULL,
+  sku          VARCHAR(64) NOT NULL,
+  qty          INT NOT NULL,
+  status       ENUM('RESERVED','CONFIRMED','RELEASED') NOT NULL,
+  expire_at    DATETIME NOT NULL,
+  released_at  DATETIME NULL,
+  confirmed_at DATETIME NULL,
+  UNIQUE KEY uk_request (request_id),          -- 幂等
+  KEY idx_expire (status, expire_at)           -- 定时扫表走这个索引
+) ENGINE=InnoDB;
 ```
 :::
 

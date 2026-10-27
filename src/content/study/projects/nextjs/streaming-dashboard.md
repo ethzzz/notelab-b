@@ -43,51 +43,108 @@ GET /api/stats/orders?page=1       → 中（500ms）
 
 ## 参考实现
 
-:::solution 页面 + 三个数据块
+:::solution 关键实现：RSC 分区 + Suspense 骨架 + 每块自己的错误边界
+`app/dashboard/page.tsx`
 ```tsx
-// app/dashboard/page.tsx
-import { Suspense } from "react"
+import { Suspense } from 'react'
+import { FastStats, SlowMetrics, RevenueChart } from './cards'
+import { CardSkeleton, CardErrorBoundary } from './ui'
 
+/**
+ * 流式的关键：页面本身**不 await 任何慢数据**，只把慢组件包进 Suspense。
+ * 这样首屏 HTML 立刻流出（含三块骨架），慢块随后各自补上 —— 验收里的 TTFB < 800ms 靠这个。
+ * ⚠️ 不要在页面顶层 await 三个 fetch 再分发：那等于退回成「全页等最慢的一个」。
+ */
 export default function Dashboard() {
   return (
-    <main className="p-6">
-      <h1 className="text-xl font-semibold">运营看板</h1>
-
-      <Suspense fallback={<Skeleton h={120} />}>
-        <Summary range="7d" />
+    <div className="grid gap-4 md:grid-cols-2">
+      <Suspense fallback={<CardSkeleton rows={2} />}>
+        <FastStats />
       </Suspense>
 
-      <Suspense fallback={<Skeleton h={280} />}>
-        <Trend range="30d" />
+      <Suspense fallback={<CardSkeleton rows={2} />}>
+        <SlowMetrics />
       </Suspense>
 
-      <Suspense fallback={<Skeleton h={360} />}>
-        <Orders />
+      <Suspense fallback={<CardSkeleton rows={4} />}>
+        {/* 每块独立错误边界：一块挂了只影响自己那一格 */}
+        <CardErrorBoundary title="营收构成">
+          <RevenueChart />
+        </CardErrorBoundary>
       </Suspense>
-    </main>
+    </div>
   )
 }
 ```
+`app/dashboard/cards.tsx`
 ```tsx
-// 每块自己取数、自己兜错，互不影响
-async function Trend({ range }: { range: string }) {
-  try {
-    const data = await getTrend(range)      // 慢接口，带 revalidate
-    return <TrendChart data={data} />
-  } catch {
-    return <ErrorBox text="趋势数据加载失败" />
+// 服务端组件：这里才 await 慢接口。三块各取各的，互不阻塞
+export async function SlowMetrics() {
+  // 慢接口自己要有超时，否则它挂住会让这一格永远停在骨架
+  const res = await fetch(`${process.env.API_BASE}/metrics/slow`, {
+    next: { revalidate: 30 },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error(`metrics ${res.status}`)
+  const data = (await res.json()) as { pv: number; uv: number }
+  return (
+    <section className="rounded-xl border p-4">
+      <h2 className="text-sm text-zinc-500">今日流量</h2>
+      <p className="text-2xl font-semibold">{data.pv}</p>
+      <p className="text-xs text-zinc-500">UV {data.uv}</p>
+    </section>
+  )
+}
+
+export async function FastStats() {
+  const res = await fetch(`${process.env.API_BASE}/metrics/fast`, { next: { revalidate: 10 } })
+  const d = (await res.json()) as { orders: number }
+  return <section className="rounded-xl border p-4">订单 {d.orders}</section>
+}
+```
+`app/dashboard/ui.tsx`
+```tsx
+'use client'
+import { Component, type ReactNode } from 'react'
+
+export function CardSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="animate-pulse space-y-2 rounded-xl border p-4">
+      <div className="h-3 w-1/3 rounded bg-zinc-200" />
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="h-4 w-full rounded bg-zinc-100" />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * 局部错误边界必须是客户端组件（class）。
+ * 没有它，任一 RSC 抛错会冒到最近的 error.tsx —— 而 error.tsx 是**整页**替换，
+ * 一块失败就把其他两块已经渲染好的数据也干掉了。
+ */
+export class CardErrorBoundary extends Component<{ title: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <section className="rounded-xl border border-red-200 p-4">
+          <p className="text-sm text-red-600">{this.props.title} 加载失败</p>
+          <button className="mt-2 text-sm underline" onClick={() => this.setState({ failed: false })}>
+            重试
+          </button>
+        </section>
+      )
+    }
+    return this.props.children
   }
 }
 ```
-```ts
-// 快接口用较短 revalidate，慢接口用较长
-export const getSummary = () => fetch(`${API}/stats/summary?range=7d`, { next: { revalidate: 30 } }).then(r => r.json())
-export const getTrend = () => fetch(`${API}/stats/trend?range=30d`, { next: { revalidate: 300 } }).then(r => r.json())
-```
-:::
-
-:::hint 为什么不用一个 loading.tsx 了事
-`loading.tsx` 是**整个路由**的兜底：它会让整页先显示骨架，等所有数据就绪才替换。而 Suspense 是**按块**的，快的先出——这才是流式。
 :::
 
 ## 验收脚本

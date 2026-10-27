@@ -71,20 +71,114 @@ CREATE TABLE settlement (
 
 ## 参考实现
 
-:::solution 超额校验与分账取整
+:::solution 关键实现：金额用分 + 条件更新控累计 + 分账余额给平台兜尾差
+`RefundService.java`
 ```java
-@Transactional
-public long apply(long orderId, BigDecimal amount, String requestId) {
-    BigDecimal paid = orderMapper.paidAmount(orderId);
-    BigDecimal refunded = refundMapper.sumSuccess(orderId);
-    if (refunded.add(amount).compareTo(paid) > 0) throw new OverRefundException();
-    return refundMapper.insert(orderId, requestId, amount);
+@Service
+public class RefundService {
+    private final JdbcClient db;
+
+    /**
+     * 部分退款：累计不能超过实付。
+     * 关键在「WHERE refunded + ? <= paid_amount」——把上限写进 SQL，
+     * 否则两个并发退款各自读到的已退金额都是旧值，双双通过检查。
+     */
+    @Transactional
+    public long refund(long orderId, long amountCents, String requestId) {
+        if (amountCents <= 0) throw new BizException(400, "退款金额必须大于 0");
+
+        // ① 幂等：requestId 唯一，重复提交返回原退款单
+        Optional<Long> existed = db.sql("SELECT id FROM refund WHERE request_id = ?")
+                .param(requestId).query(Long.class).optional();
+        if (existed.isPresent()) return existed.get();
+
+        // ② 条件更新把「累计上限」交给数据库判
+        int reserved = db.sql("""
+                UPDATE orders
+                   SET refunded_amount = refunded_amount + ?
+                 WHERE id = ? AND refunded_amount + ? <= paid_amount
+                """).params(amountCents, orderId, amountCents).update();
+        if (reserved == 0) {
+            throw new BizException(409, "累计退款金额超过实付金额");
+        }
+
+        // ③ 落退款单（requestId 唯一键再兜一次并发）
+        try {
+            KeyHolder keys = new GeneratedKeyHolder();
+            db.sql("""
+                    INSERT INTO refund (order_id, request_id, amount, status)
+                    VALUES (?, ?, ?, 'SUCCESS')
+                    """).params(orderId, requestId, amountCents).update(keys);
+            long refundId = keys.getKey().longValue();
+
+            // ④ 分账：按比例拆，尾差给平台，保证 sum = amount
+            for (Split s : SplitCalculator.split(amountCents, 10)) {
+                db.sql("""
+                        INSERT INTO settlement (refund_id, party, amount, status)
+                        VALUES (?, ?, ?, 'PENDING')
+                        """).params(refundId, s.party(), s.amount()).update();
+            }
+            return refundId;
+        } catch (DuplicateKeyException e) {
+            throw new BizException(409, "重复的退款请求");
+        }
+    }
 }
 ```
+`SplitCalculator.java`
 ```java
-// 分账：先算商户，平台拿余数，保证 sum == total
-BigDecimal merchant = total.multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.DOWN);
-BigDecimal platform = total.subtract(merchant);
+/** 分账：平台抽 10%，商户 90%；四舍五入的误差全部记到平台侧，保证总额严格相等 */
+public final class SplitCalculator {
+    public record Split(String party, long amount) {}
+
+    public static List<Split> split(long total, int platformPercent) {
+        long platform = Math.round(total * platformPercent / 100.0);
+        long merchant = total - platform;   // 减法而不是再算一次比例：尾差自然落在商户侧=platform 侧
+        return List.of(new Split("PLATFORM", platform), new Split("MERCHANT", merchant));
+    }
+}
+```
+`SettlementReconcile.java`
+```java
+/** 对账：列出「退款成功但分账未结算」的订单，财务照着补 */
+public List<Map<String, Object>> pendingSettlement() {
+    return db.sql("""
+            SELECT r.id AS refund_id, r.order_id, r.amount, s.party, s.amount AS split_amount
+              FROM refund r
+              JOIN settlement s ON s.refund_id = r.id
+             WHERE r.status = 'SUCCESS' AND s.status = 'PENDING'
+             ORDER BY r.id DESC
+            """).query().listOfRows();
+}
+```
+`schema.sql`
+```sql
+-- 金额一律 BIGINT 存「分」：DECIMAL 也能用，但 int 运算最省心且没有精度陷阱
+CREATE TABLE orders (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  paid_amount     BIGINT NOT NULL,
+  refunded_amount BIGINT NOT NULL DEFAULT 0,
+  CONSTRAINT ck_refund_le_paid CHECK (refunded_amount <= paid_amount)
+) ENGINE=InnoDB;
+
+CREATE TABLE refund (
+  id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_id   BIGINT NOT NULL,
+  request_id VARCHAR(64) NOT NULL,
+  amount     BIGINT NOT NULL,
+  status     VARCHAR(16) NOT NULL,
+  UNIQUE KEY uk_request (request_id),
+  KEY idx_order (order_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE settlement (
+  id        BIGINT AUTO_INCREMENT PRIMARY KEY,
+  refund_id BIGINT NOT NULL,
+  party     VARCHAR(16) NOT NULL,
+  amount    BIGINT NOT NULL,
+  status    VARCHAR(16) NOT NULL,
+  KEY idx_pending (status, refund_id)
+) ENGINE=InnoDB;
 ```
 :::
 

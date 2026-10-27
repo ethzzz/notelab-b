@@ -80,30 +80,120 @@ seq 20 | xargs -P20 -I{} curl -s -o /dev/null -w '%{http_code}\n' \
 
 ## 参考实现
 
-:::solution 条件更新 + 唯一索引 + 异常映射
-```java
-// 一条 SQL 同时完成「判断够不够」和「扣减」，天然防超卖
-@Update("UPDATE stock SET qty = qty - #{qty} WHERE sku = #{sku} AND qty >= #{qty}")
-int deduct(@Param("sku") String sku, @Param("qty") int qty);
+:::solution 关键实现：条件扣减 + 唯一键，两处都不做「先查后改」
+`schema.sql`
+```sql
+CREATE TABLE stock (
+  sku VARCHAR(64) PRIMARY KEY,
+  qty INT NOT NULL,
+  CONSTRAINT ck_nonneg CHECK (qty >= 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE orders (
+  id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+  request_id VARCHAR(64) NOT NULL,
+  sku        VARCHAR(64) NOT NULL,
+  qty        INT NOT NULL,
+  status     VARCHAR(16) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uk_request (request_id)
+) ENGINE=InnoDB;
 ```
+`OrderService.java`
 ```java
-@Transactional(rollbackFor = Exception.class)
-public Order create(String sku, int qty, String requestId) {
-    if (stockMapper.deduct(sku, qty) == 0) throw new InsufficientStockException();
-    Order o = new Order(null, requestId, sku, qty, "CREATED", null);
-    orderMapper.insert(o);          // uk_request_id 兜底幂等
-    return o;
+@Service
+public class OrderService {
+    private final JdbcClient db;
+
+    public OrderService(JdbcClient db) { this.db = db; }
+
+    /**
+     * 下单：全部并发控制都压在「条件 UPDATE + 唯一索引」上。
+     * 注意不要在这里加 SELECT ... FOR UPDATE 之外的手写校验 —— 读到的库存随时会变。
+     */
+    /** 供 controller 在唯一键冲突后取回先到的那一单 */
+    public Optional<Long> findByRequestId(String requestId) {
+        return db.sql("SELECT id FROM orders WHERE request_id = ?")
+                .param(requestId).query(Long.class).optional();
+    }
+
+    @Transactional
+    public long create(String sku, int qty, String requestId) {
+        // ① 幂等快路径（并发下仍可能两条都到这里，靠 uk_request 兜底）
+        Optional<Long> old = db.sql("SELECT id FROM orders WHERE request_id = ?")
+                .param(requestId).query(Long.class).optional();
+        if (old.isPresent()) return old.get();
+
+        // ② 条件扣减：库存不够时 RowsAffected = 0，而不是先查再判断
+        int deducted = db.sql("UPDATE stock SET qty = qty - ? WHERE sku = ? AND qty >= ?")
+                .params(qty, sku, qty).update();
+        if (deducted == 0) throw new BizException(409, "库存不足");
+
+        // ③ 插单：唯一键冲突说明并发里有人先成功，回滚本次扣减并返回那一单
+        try {
+            // JdbcClient 没有「返回自增主键」的便捷方法，标准做法是给一个 KeyHolder
+            KeyHolder keys = new GeneratedKeyHolder();
+            db.sql("""
+                    INSERT INTO orders (request_id, sku, qty, status) VALUES (?, ?, ?, 'CREATED')
+                    """).params(requestId, sku, qty).update(keys);
+            return keys.getKey().longValue();
+        } catch (DuplicateKeyException e) {
+            throw new DuplicateRequestException(requestId); // 事务回滚，扣减也一起撤销
+        }
+    }
 }
 ```
+`OrderController.java`
 ```java
-try {
-    Order o = service.create(req.sku(), req.qty(), req.requestId());
-    return ResponseEntity.status(201).body(Map.of("orderId", o.getId(), "status", o.getStatus()));
-} catch (DuplicateKeyException e) {
-    Order old = orderMapper.findByRequestId(req.requestId());
-    return ResponseEntity.ok(Map.of("orderId", old.getId(), "status", old.getStatus()));
-} catch (InsufficientStockException e) {
-    return ResponseEntity.status(409).body(Map.of("error", "库存不足"));
+/** 409 两种含义要靠 message 区分：库存不足（业务冲突）/ 重复请求（可返回原单） */
+@PostMapping("/api/orders")
+public ResponseEntity<?> create(@RequestBody CreateReq req) {
+    if (req.requestId() == null || req.requestId().isBlank()) {
+        return ResponseEntity.badRequest().body(Map.of("error", "requestId 必填"));
+    }
+    try {
+        long id = service.create(req.sku(), req.qty(), req.requestId());
+        return ResponseEntity.status(201).body(Map.of("orderId", id));
+    } catch (DuplicateRequestException e) {
+        // 并发同 requestId：把先到的那单返回给调用方，对客户端仍是成功
+        long id = service.findByRequestId(req.requestId());
+        return ResponseEntity.ok(Map.of("orderId", id, "reused", true));
+    } catch (BizException e) {
+        return ResponseEntity.status(e.getCode()).body(Map.of("error", e.getMessage()));
+    }
+}
+```
+`ConcurrencyTest.java`
+```java
+/** 这条测试就是验收脚本的可执行版本：20 并发抢 10 件 */
+@Test
+void twentyConcurrentBuyTen() throws Exception {
+    var pool = Executors.newFixedThreadPool(20);
+    var start = new CountDownLatch(1);
+    var ok = new AtomicInteger();
+    var conflict = new AtomicInteger();
+
+    for (int i = 0; i < 20; i++) {
+        final int n = i;
+        pool.submit(() -> {
+            start.await();
+            try {
+                service.create("demo", 1, "c-" + n);
+                ok.incrementAndGet();
+            } catch (BizException e) {
+                if (e.getCode() == 409) conflict.incrementAndGet();
+                else throw e;
+            }
+            return null;
+        });
+    }
+    start.countDown();
+    pool.shutdown();
+    assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS));
+
+    assertEquals(10, ok.get());
+    assertEquals(10, conflict.get());
+    assertEquals(0, stockQty("demo"));   // 不能扣成负数
 }
 ```
 :::

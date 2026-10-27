@@ -46,57 +46,96 @@ GET  /api/posts/[slug]        数据源（内部）
 
 ## 参考实现
 
-:::solution 数据层打 tag + webhook 失效
+:::solution 关键实现：fetch 打 tag → webhook 验签 → revalidateTag（按文章维度失效）
+`lib/cms.ts`
 ```ts
-// lib/posts.ts
-export async function getPost(slug: string) {
-  const res = await fetch(`${CMS}/posts/${slug}`, {
-    next: { tags: [`post:${slug}`, "posts:list"] },
+// 缓存键就是 tag。所有读文章的地方都带同一个 tag，失效时一次搞定。
+// ⚠️ 别用路径做 tag：一篇文章可能出现在详情页、列表页、sitemap 三处
+export type Post = { slug: string; title: string; html: string; updatedAt: string }
+
+const BASE = process.env.CMS_BASE!
+
+export async function getPost(slug: string): Promise<Post | null> {
+  const res = await fetch(`${BASE}/posts/${slug}`, {
+    // revalidate: 兜底轮询（比如运营忘配 webhook 时，最多 10 分钟也能更新）
+    next: { revalidate: 600, tags: [`post:${slug}`] },
   })
   if (res.status === 404) return null
-  return res.json()
+  if (!res.ok) throw new Error(`CMS ${res.status}`)
+  return (await res.json()) as Post
+}
+
+export async function listPosts(): Promise<Post[]> {
+  const res = await fetch(`${BASE}/posts`, { next: { revalidate: 60, tags: ['post:list'] } })
+  return res.ok ? ((await res.json()) as Post[]) : []
 }
 ```
-```ts
-// app/api/revalidate/route.ts
-import { revalidateTag } from "next/cache"
-import { createHmac, timingSafeEqual } from "node:crypto"
-
-function verify(body: string, sig: string) {
-  const expected = createHmac("sha256", process.env.CMS_SECRET!).update(body).digest("hex")
-  return sig.length === expected.length && timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
-}
-
-export async function POST(req: Request) {
-  const raw = await req.text()
-  const sig = req.headers.get("x-signature") ?? ""
-  if (!verify(raw, sig)) return new Response("bad signature", { status: 401 })
-
-  const { slug } = JSON.parse(raw)
-  revalidateTag(`post:${slug}`)
-  revalidateTag("posts:list")
-  return Response.json({ ok: true })
-}
-```
+`app/posts/[slug]/page.tsx`
 ```tsx
-// app/posts/[slug]/page.tsx
-export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = await params
-  const post = await getPost(slug)
-  return { title: post?.title ?? "文章不存在" }
+import { notFound } from 'next/navigation'
+import { getPost, listPosts } from '@/lib/cms'
+
+// ① 构建期把已知文章全部预渲染成静态（产物是 ○/●，不是 ƒ）
+export async function generateStaticParams() {
+  const posts = await listPosts()
+  return posts.map((p) => ({ slug: p.slug }))
 }
+
+// ② 新 slug 仍然按需生成（dynamicParams 默认 true）。想彻底禁止未收录的 slug 才设 false
+export const dynamicParams = true
 
 export default async function PostPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const post = await getPost(slug)
   if (!post) notFound()
-  return <article><h1>{post.title}</h1><div dangerouslySetInnerHTML={{ __html: post.html }} /></article>
+  return (
+    <article className="prose mx-auto max-w-3xl">
+      <h1>{post.title}</h1>
+      <div dangerouslySetInnerHTML={{ __html: post.html }} />
+    </article>
+  )
 }
 ```
-:::
+`app/api/revalidate/route.ts`
+```ts
+import { revalidateTag } from 'next/cache'
+import { createHmac, timingSafeEqual } from 'node:crypto'
+import { NextResponse } from 'next/server'
 
-:::error 改了内容但线上没变，怎么查
-按顺序排除：① CDN/反代是否缓存了 HTML；② 页面是不是被 `cookies()`/`searchParams` 变成了动态（那就不该走 ISR）；③ `fetch` 有没有打 tag；④ webhook 是否真的到达（看 handler 日志）；⑤ 是否调用了 `revalidateTag` 但 tag 拼错（不报错，只是没生效）。
+/**
+ * CMS webhook：签名校验 → 按 slug 精确失效。
+ * ⚠️ 这个路由必须自己鉴权：Next 的 route handler 不受页面守卫保护，
+ *    忘了验签等于给公网一个「随便清缓存」的按钮。
+ */
+export async function POST(req: Request) {
+  const raw = await req.text()                      // 验签要用原始 body，不能先 parse 再 stringify
+  const sig = req.headers.get('x-cms-signature') ?? ''
+  const expected = createHmac('sha256', process.env.REVALIDATE_SECRET!).update(raw).digest('hex')
+
+  // 长度不等时 timingSafeEqual 会抛，先挡掉
+  const ok = sig.length === expected.length && timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
+  if (!ok) return NextResponse.json({ error: 'bad signature' }, { status: 401 })
+
+  let body: { slug?: string; type?: string }
+  try { body = JSON.parse(raw) } catch { return NextResponse.json({ error: 'bad json' }, { status: 400 }) }
+
+  if (body.slug) revalidateTag(`post:${body.slug}`)   // 单篇：1 秒内线上可见
+  revalidateTag('post:list')                          // 列表页也要失效，否则首页还是旧标题
+
+  return NextResponse.json({ revalidated: true, slug: body.slug ?? null })
+}
+```
+`app/posts/[slug]/loading.tsx`
+```tsx
+// 首屏就算命中缓存未生成（按需生成）也有骨架，不会白屏
+export default function Loading() {
+  return <div className="mx-auto max-w-3xl animate-pulse space-y-4 py-10">
+    <div className="h-8 w-2/3 rounded bg-zinc-200" />
+    <div className="h-4 w-full rounded bg-zinc-100" />
+    <div className="h-4 w-5/6 rounded bg-zinc-100" />
+  </div>
+}
+```
 :::
 
 ## 验收脚本

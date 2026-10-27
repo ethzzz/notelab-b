@@ -49,37 +49,102 @@ summary: 两版页面分流、曝光与点击可分析；最怕的是「埋点�
 
 ## 参考实现
 
-:::solution 分桶 + 会话内去重
+:::solution 关键实现：稳定分桶 + 曝光去重 + 上报永不阻塞渲染
+`lib/experiment.ts`
 ```ts
-export function bucket(userId: string, experimentId: string): "A" | "B" {
-  let h = 2166136261
-  const s = `${userId}:${experimentId}`
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, 16777619)
+// 分桶必须满足三条：同 userId 稳定、分布均匀、不依赖后端（后端挂了也要能分）。
+// 用 FNV-1a 把 `实验盐 + userId` 压成 0..9999 —— 加盐是为了不同实验不落在同一批人身上。
+function fnv1a(input: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
   }
-  return (h >>> 0) % 100 < 50 ? "A" : "B"
+  return h >>> 0
+}
+
+export type Variant = 'control' | 'treatment'
+
+export type Experiment = {
+  id: string
+  /** 实验流量占比 0..100；只有落进实验的才分 control/treatment */
+  traffic: number
+  /** 对照组占比，通常 50 */
+  split: number
+}
+
+/** 纯函数：同样的 (userId, exp) 永远得到同样的结果，刷新/多标签页都一致 */
+export function assign(userId: string, exp: Experiment): Variant | null {
+  const bucket = fnv1a(`${exp.id}:${userId}`) % 10000
+  if (bucket >= exp.traffic * 100) return null // 不在实验流量里
+  return bucket % 100 < exp.split ? 'control' : 'treatment'
 }
 ```
-```tsx
+`lib/track.ts`
+```ts
+// 埋点三条纪律：不抛错、不等待、不阻塞渲染。
+// sendBeacon 在页面卸载时也能发出；后端不可用时静默丢弃（绝不能让统计把页面搞崩）。
+type Payload = Record<string, string | number | boolean>
+
+export function track(event: string, props: Payload, dedupeKey?: string): void {
+  try {
+    if (dedupeKey && seen.has(dedupeKey)) return
+    if (dedupeKey) seen.add(dedupeKey)
+
+    const body = JSON.stringify({ event, props, ts: Date.now(), url: location.pathname })
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/collect', new Blob([body], { type: 'application/json' }))
+      return
+    }
+    void fetch('/api/collect', { method: 'POST', body, keepalive: true }).catch(() => {})
+  } catch {
+    // 统计失败与业务无关，吞掉
+  }
+}
+
+/** 同一次会话内的曝光去重（刷新页面 = 新会话，会重新上报一次） */
 const seen = new Set<string>()
+```
+`hooks/useExperiment.ts`
+```tsx
+'use client'
+import { useEffect, useMemo } from 'react'
+import { assign, type Experiment, type Variant } from '@/lib/experiment'
+import { track } from '@/lib/track'
 
-export function track(event: string, props: Record<string, unknown>) {
-  const key = `${event}:${JSON.stringify(props)}`
-  if (event === "exposure" && seen.has(key)) return
-  if (event === "exposure") seen.add(key)
+/**
+ * 用法：const variant = useExperiment(EXP_CHECKOUT, userId)
+ * 曝光在 effect 里上报 —— 不能在 render 里发请求（StrictMode 会双跑、并发渲染会重复）。
+ */
+export function useExperiment(exp: Experiment, userId: string | null): Variant | null {
+  const variant = useMemo(() => (userId ? assign(userId, exp) : null), [userId, exp])
 
-  const body = JSON.stringify({ event, props, ts: Date.now() })
-  if (navigator.sendBeacon) {
-    navigator.sendBeacon("/api/track", new Blob([body], { type: "application/json" }))
-  } else {
-    void fetch("/api/track", { method: "POST", body, keepalive: true }).catch(() => {})
-  }
+  useEffect(() => {
+    if (!variant) return
+    // dedupeKey 用 sessionStorage 语义的 Set（模块级）：
+    // 同一会话内重复挂载不会重复上报，刷新后是新会话，会再报一次
+    track('experiment_exposure', { experimentId: exp.id, variant }, `exp:${exp.id}:${variant}`)
+  }, [exp.id, variant])
+
+  return variant
 }
 ```
+`components/CheckoutButton.tsx`
 ```tsx
-const variant = useMemo(() => bucket(user.id, "landing-v2"), [user.id])
-useEffect(() => { track("exposure", { experimentId: "landing-v2", variant }) }, [variant])
+// 实验组差异只体现在文案与顺序这类可灰度的东西上，不要用它改业务主流程
+export function CheckoutButton({ variant }: { variant: Variant | null }) {
+  const label = variant === 'treatment' ? '立即下单 · 免运费' : '提交订单'
+  return (
+    <button
+      onClick={() => {
+        track('checkout_click', { variant: variant ?? 'none' }) // 点击按次数上报：不去重
+        location.href = '/checkout'
+      }}
+    >
+      {label}
+    </button>
+  )
+}
 ```
 :::
 

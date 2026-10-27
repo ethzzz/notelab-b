@@ -56,31 +56,114 @@ CREATE TABLE orders (
 
 ## 参考实现
 
-:::solution 上下文 + 拦截器
+:::solution 关键实现：租户上下文 + SQL 自动注入 + 超管跨租户留痕
+`TenantContext.java`
 ```java
+/** 请求级租户上下文。必须在 finally 里 clear —— 线程池复用会把租户带到下一个请求。 */
 public final class TenantContext {
-    private static final ThreadLocal<Long> CURRENT = new ThreadLocal<>();
-    public static void set(long id) { CURRENT.set(id); }
-    public static Long get() { return CURRENT.get(); }
-    public static void clear() { CURRENT.remove(); }
-}
+    private static final ThreadLocal<Long> TENANT = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> CROSS = ThreadLocal.withInitial(() -> false);
 
-// 过滤器：从会话取 tenantId，放进 ThreadLocal，请求结束清理
+    public static void set(Long tenantId) { TENANT.set(tenantId); }
+    public static Long get() { return TENANT.get(); }
+    public static boolean crossTenant() { return Boolean.TRUE.equals(CROSS.get()); }
+    public static void enableCrossTenant() { CROSS.set(true); }
+
+    public static void clear() {
+        TENANT.remove();
+        CROSS.remove();     // 两个都要清，漏一个就是越权
+    }
+}
+```
+`TenantFilter.java`
+```java
+/** 从会话里取 tenantId 放进上下文；用完必清。 */
+@Component
 public class TenantFilter extends OncePerRequestFilter {
-    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain) {
+    @Override
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse resp, FilterChain chain)
+            throws ServletException, IOException {
         try {
-            TenantContext.set(session.tenantId(req));
-            chain.doFilter(req, res);
+            Map<String, Object> me = AuthUtil.user(req);
+            if (me != null && me.get("tenant_id") instanceof Number n) {
+                TenantContext.set(n.longValue());
+            }
+            chain.doFilter(req, resp);
         } finally {
             TenantContext.clear();
         }
     }
 }
 ```
+`TenantLineInnerInterceptor.java`
 ```java
-// 查询：条件里显式带上（或用 MP 的 TenantLineHandler 自动拼）
-List<Order> list = orderMapper.selectList(
-        new LambdaQueryWrapper<Order>().eq(Order::getTenantId, TenantContext.get()));
+/**
+ * 自动给所有业务表加 tenant_id 条件（MyBatis-Plus 的租户插件）。
+ * 白名单里的表不加：全局表（字典、地区）和审计表本身就是跨租户的。
+ */
+@Bean
+public MybatisPlusInterceptor mybatisPlusInterceptor() {
+    MybatisPlusInterceptor it = new MybatisPlusInterceptor();
+    it.addInnerInterceptor(new TenantLineInnerInterceptor(new TenantLineHandler() {
+        @Override
+        public Expression getTenantId() {
+            Long t = TenantContext.get();
+            // 拿不到租户时用 -1：让查询必然为空，而不是暴露全表
+            return new LongValue(t == null ? -1L : t);
+        }
+
+        @Override
+        public boolean ignoreTable(String tableName) {
+            // 超管显式开跨租户时全部放行；白名单表永远不加工
+            return TenantContext.crossTenant()
+                    || Set.of("sys_dict", "region", "audit_log").contains(tableName);
+        }
+    }));
+    return it;
+}
+```
+`CrossTenantAspect.java`
+```java
+/** 跨租户视图必须留痕：谁开的、查了什么，写审计表 */
+@Aspect
+@Component
+public class CrossTenantAspect {
+    private final AuditLogDao audit;
+
+    @Around("@annotation(CrossTenant)")
+    public Object around(ProceedingJoinPoint pjp) throws Throwable {
+        // 切面里拿当前请求：AuthUtil 的入参就是 HttpServletRequest，没有无参版本
+        HttpServletRequest req = ((ServletRequestAttributes)
+                RequestContextHolder.currentRequestAttributes()).getRequest();
+        Map<String, Object> me = AuthUtil.user(req);
+        if (me == null || !"super_admin".equals(me.get("role"))) {
+            throw new BizException(403, "只有平台超管可以跨租户查看");
+        }
+        TenantContext.enableCrossTenant();
+        audit.write(String.valueOf(me.get("id")), "CROSS_TENANT", pjp.getSignature().toShortString());
+        return pjp.proceed();
+    }
+}
+```
+`schema.sql`
+```sql
+-- 业务表统一带 tenant_id，并把唯一键带上租户，避免跨租户撞键
+CREATE TABLE orders (
+  id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+  tenant_id  BIGINT NOT NULL,
+  order_no   VARCHAR(64) NOT NULL,
+  amount     BIGINT NOT NULL,
+  UNIQUE KEY uk_tenant_no (tenant_id, order_no),
+  KEY idx_tenant (tenant_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE audit_log (
+  id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+  actor_id   VARCHAR(64) NOT NULL,
+  action     VARCHAR(64) NOT NULL,
+  detail     VARCHAR(512) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
 ```
 :::
 

@@ -67,36 +67,122 @@ CREATE TABLE metric_rollup (
 
 ## 参考实现
 
-:::solution 批量插入 + upsert 累加
+:::solution 关键实现：事件去重 → 分钟桶 upsert → 查询只扫 rollup
+`ingest.go`
 ```go
-func (s *Store) Ingest(ctx context.Context, events []Event) (accepted, dup int, err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, 0, err
+// 批量：一条坏数据不能拖垮整批。先解成合法事件，再单条插入并把错误按行收集
+func (h *Handler) Ingest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Events []Event `json:"events"`
 	}
-	defer tx.Rollback()
-
-	for _, e := range events {
-		res, err := tx.ExecContext(ctx,
-			`INSERT IGNORE INTO event_raw (event_id, name, uid, ts) VALUES (?, ?, ?, ?)`,
-			e.EventID, e.Name, e.UID, e.TS)
-		if err != nil {
-			return 0, 0, err
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 { // 已存在，跳过聚合
-			dup++
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil {
+		http.Error(w, `{"error":"bad body"}`, http.StatusBadRequest)
+		return
+	}
+	var accepted, duplicated int
+	var failures []string
+	for _, e := range req.Events {
+		if err := e.Validate(); err != nil {
+			failures = append(failures, e.EventID+": "+err.Error())
 			continue
 		}
-		bucket := e.TS.Truncate(time.Minute)
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO metric_rollup (name, bucket, cnt) VALUES (?, ?, 1)
-			 ON DUPLICATE KEY UPDATE cnt = cnt + 1`, e.Name, bucket); err != nil {
-			return 0, 0, err
+		ok, err := h.store.SaveEvent(r.Context(), e)
+		switch {
+		case err != nil:
+			failures = append(failures, e.EventID+": "+err.Error())
+		case !ok:
+			duplicated++ // eventId 已存在，不算错
+		default:
+			accepted++
 		}
-		accepted++
 	}
-	return accepted, dup, tx.Commit()
+	writeJSON(w, map[string]any{"accepted": accepted, "duplicated": duplicated, "failed": failures})
+}
+
+// 去重靠唯一索引：INSERT IGNORE 返回 0 行即为重复，比先 SELECT 再 INSERT 少一次往返、也没有竞态
+func (s *Store) SaveEvent(ctx context.Context, e Event) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT IGNORE INTO metrics_raw (event_id, name, ts, payload)
+		VALUES (?, ?, ?, ?)`, e.EventID, e.Name, e.Ts, e.Payload)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+```
+`rollup.go`
+```go
+// 预聚合：按「事件名 + 分钟」累加。ON DUPLICATE KEY UPDATE 让并发写同一个桶也是安全的
+// （MySQL 会加行锁，后到的等前者提交后继续累加）
+func rollupBatch(ctx context.Context, tx *sql.Tx, events []Event) error {
+	type bucket struct {
+		name     string
+		minute   int64
+		count    int64
+		uniqSeen map[string]struct{}
+	}
+	agg := map[string]*bucket{}
+	for _, e := range events {
+		minute := e.Ts.Truncate(time.Minute).Unix()
+		k := e.Name + "|" + strconv.FormatInt(minute, 10)
+		b, ok := agg[k]
+		if !ok {
+			b = &bucket{name: e.Name, minute: minute, uniqSeen: map[string]struct{}{}}
+			agg[k] = b
+		}
+		b.count++
+		b.uniqSeen[e.VisitorID] = struct{}{}
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO metric_rollup (name, minute, pv, uv)
+		VALUES (?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE pv = pv + VALUES(pv), uv = uv + VALUES(uv)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, b := range agg {
+		if _, err := stmt.ExecContext(ctx, b.name, b.minute, b.count, len(b.uniqSeen)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+```
+`query.go`
+```go
+// 查 24 小时分时：只扫 rollup（≤1440 行），永远不碰原始表
+// 缺桶补零在 SQL 外用 map 填，避免用复杂的递归 CTE
+func (s *Store) Hourly(ctx context.Context, name string, from, to time.Time) ([]Point, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT UNIX_TIMESTAMP(DATE_FORMAT(FROM_UNIXTIME(minute*60), '%Y-%m-%d %H:00:00')) AS h,
+		       SUM(pv) AS pv, SUM(uv) AS uv
+		  FROM metric_rollup
+		 WHERE name = ? AND minute >= ? AND minute < ?
+		 GROUP BY h ORDER BY h`, name, from.Unix(), to.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	got := map[int64]Point{}
+	for rows.Next() {
+		var p Point
+		if err := rows.Scan(&p.Ts, &p.PV, &p.UV); err != nil {
+			return nil, err
+		}
+		got[p.Ts] = p
+	}
+	// 补零：图上少一段和「那小时真的是 0」必须能区分
+	out := make([]Point, 0, 24)
+	for t := from; t.Before(to); t = t.Add(time.Hour) {
+		p, ok := got[t.Unix()]
+		if !ok {
+			p = Point{Ts: t.Unix()}
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 ```
 :::

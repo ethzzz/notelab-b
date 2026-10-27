@@ -78,26 +78,141 @@ CREATE TABLE flow_log (
 
 ## 参考实现
 
-:::solution 条件更新 + 会签计数
+:::solution 关键实现：条件更新做状态机，会签靠投票表 + 计数，撤回是状态迁移
+`schema.sql`
+```sql
+CREATE TABLE approval_instance (
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  biz_key     VARCHAR(64) NOT NULL,            -- 幂等：同一业务单只允许一个实例
+  status      ENUM('RUNNING','APPROVED','REJECTED','WITHDRAWN') NOT NULL DEFAULT 'RUNNING',
+  stage       INT NOT NULL DEFAULT 1,          -- 当前级别
+  version     INT NOT NULL DEFAULT 0,          -- 乐观锁，防并发流转
+  deadline_at DATETIME NULL,
+  UNIQUE KEY uk_biz (biz_key)
+) ENGINE=InnoDB;
+
+CREATE TABLE approval_task (
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  instance_id BIGINT NOT NULL,
+  stage       INT NOT NULL,
+  approver_id BIGINT NOT NULL,
+  status      ENUM('PENDING','APPROVED','REJECTED','EXPIRED','CANCELLED') NOT NULL DEFAULT 'PENDING',
+  acted_at    DATETIME NULL,
+  UNIQUE KEY uk_task (instance_id, stage, approver_id)   -- 同一人同级别只有一票
+) ENGINE=InnoDB;
+```
+`ApprovalService.java`
 ```java
-@Transactional
-public void approve(long flowId, long taskId, long actor, String comment) {
-    // 只有 PENDING 且 assignee 是自己才能处理
-    int updated = taskMapper.markDone(taskId, actor);
-    if (updated == 0) throw new ConflictException("任务已处理或无权处理");
+/** 会签 + 状态机：所有流转都用「带条件的 UPDATE」推进，不先查再改。 */
+@Service
+public class ApprovalService {
+    private final JdbcClient db;
 
-    logMapper.append(flowId, actor, "APPROVE", comment);
+    public ApprovalService(JdbcClient db) { this.db = db; }
 
-    int pending = taskMapper.countPending(flowId, currentLevel);
-    if (pending > 0) return;                 // 会签未满，等待其他人
+    /**
+     * 投一票。返回 false 表示这一票无效（已被处理/已撤回/任务不存在）—— 上层映射成 409。
+     * 三件事在一个事务里：占住任务 → 记票 → 判断本级别是否全部通过 → 推进或结束。
+     */
+    @Transactional
+    public boolean vote(long instanceId, int stage, long approverId, boolean approve) {
+        // ① 原子占住任务：只有 PENDING 能被改，并发点两次只有一次拿到 1 行
+        int claimed = db.sql("""
+                UPDATE approval_task SET status = ?, acted_at = NOW()
+                 WHERE instance_id = ? AND stage = ? AND approver_id = ? AND status = 'PENDING'
+                """)
+                .params(approve ? "APPROVED" : "REJECTED", instanceId, stage, approverId)
+                .update();
 
-    flowMapper.advanceLevel(flowId);          // 进入下一级或置为 APPROVED
+        if (claimed == 0) return false;
+
+        // ② 一票否决：直接终止实例（同样带 status 条件，防撤回后被覆盖）
+        if (!approve) {
+            db.sql("""
+                UPDATE approval_instance SET status = 'REJECTED', version = version + 1
+                 WHERE id = ? AND status = 'RUNNING'
+                """).param(instanceId).update();
+            return true;
+        }
+
+        // ③ 会签判定：本级别还剩几个 PENDING
+        Integer remaining = db.sql("""
+                SELECT COUNT(*) FROM approval_task
+                 WHERE instance_id = ? AND stage = ? AND status = 'PENDING'
+                """).params(instanceId, stage).query(Integer.class).single();
+
+        if (remaining != null && remaining > 0) {
+            return true; // 还没投完，等其他人
+        }
+
+        // ④ 全部通过 → 要么进下一级（生成新任务），要么整单通过
+        int nextStage = stage + 1;
+        Integer nextCount = db.sql("SELECT COUNT(*) FROM approval_stage_approver WHERE stage = ?")
+                .param(nextStage).query(Integer.class).single();
+
+        if (nextCount == null || nextCount == 0) {
+            db.sql("""
+                UPDATE approval_instance SET status = 'APPROVED', version = version + 1
+                 WHERE id = ? AND status = 'RUNNING'
+                """).param(instanceId).update();
+        } else {
+            db.sql("""
+                INSERT INTO approval_task (instance_id, stage, approver_id)
+                SELECT ?, ?, approver_id FROM approval_stage_approver WHERE stage = ?
+                """).params(instanceId, nextStage, nextStage).update();
+            db.sql("UPDATE approval_instance SET stage = ? WHERE id = ? AND status = 'RUNNING'")
+                    .params(nextStage, instanceId).update();
+        }
+        return true;
+    }
+
+    /** 撤回：只允许第一级且无人处理过。撤回后原待办全部作废，再点通过就是 409。 */
+    @Transactional
+    public boolean withdraw(long instanceId, long applicantId) {
+        int moved = db.sql("""
+                UPDATE approval_instance SET status = 'WITHDRAWN', version = version + 1
+                 WHERE id = ? AND status = 'RUNNING' AND stage = 1
+                   AND NOT EXISTS (SELECT 1 FROM approval_task t
+                                    WHERE t.instance_id = approval_instance.id
+                                      AND t.status <> 'PENDING')
+                """).param(instanceId).update();
+        if (moved == 0) return false;
+        db.sql("""
+                UPDATE approval_task SET status = 'CANCELLED'
+                 WHERE instance_id = ? AND status = 'PENDING'
+                """).param(instanceId).update();
+        return true;
+    }
 }
 ```
+`ApprovalController.java`
 ```java
-// 撤回：实例条件更新 + 未完成任务批量取消
-if (flowMapper.withdraw(flowId, applicant) == 0) throw new ConflictException("不可撤回");
-taskMapper.cancelPending(flowId);
+/** 409 语义：这一票没生效（重复点击、已被别人处理、实例已撤回）。前端据此刷新列表。 */
+@PostMapping("/api/approvals/{id}/vote")
+public ResponseEntity<?> vote(@PathVariable long id,
+                              @RequestBody VoteReq req,
+                              HttpServletRequest request) {
+    Map<String, Object> me = AuthUtil.user(request);
+    if (me == null) return AuthUtil.unauth();
+    long uid = ((Number) me.get("id")).longValue();
+    boolean ok = service.vote(id, req.stage(), uid, req.approve());
+    if (!ok) return ResponseEntity.status(409).body(Map.of("error", "该任务已被处理或已撤回"));
+    return ResponseEntity.ok(Map.of("ok", true));
+}
+```
+`TimeoutJob.java`
+```java
+/** 超时只提醒不自动通过：把 PENDING 且过期的任务打个标记，交给页面筛选 */
+@Scheduled(fixedDelay = 60_000)
+public void markTimeout() {
+    // 不改 status：改了会让「超时」和「已处理」混淆，也无法再投票
+    int n = db.sql("""
+            UPDATE approval_task t JOIN approval_instance i ON i.id = t.instance_id
+               SET t.overdue = 1
+             WHERE t.status = 'PENDING' AND i.deadline_at < NOW() AND t.overdue = 0
+            """).update();
+    if (n > 0) log.info("[approval] {} 条任务超时", n);
+}
 ```
 :::
 

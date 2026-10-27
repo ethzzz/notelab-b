@@ -44,57 +44,117 @@ middleware 读不到数据库（边缘限制），所以它只能做「有没有
 
 ## 参考实现
 
-:::solution 路由 + middleware + 三层守卫
+:::solution 关键实现：middleware 只做认证与重定向，授权与数据过滤放服务端
+`middleware.ts`
 ```ts
-// middleware.ts：只做登录重定向
+import { NextResponse, type NextRequest } from 'next/server'
+
+/**
+ * middleware 只做两件事：有没有会话、目标路径要不要登录。
+ * ⚠️ 不要在 middleware 里查库做成员校验（Edge 运行时 + 每个请求一次查询，贵且不稳）；
+ *    成员关系必须在页面/接口的**服务端**用同一个 orgId 验，见 lib/tenant.ts。
+ */
 export function middleware(req: NextRequest) {
-  if (!req.cookies.get("session")) {
+  const hasSession = req.cookies.has('notelab_session')
+  const { pathname, search } = req.nextUrl
+
+  if (!hasSession && pathname.startsWith('/org')) {
     const url = req.nextUrl.clone()
-    url.pathname = "/login"
-    url.searchParams.set("next", req.nextUrl.pathname)
+    url.pathname = '/login'
+    // 带上回跳地址，登录后回原页（验收第 2 条）
+    url.searchParams.set('next', pathname + search)
     return NextResponse.redirect(url)
   }
   return NextResponse.next()
 }
-export const config = { matcher: ["/org/:path*"] }
+
+export const config = { matcher: ['/org/:path*'] }
 ```
+`lib/tenant.ts`
+```ts
+import { cookies } from 'next/headers'
+import { notFound, redirect } from 'next/navigation'
+import { cache } from 'react'
+
+export type Member = { userId: number; orgId: string; role: 'owner' | 'admin' | 'member' }
+
+/**
+ * 服务端授权：路径里的 orgId + 会话里的 userId → 成员关系。
+ * 用 React 的 cache 包一层：同一个请求里页面与子组件重复调用只查一次库。
+ */
+export const requireMember = cache(async (orgId: string): Promise<Member> => {
+  const session = (await cookies()).get('notelab_session')?.value
+  if (!session) redirect(`/login?next=/org/${orgId}`)
+
+  const res = await fetch(`${process.env.API_BASE}/api/orgs/${orgId}/me`, {
+    headers: { Cookie: `notelab_session=${session}` },
+    cache: 'no-store',
+  })
+  if (res.status === 401) redirect(`/login?next=/org/${orgId}`)
+  if (!res.ok) notFound()   // 非成员 → 404：不要返回 403 告诉攻击者「这个组织存在」
+  return (await res.json()) as Member
+})
+
+export async function requireRole(orgId: string, roles: Member['role'][]): Promise<Member> {
+  const me = await requireMember(orgId)
+  if (!roles.includes(me.role)) notFound()
+  return me
+}
+```
+`app/org/[orgId]/orders/page.tsx`
 ```tsx
-// app/org/[orgId]/layout.tsx：组织级守卫（这里才能查库）
-export default async function OrgLayout({
-  children, params,
-}: { children: React.ReactNode; params: Promise<{ orgId: string }> }) {
-  const { orgId } = await params
-  const user = await requireUser()
-  const member = await db.member.findUnique({ where: { orgId_userId: { orgId, userId: user.id } } })
-  if (!member) notFound()                       // 不暴露「存在但不属于你」
-  return <OrgShell org={member.org} role={member.role}>{children}</OrgShell>
-}
-```
-```ts
-// 数据层：查询强制带 orgId，且 id 与 orgId 一起作为条件
-export async function listOrders(orgId: string, page = 1) {
-  return db.order.findMany({ where: { orgId }, skip: (page - 1) * 20, take: 20 })
-}
+import { requireMember } from '@/lib/tenant'
+import { listOrders } from '@/lib/orders'
 
-export async function getOrder(orgId: string, id: string) {
-  return db.order.findFirst({ where: { id, orgId } })   // 别人的 id 查不到
-}
-```
-```ts
-// 接口层：Route Handler 再判一次角色
-export async function DELETE(req: Request, { params }: { params: Promise<{ orgId: string }> }) {
+export default async function OrgOrders({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params
-  const member = await requireMember(orgId)
-  if (!["owner", "admin"].includes(member.role)) return new Response("forbidden", { status: 403 })
-  ...
+  // 授权先于取数；取数函数强制要求 orgId，从类型上就写不出「不带租户的查询」
+  await requireMember(orgId)
+  const orders = await listOrders(orgId)
+  return <OrdersTable rows={orders} />
 }
 ```
-:::
+`lib/orders.ts`
+```ts
+// 所有查询函数的第一个参数都是 orgId —— 这是最省事的隔离手段：
+// 想把别人的数据查出来，得先改函数签名，代码评审一眼就能看见
+export async function listOrders(orgId: string) {
+  const res = await fetch(`${process.env.API_BASE}/api/orders?orgId=${encodeURIComponent(orgId)}`, {
+    headers: { 'x-internal-token': process.env.INTERNAL_TOKEN! }, // 服务端间调用凭据，浏览器拿不到
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(`orders ${res.status}`)
+  return (await res.json()) as { id: string; amount: number }[]
+}
+```
+`components/OrgSwitcher.tsx`
+```tsx
+'use client'
+import { useRouter } from 'next/navigation'
+import { useTransition } from 'react'
 
-:::error 切换组织后数据没变
-**现象**：点了切换，侧边栏变了，列表还是旧组织的数据。
-**原因**：列表是客户端组件里 `useEffect` 拉的一次数据，组织变了但没重新请求；或者路由缓存命中了旧参数。
-**改法**：把数据获取放回服务端组件（`params` 变化会重新渲染），客户端只保留交互；必要时 `router.refresh()`。
+/** 切换组织：换路径第一段 + refresh 让服务端重新取数（不要在客户端改本地状态冒充） */
+export function OrgSwitcher({ orgs, current }: { orgs: string[]; current: string }) {
+  const router = useRouter()
+  const [pending, start] = useTransition()
+
+  return (
+    <select
+      value={current}
+      disabled={pending}
+      onChange={(e) => {
+        const next = e.target.value
+        start(() => {
+          router.push(`/org/${next}/orders`)
+          router.refresh()
+        })
+      }}
+    >
+      {orgs.map((o) => <option key={o} value={o}>{o}</option>)}
+    </select>
+  )
+}
+```
 :::
 
 ## 验收脚本

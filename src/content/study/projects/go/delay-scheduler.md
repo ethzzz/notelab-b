@@ -62,49 +62,118 @@ CREATE TABLE schedule (
 
 ## 参考实现
 
-:::solution 最小堆 + 启动恢复 + 幂等
+:::solution 关键实现：最小堆 + 到期批量 claim（幂等靠 SQL，不靠内存）
+`scheduler.go`
 ```go
-type item struct {
-	id     string
-	fireAt time.Time
-}
-
+// 最小堆只管「什么时候该看」，真正能不能执行由 DB 的条件更新决定。
+// 这样多副本同时跑也不会重复触发 —— 内存里的堆永远只是加速器，不是权威
 type Scheduler struct {
 	mu   sync.Mutex
-	h    []item
+	heap taskHeap
 	wake chan struct{}
+	db   *sql.DB
 }
 
-func (s *Scheduler) push(it item) {
-	s.mu.Lock()
-	heap.Push(&s, it) // 需实现 heap.Interface
-	s.mu.Unlock()
-	select { case s.wake <- struct{}{}: default: }
-}
-
-func (s *Scheduler) run(ctx context.Context) {
+func (s *Scheduler) Run(ctx context.Context) {
 	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 	for {
-		s.mu.Lock()
-		var next *item
-		if len(s.h) > 0 { n := s.h[0]; next = &n }
-		s.mu.Unlock()
+		next, ok := s.peek()
+		if !ok {
+			select {
+			case <-s.wake:
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+		wait := time.Until(next)
+		if wait < 0 {
+			wait = 0
+		}
+		timer.Reset(wait)
+		select {
+		case <-timer.C:
+			s.fireDue(ctx)
+		case <-s.wake:
+			// 新任务比堆顶更早，重算等待时间
+		case <-ctx.Done():
+			return
+		}
+	}
+}
 
-		if next == nil {
-			select { case <-ctx.Done(): return; case <-s.wake: continue }
-		}
-		d := time.Until(next.fireAt)
-		if d > 0 {
-			timer.Reset(d)
-			select { case <-ctx.Done(): return; case <-timer.C: case <-s.wake: continue }
-		}
-		s.popAndRun(ctx) // 执行时用 id + status 条件更新，保证只执行一次
+// 一次取走所有已到期的任务，批量 claim 减少 DB 往返
+func (s *Scheduler) fireDue(ctx context.Context) {
+	now := time.Now()
+	batch := s.popDue(now, 500)
+	if len(batch) == 0 {
+		return
+	}
+	ids := make([]any, 0, len(batch))
+	for _, t := range batch {
+		ids = append(ids, t.ID)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	// 只有 status=PENDING 的才会被改到 RUNNING，抢不到的自然拿到 0 行
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE delayed_tasks SET status='RUNNING', started_at=NOW()
+		  WHERE id IN (`+placeholders+`) AND status='PENDING'`, ids...)
+	if err != nil {
+		log.Printf("[sched] claim 失败: %v", err)
+		return
+	}
+	n, _ := res.RowsAffected()
+	log.Printf("[sched] 到期 %d 条，claim 成功 %d 条", len(batch), n)
+	// 执行交给 worker 池：慢任务不能阻塞调度循环
+	for _, t := range batch {
+		s.pool.Submit(func() { s.execute(ctx, t) })
 	}
 }
 ```
+`recover.go`
 ```go
-// 执行前先抢占：UPDATE schedule SET status='RUNNING' WHERE id=? AND status='PENDING'
-// 影响行数为 0 → 已被别人执行，直接跳过（幂等）
+// 重启恢复：把库里「未到期 + 已过期但没执行」的任务一起装回堆。
+// 已过期的那批要**立刻**执行（不能等到下一个周期），否则 kill -9 之后就永远漏了
+func (s *Scheduler) Recover(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, run_at FROM delayed_tasks
+		 WHERE status = 'PENDING' AND run_at <= NOW() + INTERVAL 24 HOUR`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var backfill int
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.RunAt); err != nil {
+			return err
+		}
+		if t.RunAt.Before(time.Now()) {
+			backfill++
+		}
+		s.push(t)
+	}
+	log.Printf("[sched] 恢复 %d 条（其中已过期 %d 条，会立即触发）", len(s.heap), backfill)
+	return rows.Err()
+}
+```
+`schema.sql`
+```sql
+CREATE TABLE delayed_tasks (
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  biz_key     VARCHAR(128) NOT NULL,          -- 业务幂等键：同一 id 只能落一条
+  kind        VARCHAR(64)  NOT NULL,
+  payload     JSON         NOT NULL,
+  run_at      DATETIME(3)  NOT NULL,
+  status      ENUM('PENDING','RUNNING','DONE','FAILED') NOT NULL DEFAULT 'PENDING',
+  attempts    INT NOT NULL DEFAULT 0,
+  last_error  VARCHAR(512) NULL,
+  started_at  DATETIME(3) NULL,
+  created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uk_biz (biz_key),
+  KEY idx_due (status, run_at)
+) ENGINE=InnoDB;
 ```
 :::
 

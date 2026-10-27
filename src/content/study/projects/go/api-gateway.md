@@ -60,44 +60,116 @@ Header: X-Request-Id     → 无则生成，写回响应
 
 ## 参考实现
 
-:::solution 中间件链 + 令牌桶 + 上游超时
+:::solution 关键实现：限流、超时、灰度全在中间件链里，顺序不能乱
+`gateway.go`
 ```go
-func chain(h http.Handler, ms ...func(http.Handler) http.Handler) http.Handler {
-	for i := len(ms) - 1; i >= 0; i-- {
-		h = ms[i](h)
-	}
-	return h
+// 顺序：RequestID → Auth+配额 → 灰度 → 超时 → 反代
+// 反向依赖不可行：配额要在超时**之前**判（否则慢上游会先吃掉配额之外的连接）
+func Chain(next http.Handler, g *Gateway) http.Handler {
+	return withRequestID(withQuota(g)(withGray(g)(withUpstreamTimeout(800*time.Millisecond, next))))
 }
 
-func withTimeout(next http.Handler, d time.Duration) http.Handler {
+func withRequestID(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-Id")
+		if id == "" {
+			id = uuid.NewString()
+		}
+		// 透传给上游，日志侧只认这一个 id
+		r.Header.Set("X-Request-Id", id)
+		w.Header().Set("X-Request-Id", id)
+		h.ServeHTTP(w, r)
+	})
+}
+
+func withQuota(g *Gateway) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := r.Header.Get("X-Api-Key")
+			c, ok := g.clients[key]
+			if !ok {
+				http.Error(w, `{"error":"invalid key"}`, http.StatusUnauthorized)
+				return
+			}
+			// 每个 key 独立令牌桶：超了只影响这个调用方
+			if !c.bucket.Allow() {
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, `{"error":"rate limited"}`, http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// 灰度：按客户标记分流，比例与版本都来自配置，不在代码里写死
+func withGray(g *Gateway) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			target := g.upstreamV1
+			if g.grayEnabled(r.Header.Get("X-Api-Key")) {
+				target = g.upstreamV2
+			}
+			ctx := context.WithValue(r.Context(), ctxKeyUpstream{}, target)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// 超时：context 取消后反代会中断上游读，连接池不再被占
+func withUpstreamTimeout(d time.Duration, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), d)
 		defer cancel()
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-func withRateLimit(next http.Handler, limiter *Limiter) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("X-Api-Key")
-		if !limiter.Allow(key) {
-			w.Header().Set("Retry-After", "2")
-			http.Error(w, `{"error":"rate limited"}`, http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
+		h.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 ```
+`ratelimit.go`
 ```go
-// 上游转发：带上 requestID 与超时
-proxy := httputil.NewSingleHostReverseProxy(upstream)
-proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
-		w.WriteHeader(http.StatusGatewayTimeout)
+// 令牌桶：容量 burst，匀速补充 rate/s。单机够用；多副本要换 Redis（INCR + 过期）
+type TokenBucket struct {
+	mu     sync.Mutex
+	tokens float64
+	burst  float64
+	rate   float64 // 每秒补充
+	last   time.Time
+}
+
+func (b *TokenBucket) Allow() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	b.tokens = math.Min(b.burst, b.tokens+now.Sub(b.last).Seconds()*b.rate)
+	b.last = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+```
+`proxy.go`
+```go
+// 上游超时映射成 504（不是 500）：值班一眼能分辨「上游慢」和「网关自己错」
+func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
+	target := r.Context().Value(ctxKeyUpstream{}).(string)
+	req, _ := http.NewRequestWithContext(r.Context(), r.Method, target+r.URL.Path, r.Body)
+	req.Header = r.Header.Clone()
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			http.Error(w, `{"error":"upstream timeout"}`, http.StatusGatewayTimeout)
+			return
+		}
+		http.Error(w, `{"error":"bad gateway"}`, http.StatusBadGateway)
 		return
 	}
-	w.WriteHeader(http.StatusBadGateway)
+	defer resp.Body.Close()
+	copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 ```
 :::

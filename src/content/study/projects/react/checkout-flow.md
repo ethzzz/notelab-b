@@ -51,40 +51,105 @@ POST /api/orders  {sku, qty, requestId}
 
 ## 参考实现
 
-:::solution requestId + 提交锁 + 错误映射
+:::solution 关键实现：requestId 一次一单 + 在途守卫 + 错误码映射
+`hooks/useCheckout.ts`
+```ts
+'use client'
+import { useCallback, useRef, useState } from 'react'
+
+type Status = 'idle' | 'submitting' | 'success' | 'error'
+
+/** 失败原因必须能落到「可行动」的文案上，不能一律「系统错误」 */
+export type CheckoutError = 'OUT_OF_STOCK' | 'NETWORK' | 'SERVER' | 'UNKNOWN'
+
+const newRequestId = () =>
+  // 优先用 crypto.randomUUID；老浏览器退回时间戳 + 随机串（同一毫秒也不会撞）
+  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+export function useCheckout(sku: string) {
+  const [status, setStatus] = useState<Status>('idle')
+  const [error, setError] = useState<CheckoutError | null>(null)
+  const [orderId, setOrderId] = useState<string | null>(null)
+
+  // 两个 ref 是关键：
+  //   requestId  —— 一单一个，重试复用、成功后换新；刷新页面会重新生成（满足验收第 3 条）
+  //   inFlight   —— 同步守卫。只用 state 判 loading 会有「点两次都在同一个事件循环里读不到新状态」的窗口
+  const requestId = useRef<string>(newRequestId())
+  const inFlight = useRef(false)
+
+  const submit = useCallback(async () => {
+    if (inFlight.current) return            // 连点 5 次：只有第一次发请求
+    inFlight.current = true
+    setStatus('submitting')
+    setError(null)
+
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku, qty: 1, requestId: requestId.current }),
+        // 超时要有上限，否则网络半断时按钮永远转圈
+        signal: AbortSignal.timeout(10_000),
+      })
+
+      if (res.ok) {
+        const j = (await res.json()) as { orderId: string }
+        setOrderId(j.orderId)
+        setStatus('success')
+        requestId.current = newRequestId()  // 成功后才能换：失败重试必须复用同一个 id
+        return
+      }
+      // 409 = 库存不足（业务冲突），503/500 才是系统问题；两者文案完全不同
+      setError(res.status === 409 ? 'OUT_OF_STOCK' : res.status >= 500 ? 'SERVER' : 'UNKNOWN')
+      setStatus('error')
+    } catch (e) {
+      // 超时与断网都归到 NETWORK：用户唯一能做的是重试，而重试复用同一个 requestId 是安全的
+      setError(e instanceof DOMException && e.name === 'TimeoutError' ? 'NETWORK' : 'NETWORK')
+      setStatus('error')
+    } finally {
+      inFlight.current = false
+    }
+  }, [sku])
+
+  return { status, error, orderId, submit, requestId: requestId.current }
+}
+```
+`lib/checkout-error.ts`
+```ts
+// 错误码 → 用户能看懂的一句话 + 是否可以重试。别在组件里写 if/else 文案，否则三处不一致
+export const CHECKOUT_ERROR_TEXT: Record<string, { text: string; retryable: boolean }> = {
+  OUT_OF_STOCK: { text: '库存不足，已为你保留 15 分钟，可稍后再试', retryable: false },
+  NETWORK: { text: '网络不稳定，重试不会重复下单', retryable: true },
+  SERVER: { text: '服务暂时不可用，请稍后重试', retryable: true },
+  UNKNOWN: { text: '下单失败，请刷新后重试', retryable: true },
+}
+```
+`components/SubmitBar.tsx`
 ```tsx
-const KEY = `order-req-${sku}`
+'use client'
+export function SubmitBar({ stock, status, error, submit }: {
+  stock: number
+  status: 'idle' | 'submitting' | 'success' | 'error'
+  error: string | null
+  submit: () => void
+}) {
+  const soldOut = stock <= 0
+  const busy = status === 'submitting'
 
-function getRequestId() {
-  const saved = sessionStorage.getItem(KEY)
-  if (saved) return saved
-  const id = crypto.randomUUID()
-  sessionStorage.setItem(KEY, id)
-  return id
+  return (
+    <div className="fixed inset-x-0 bottom-0 border-t bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {error && <p className="mb-2 text-sm text-red-600">{CHECKOUT_ERROR_TEXT[error]?.text}</p>}
+      <button
+        // 两个禁用条件都要有：售罄是业务态，busy 是交互态。只判 busy 会让售罄还能点
+        disabled={soldOut || busy}
+        onClick={submit}
+        className="h-11 w-full rounded-lg bg-black text-white disabled:bg-zinc-300"
+      >
+        {soldOut ? '已售罄' : busy ? '提交中…' : status === 'error' ? '重试' : '提交订单'}
+      </button>
+    </div>
+  )
 }
-
-const [submitting, setSubmitting] = useState(false)
-
-async function submit() {
-  if (submitting) return
-  setSubmitting(true)
-  try {
-    const res = await apiJson<{ orderId: string }>("/api/orders", {
-      method: "POST",
-      body: JSON.stringify({ sku, qty, requestId: getRequestId() }),
-    })
-    sessionStorage.removeItem(KEY)          // 成功后才清
-    router.push(`/orders/${res.orderId}`)
-  } catch (e) {
-    message.error(toMessage(e))             // 409 → 库存不足；网络 → 请检查网络
-  } finally {
-    setSubmitting(false)
-  }
-}
-
-<button disabled={stock === 0 || submitting} onClick={submit}>
-  {stock === 0 ? "已售罄" : submitting ? "提交中…" : "提交订单"}
-</button>
 ```
 :::
 

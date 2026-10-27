@@ -61,35 +61,87 @@ CREATE TABLE config_item (
 
 ## 参考实现
 
-:::solution 版本 + 订阅广播 + 本地兜底
+:::solution 关键实现：版本号 CAS + 长轮询推送 + 本地快照兜底
+`store.go`
 ```go
-type Store struct {
-	mu   sync.RWMutex
-	cur  map[string]Value // key = app|env
-	subs map[string][]chan Value
-}
-
-func (s *Store) Put(app, env string, values map[string]string, base int64) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := app + "|" + env
-	cur := s.cur[key]
-	if cur.Version != base {
-		return 0, ErrVersionConflict
+// 更新：revision 严格单调。用 CAS（WHERE revision = base）而不是自增读写，
+// 两个管理员同时改，后到的那个拿 409 —— 自增会静默覆盖别人的修改
+func (s *Store) Put(ctx context.Context, key, value string, base int64, operator string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE config_items
+		   SET value = ?, revision = revision + 1, operator = ?, updated_at = NOW()
+		 WHERE k = ? AND revision = ?`, value, operator, key, base)
+	if err != nil {
+		return 0, err
 	}
-	next := Value{Version: cur.Version + 1, Values: values}
-	s.cur[key] = next
-	for _, ch := range s.subs[key] {
-		select { case ch <- next: default: } // 慢消费者丢帧，不阻塞写入
+	if n, _ := res.RowsAffected(); n == 0 {
+		// 区分「不存在」与「版本冲突」，前端才能给出正确提示
+		var cur int64
+		if err := s.db.QueryRowContext(ctx, `SELECT revision FROM config_items WHERE k = ?`, key).Scan(&cur); err == nil {
+			return cur, ErrVersionConflict
+		}
+		return 0, ErrNotFound
 	}
-	return next.Version, nil
+	var rev int64
+	err = s.db.QueryRowContext(ctx, `SELECT revision FROM config_items WHERE k = ?`, key).Scan(&rev)
+	s.broker.Notify(key, rev)
+	return rev, err
 }
 ```
+`watch.go`
 ```go
-// 启动：先读本地缓存，保证远端挂了也能起
-local, _ := os.ReadFile("/var/lib/app/config.json")
-if local != nil { apply(local) }
-if v, err := client.Fetch(app, env); err == nil { apply(v); saveLocal(v) }
+// 推送两条腿：
+//   ① 长轮询 GET /api/config/watch?key=k&after=rev —— 20s 内没变化就返回空，客户端立刻再连
+//   ② 进程内广播（同一实例的订阅者先到先得）
+// 不能只做 ①（1s 生效要求延迟低）也不能只做 ②（多实例不同步）
+func (s *Store) Watch(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+
+	ch, cancel := s.broker.Subscribe(key)
+	defer cancel()
+
+	ctx, done := context.WithTimeout(r.Context(), 20*time.Second)
+	defer done()
+
+	for {
+		rev, val, ok := s.current(key)
+		if ok && rev > after {
+			writeJSON(w, map[string]any{"revision": rev, "value": val})
+			return
+		}
+		select {
+		case <-ch: // 有新版本，回到循环顶部复核 revision
+		case <-ctx.Done():
+			w.WriteHeader(http.StatusNoContent) // 无变化：客户端立即重连
+			return
+		}
+	}
+}
+```
+`bootstrap.go`
+```go
+// 兜底：启动先读本地快照，配置中心连不上也能起。
+// 快照必须在**每次成功拉取后**原子替换（写 .tmp 再 rename），否则断电会读到半个 JSON
+func LoadOrDefault(ctx context.Context, client *Client, snapshotPath string) (map[string]string, error) {
+	if cfg, err := client.FetchAll(ctx); err == nil {
+		b, _ := json.Marshal(cfg)
+		tmp := snapshotPath + ".tmp"
+		os.WriteFile(tmp, b, 0o600)
+		os.Rename(tmp, snapshotPath)
+		return cfg, nil
+	}
+	b, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return nil, fmt.Errorf("配置中心不可用且无本地快照: %w", err)
+	}
+	var cfg map[string]string
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return nil, fmt.Errorf("快照损坏: %w", err)
+	}
+	log.Printf("[config] 降级为本地快照（%d 项）", len(cfg))
+	return cfg, nil
+}
 ```
 :::
 

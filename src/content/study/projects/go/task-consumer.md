@@ -52,47 +52,115 @@ Consume(msg) error
 
 ## 参考实现
 
-:::solution 消费者骨架（重试 + 退避 + 幂等）
+:::solution 关键实现：可见性超时 + 指数退避 + 幂等键 + 死信，退出时等在途任务
+`consumer.go`
 ```go
-func (w *Worker) handle(ctx context.Context, m Message) error {
-	key := m.BizKey()
-	ok, err := w.idem.Acquire(ctx, key)   // INSERT ... ON DUPLICATE KEY → 已存在返回 false
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil // 已处理过，直接 ack
-	}
-	return w.do(ctx, m)
-}
-
-func (w *Worker) run(ctx context.Context) {
+// 消费模型：Redis Stream（或 SQS）都适用。要点不是队列 API，而是三个不变量：
+//   ① 处理完成才 ack（失败不 ack，让消息重新可见）
+//   ② 幂等键唯一（重复投递只生效一次）
+//   ③ 有上限的重试 + 死信
+func (c *Consumer) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			c.wg.Wait() // 优雅退出：等在途任务处理完再返回
 			return
-		case m, ok := <-w.queue.Consume():
-			if !ok {
-				return
-			}
-			err := w.handle(ctx, m)
-			if err == nil {
-				w.queue.Ack(m)
-				continue
-			}
-			n := m.Attempt() + 1
-			if n > maxAttempts {
-				w.dead.Store(ctx, m, err)   // 死信 + ack
-				w.queue.Ack(m)
-				continue
-			}
-			backoff := time.Duration(1<<uint(n)) * time.Second
-			backoff += time.Duration(rand.Intn(300)) * time.Millisecond // 抖动
-			time.Sleep(backoff)
-			w.queue.Nack(m, n, err)
+		default:
+		}
+
+		msgs, err := c.q.Fetch(ctx, c.batch, 5*time.Second) // 可见性超时 5s
+		if err != nil {
+			log.Printf("[consumer] fetch: %v", err)
+			time.Sleep(time.Second)
+			continue
+		}
+		for _, m := range msgs {
+			m := m
+			c.wg.Add(1)
+			go func() {
+				defer c.wg.Done()
+				c.handle(ctx, m)
+			}()
 		}
 	}
 }
+
+func (c *Consumer) handle(ctx context.Context, m Message) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[consumer] panic on %s: %v", m.ID, r)
+			c.retryOrDead(ctx, m, fmt.Errorf("panic: %v", r))
+		}
+	}()
+
+	// 幂等：先抢唯一键，抢不到说明已经处理过（或正在别处处理）
+	first, err := c.store.ClaimIdempotent(ctx, m.IdempotencyKey)
+	if err != nil {
+		c.retryOrDead(ctx, m, err)
+		return
+	}
+	if !first {
+		c.q.Ack(ctx, m.ID) // 已经生效过，直接 ack 掉，避免无限重投
+		return
+	}
+
+	if err := c.biz.Apply(ctx, m); err != nil {
+		c.retryOrDead(ctx, m, err)
+		return
+	}
+	c.q.Ack(ctx, m.ID)
+}
+```
+`retry.go`
+```go
+// 退避：1s → 2s → 4s → 8s，带抖动（避免所有失败消息同一秒重试打满下游）
+// 超过上限进死信，并把「重试次数 + 最后错误」写回消息，值班能在后台看到
+func (c *Consumer) retryOrDead(ctx context.Context, m Message, cause error) {
+	m.Attempts++
+	m.LastError = cause.Error()
+
+	if m.Attempts >= c.maxAttempts {
+		c.dead.Put(ctx, m)  // 死信表：不丢，等人工/定时补偿
+		c.q.Ack(ctx, m.ID)
+		log.Printf("[consumer] 进死信 id=%s attempts=%d err=%v", m.ID, m.Attempts, cause)
+		return
+	}
+
+	delay := time.Duration(1<<(m.Attempts-1)) * time.Second // 1,2,4,8
+	jitter := time.Duration(rand.Int63n(int64(delay / 2)))
+	// 重新入队（延迟队列由队列侧支持的话更好：直接带 Delay）
+	c.q.Requeue(ctx, m, delay+jitter)
+	c.q.Ack(ctx, m.ID)
+}
+```
+`store.go`
+```go
+// 幂等表：唯一键冲突 = 已处理过。用 INSERT IGNORE 而不是先查
+func (s *Store) ClaimIdempotent(ctx context.Context, key string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT IGNORE INTO consumed_keys (idem_key, created_at) VALUES (?, NOW())`, key)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+```
+`schema.sql`
+```sql
+CREATE TABLE consumed_keys (
+  idem_key   VARCHAR(128) PRIMARY KEY,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE dead_letters (
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  msg_id      VARCHAR(128) NOT NULL,
+  payload     JSON NOT NULL,
+  attempts    INT NOT NULL,
+  last_error  VARCHAR(1024) NOT NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
 ```
 :::
 

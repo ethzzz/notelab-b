@@ -74,27 +74,108 @@ CREATE TABLE reconcile_diff (
 
 ## 参考实现
 
-:::solution 幂等 + 状态机 + 验签（骨架）
+:::solution 关键实现：验签 → 回调幂等 → 状态只前进（CAS）→ 日终差集对账
+`PaymentCallbackService.java`
 ```java
-public void handleCallback(String channel, String body, String signature) {
-    if (!verifier.verify(channel, body, signature)) throw new UnauthorizedException();
+@Service
+public class PaymentCallbackService {
+    private final JdbcClient db;
+    private final ChannelSigner signer;
 
-    Callback cb = parse(body);                       // transactionId / orderId / amount / status
-    Payment p = paymentMapper.findByChannelTx(channel, cb.transactionId());
-    if (p == null) { paymentMapper.insertFromCallback(channel, cb); return; }
-    if (!p.getStatus().equals("INIT")) return;       // 已处理过：直接忽略（幂等）
+    /**
+     * 支付回调。三道闸：验签 → 回调流水幂等 → 状态机单调。
+     * 任何一道不过都返回「已处理」，避免渠道无限重试（但要留日志）。
+     */
+    @Transactional
+    public CallbackResult onPayCallback(RawCallback raw) {
+        // ① 验签：失败必须 401 且**不写任何表**
+        if (!signer.verify(raw.body(), raw.signature())) {
+            throw new BizException(401, "签名校验失败");
+        }
 
-    if (!"PAID".equals(cb.status())) return;         // 只认支付成功
-    if (paymentMapper.markPaid(p.getId()) == 0) return;  // 条件更新：只有 INIT 能变 PAID
-    orderService.markPaid(p.getOrderId());
+        // ② 回调幂等：渠道流水号唯一。重放 10 次只有第一次影响业务
+        int inserted = db.sql("""
+                INSERT IGNORE INTO payment_callback (channel_trade_no, raw_body, received_at)
+                VALUES (?, ?, NOW())
+                """).params(raw.tradeNo(), raw.body()).update();
+        if (inserted == 0) {
+            return CallbackResult.alreadyHandled();
+        }
+
+        // ③ 状态只前进：WHERE status = 'INIT' 保证重复/乱序回调不会把 PAID 改回去
+        int moved = db.sql("""
+                UPDATE payment SET status = 'PAID', paid_at = ?, channel_trade_no = ?
+                 WHERE order_no = ? AND status = 'INIT'
+                """).params(raw.paidAt(), raw.tradeNo(), raw.orderNo()).update();
+
+        if (moved == 0) {
+            // 已经 PAID（或已退款）：不是错误，记录后忽略；绝不能倒退状态
+            log.info("[pay] 忽略非 INIT 状态回调 order={} status={}", raw.orderNo(), statusOf(raw.orderNo()));
+            return CallbackResult.alreadyHandled();
+        }
+
+        // ④ 发货等下游动作放在事务内的一致性点之后；真要做重活建议发消息
+        db.sql("UPDATE orders SET status = 'PAID' WHERE order_no = ? AND status = 'CREATED'")
+                .param(raw.orderNo()).update();
+        return CallbackResult.applied();
+    }
 }
 ```
+`ReconcileJob.java`
 ```java
-// 对账任务：拉渠道账单 → 与本地 payment 差集 → 落 reconcile_diff
-Set<String> local = paymentMapper.txIdsOf(date);
-Set<String> remote = channelClient.billOf(date);
-remote.stream().filter(id -> !local.contains(id))
-      .forEach(id -> diffMapper.insert(date, "CHANNEL_ONLY", id));
+/** 日终对账：两个方向各查一次差集，输出 CHANNEL_ONLY / LOCAL_ONLY */
+@Scheduled(cron = "0 30 2 * * *")
+public void reconcile() {
+    LocalDate day = LocalDate.now().minusDays(1);
+
+    // 渠道有、我们没有：以渠道账单为准，业务上要去补单
+    List<DiffRow> channelOnly = db.sql("""
+            SELECT c.trade_no, c.amount, c.paid_at
+              FROM channel_bill c
+              LEFT JOIN payment p ON p.channel_trade_no = c.trade_no AND p.status = 'PAID'
+             WHERE c.biz_date = ? AND p.id IS NULL
+            """).param(day).query(DiffRow.class).list();
+
+    // 我们有、渠道没有：可能是渠道掉单，需要人工核查
+    List<DiffRow> localOnly = db.sql("""
+            SELECT p.channel_trade_no AS trade_no, p.amount, p.paid_at
+              FROM payment p
+              LEFT JOIN channel_bill c ON c.trade_no = p.channel_trade_no AND c.biz_date = ?
+             WHERE p.status = 'PAID' AND DATE(p.paid_at) = ? AND c.trade_no IS NULL
+            """).params(day, day).query(DiffRow.class).list();
+
+    channelOnly.forEach(d -> report(DiffSide.CHANNEL_ONLY, d));
+    localOnly.forEach(d -> report(DiffSide.LOCAL_ONLY, d));
+    log.info("[reconcile] {} channelOnly={} localOnly={}", day, channelOnly.size(), localOnly.size());
+}
+```
+`schema.sql`
+```sql
+CREATE TABLE payment (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_no          VARCHAR(64) NOT NULL,
+  amount            BIGINT NOT NULL,               -- 分，不用 double
+  status            ENUM('INIT','PAID','REFUNDED') NOT NULL DEFAULT 'INIT',
+  channel_trade_no  VARCHAR(128) NULL,
+  paid_at           DATETIME NULL,
+  UNIQUE KEY uk_order (order_no),
+  KEY idx_channel (channel_trade_no)
+) ENGINE=InnoDB;
+
+-- 回调流水：渠道流水号唯一 = 幂等闸门
+CREATE TABLE payment_callback (
+  channel_trade_no VARCHAR(128) PRIMARY KEY,
+  raw_body         MEDIUMTEXT NOT NULL,
+  received_at      DATETIME NOT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE channel_bill (
+  trade_no  VARCHAR(128) NOT NULL,
+  biz_date  DATE NOT NULL,
+  amount    BIGINT NOT NULL,
+  paid_at   DATETIME NOT NULL,
+  PRIMARY KEY (trade_no, biz_date)
+) ENGINE=InnoDB;
 ```
 :::
 

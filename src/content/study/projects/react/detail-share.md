@@ -46,46 +46,97 @@ GET /api/posts/<slug>        → { title, summary, cover, contentHtml, published
 
 ## 参考实现
 
-:::solution generateMetadata + notFound + 静态参数
+:::solution 关键实现：服务端 metadata + 真 404 + 图片尺寸防 CLS
+`app/posts/[slug]/page.tsx`
 ```tsx
-// src/app/(home)/posts/[slug]/page.tsx
-import { notFound } from "next/navigation"
-import type { Metadata } from "next"
+import { notFound } from 'next/navigation'
+import type { Metadata } from 'next'
+import Image from 'next/image'
+import { getPost } from '@/lib/cms'
 
-type Post = { title: string; summary: string; cover: string; contentHtml: string }
-
-async function getPost(slug: string): Promise<Post | null> {
-  const res = await fetch(`http://127.0.0.1:8001/api/posts/${slug}`, { next: { revalidate: 300 } })
-  if (res.status === 404) return null
-  return res.ok ? res.json() : null
-}
-
+/**
+ * 详情页要「从搜索结果点进来直接看到内容」：数据在服务端取，HTML 里就有正文。
+ * 客户端 fetch + 骨架看起来一样，但首屏是空的，LCP 直接崩。
+ */
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params
   const post = await getPost(slug)
-  if (!post) return { title: "文章不存在" }
+  if (!post) return { title: '文章不存在' }
+
+  // OG 三件套必须齐全，否则聊天工具预览只出链接
   return {
     title: post.title,
     description: post.summary,
-    openGraph: { title: post.title, description: post.summary, images: [{ url: post.cover, width: 1200, height: 630 }] },
+    openGraph: {
+      title: post.title,
+      description: post.summary,
+      type: 'article',
+      images: [{ url: post.cover, width: 1200, height: 630, alt: post.title }],
+    },
+    twitter: { card: 'summary_large_image', title: post.title, images: [post.cover] },
   }
 }
 
-export default async function Page({ params }: { params: Promise<{ slug: string }> }) {
+export default async function PostPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const post = await getPost(slug)
+  // ⚠️ 必须 notFound() 而不是渲染一个「文章不存在」的组件：
+  //    后者返回 200，搜索引擎会收录，用户也拿不到真 404 状态码
   if (!post) notFound()
 
   return (
-    <article className="mx-auto max-w-3xl px-4 py-8">
-      <img src={post.cover} width={1200} height={630} alt="" className="w-full rounded-xl" />
-      <h1 className="mt-6 text-2xl font-semibold">{post.title}</h1>
-      <div className="md-body mt-4" dangerouslySetInnerHTML={{ __html: post.contentHtml }} />
+    <article className="mx-auto max-w-3xl">
+      <h1 className="text-2xl font-bold">{post.title}</h1>
+      <Image
+        src={post.cover}
+        alt=""
+        width={1200}
+        height={630}
+        // 封面在首屏：priority 让它参与预加载；尺寸写死保证图片加载前后不跳
+        priority
+        sizes="(max-width: 768px) 100vw, 768px"
+        className="my-4 h-auto w-full rounded-lg"
+      />
+      <div dangerouslySetInnerHTML={{ __html: post.html }} />
     </article>
   )
 }
 ```
-::: 
+`app/posts/[slug]/not-found.tsx`
+```tsx
+// 友好的 404：给回列表入口，而不是让用户用浏览器后退
+export default function NotFound() {
+  return (
+    <div className="mx-auto max-w-md py-24 text-center">
+      <h1 className="text-xl font-semibold">这篇内容不在了</h1>
+      <p className="mt-2 text-zinc-600">可能已被删除或链接有误。</p>
+      <a className="mt-6 inline-block rounded-lg bg-black px-4 py-2 text-white" href="/posts">
+        回到列表
+      </a>
+    </div>
+  )
+}
+```
+`components/ShareBlock.tsx`
+```tsx
+'use client'
+// 分享按钮：优先用系统分享面板（移动端），桌面退回复制链接
+export function ShareBlock({ title, url }: { title: string; url: string }) {
+  const share = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, url })
+        return
+      } catch {
+        // 用户取消：不是错误，继续走复制
+      }
+    }
+    await navigator.clipboard.writeText(url)
+  }
+  return <button onClick={share} className="rounded border px-3 py-1.5 text-sm">分享</button>
+}
+```
+:::
 
 ## 验收脚本
 

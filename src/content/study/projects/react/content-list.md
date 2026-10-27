@@ -56,43 +56,139 @@ URL 是唯一同时满足「可分享、可刷新、可后退」的状态载体�
 
 ## 参考实现
 
-:::solution useSearchParams + 三态 + 取消请求
-```tsx
-const sp = useSearchParams()
-const router = useRouter()
+:::solution 关键实现：URL 是唯一状态源 + 三态渲染 + 竞态丢弃
+`hooks/useListQuery.ts`
+```ts
+'use client'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { useCallback, useMemo } from 'react'
 
-const cat = sp.get("cat") ?? "all"
-const page = Number(sp.get("page") ?? "1")
-const q = sp.get("q") ?? ""
+export type ListQuery = { cat: string; page: number; keyword: string }
 
-function setParam(key: string, value: string) {
-  const next = new URLSearchParams(sp.toString())
-  if (!value || value === "all" || (key === "page" && value === "1")) next.delete(key)
-  else next.set(key, value)
-  router.replace(`/posts?${next.toString()}`, { scroll: false })
+/**
+ * 列表筛选状态全部放 URL：
+ *   · 分享链接天然可用（验收第 1、2 条）
+ *   · 浏览器后退天然可用（验收第 3 条）—— 用 state 就得自己同步 history，几乎必错
+ * ⚠️ 用 replace 还是 push：筛选变化用 push（要能后退），只改分页页码也用 push，
+ *    但如果只是「滚动加载追加」就不能 push，否则后退一屏一屏退。
+ */
+export function useListQuery(): [ListQuery, (patch: Partial<ListQuery>) => void] {
+  const sp = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+
+  const query = useMemo<ListQuery>(() => ({
+    cat: sp.get('cat') ?? 'all',
+    // 页码要做边界处理：URL 里被手改成 0 或负数时不能把接口打坏
+    page: Math.max(1, Number(sp.get('page') ?? '1') || 1),
+    keyword: sp.get('q') ?? '',
+  }), [sp])
+
+  const setQuery = useCallback((patch: Partial<ListQuery>) => {
+    const next = new URLSearchParams(sp.toString())
+    for (const [k, v] of Object.entries(patch)) {
+      const key = k === 'cat' ? 'cat' : k === 'page' ? 'page' : 'q'
+      if (v === undefined || v === '' || (k === 'page' && v === 1)) next.delete(key)
+      else next.set(key, String(v))
+    }
+    // 改筛选时把页码归 1，否则会停留在不存在的页（空列表 + 页码 7）
+    if ('cat' in patch || 'keyword' in patch) next.delete('page')
+    router.push(`${pathname}?${next.toString()}`)
+  }, [sp, router, pathname])
+
+  return [query, setQuery]
 }
 ```
-```tsx
-const [state, setState] = useState<{ loading: boolean; error?: string; data?: ListData }>({ loading: true })
+`hooks/useListData.ts`
+```ts
+'use client'
+import { useEffect, useRef, useState } from 'react'
+import type { ListQuery } from './useListQuery'
 
-useEffect(() => {
-  const ac = new AbortController()
-  setState({ loading: true })
-  fetch(`/api/posts?${sp.toString()}`, { signal: ac.signal })
-    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((data) => setState({ loading: false, data }))
-    .catch((e) => {
-      if (e.name === "AbortError") return
-      setState({ loading: false, error: e.message })
+type State<T> =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'empty' }
+  | { kind: 'ready'; items: T[]; total: number }
+
+export function useListData<T>(query: ListQuery) {
+  const [state, setState] = useState<State<T>>({ kind: 'loading' })
+  // 竞态守卫：快速切筛选时，先发的请求可能后回来，用序号丢弃过期响应
+  const seq = useRef(0)
+
+  useEffect(() => {
+    const mine = ++seq.current
+    const ac = new AbortController()
+    setState({ kind: 'loading' })
+
+    fetch(`/api/posts?cat=${query.cat}&page=${query.page}&q=${encodeURIComponent(query.keyword)}`, {
+      signal: ac.signal,
     })
-  return () => ac.abort()
-}, [sp])
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json() as Promise<{ items: T[]; total: number }>
+      })
+      .then((j) => {
+        if (mine !== seq.current) return          // 过期响应，直接丢
+        setState(j.items.length === 0 ? { kind: 'empty' } : { kind: 'ready', ...j })
+      })
+      .catch((e: unknown) => {
+        if (mine !== seq.current) return
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        setState({ kind: 'error', message: '加载失败，请检查网络' })
+      })
+
+    return () => ac.abort()
+  }, [query.cat, query.page, query.keyword])
+
+  return state
+}
 ```
+`components/ContentList.tsx`
 ```tsx
-if (state.loading) return <Skeleton.List rows={5} />
-if (state.error) return <ErrorBox message={state.error} onRetry={() => setParam("_r", String(Date.now()))} />
-if (!state.data?.items.length) return <Empty text="没有匹配的内容" />
-return <List items={state.data.items} />
+'use client'
+// 三态必须显式渲染：空白页是「还在加载」和「真的没有」混在一起，用户无法判断
+export function ContentList({ query, setQuery }: { query: ListQuery; setQuery: (p: Partial<ListQuery>) => void }) {
+  const state = useListData<{ id: string; title: string }>(query)
+
+  if (state.kind === 'loading') return <ListSkeleton />
+  if (state.kind === 'error') {
+    return (
+      <div className="p-8 text-center">
+        <p className="text-zinc-600">{state.message}</p>
+        <button className="mt-3 rounded border px-3 py-1.5" onClick={() => setQuery({ page: query.page })}>
+          重试
+        </button>
+      </div>
+    )
+  }
+  if (state.kind === 'empty') {
+    return <p className="p-8 text-center text-zinc-500">没有匹配的内容，试试换个分类或清空关键词</p>
+  }
+
+  return (
+    // 375px 不横向滚动：容器 max-w-full + 子项 min-w-0，长标题用 truncate 而不是撑开
+    <ul className="w-full max-w-full divide-y">
+      {state.items.map((it) => (
+        <li key={it.id} className="flex min-w-0 items-center justify-between py-3">
+          <span className="min-w-0 truncate">{it.title}</span>
+          <a className="ml-3 shrink-0 text-sm text-blue-600" href={`/posts/${it.id}`}>查看</a>
+        </li>
+      ))}
+    </ul>
+  )
+}
+```
+`app/posts/page.tsx`
+```tsx
+// useSearchParams 在预渲染页面里必须包 Suspense，否则构建期报错
+export default function PostsPage() {
+  return (
+    <Suspense fallback={<ListSkeleton />}>
+      <PostsClient />
+    </Suspense>
+  )
+}
 ```
 :::
 

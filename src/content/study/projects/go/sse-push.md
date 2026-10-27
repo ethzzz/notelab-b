@@ -48,57 +48,111 @@ GET /api/online         → {"online": 128}
 
 ## 参考实现
 
-:::solution hub + 每连接缓冲 + 心跳
+:::solution 关键实现：每连接一个带缓冲 chan + 慢客户端直接丢，Last-Event-ID 补发
+`hub.go`
 ```go
-type client struct {
-	id   string
-	ch   chan []byte
-	gone chan struct{}
-}
-
+// 关键点：注册表只在「注册/注销」时加锁，推送时不加锁
+// （推送时持锁 = 一个慢客户端阻塞所有人）
 type Hub struct {
 	mu      sync.RWMutex
-	clients map[*client]struct{}
+	clients map[string]*Client
+	ring    *Ring // 最近 N 条消息，用于 Last-Event-ID 补发
 }
 
-func (h *Hub) broadcast(msg []byte) {
+type Client struct {
+	id   string
+	ch   chan Event // 缓冲 16，满了说明客户端读得慢
+	done chan struct{}
+}
+
+func (h *Hub) Broadcast(e Event) {
+	h.ring.Add(e)
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for c := range h.clients {
+	clients := make([]*Client, 0, len(h.clients))
+	for _, c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	for _, c := range clients {
 		select {
-		case c.ch <- msg:
-		default: // 缓冲满：慢客户端，直接断开
-			close(c.gone)
+		case c.ch <- e:
+		default:
+			// 缓冲满：这个客户端读不动了，断开它而不是阻塞广播。
+			// 不能改成阻塞式发送 —— 那会让一个卡住的手机拖慢全站推送
+			h.drop(c.id)
 		}
 	}
 }
-
-func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
+```
+`sse.go`
+```go
+func (h *Hub) Serve(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	flusher, _ := w.(http.Flusher)
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // nginx 不缓冲
 
-	c := &client{ch: make(chan []byte, 32), gone: make(chan struct{})}
-	h.add(c)
-	defer h.remove(c)
+	c := h.register()
+	defer h.drop(c.id)
 
-	ticker := time.NewTicker(15 * time.Second) // 心跳，防代理掐断
-	defer ticker.Stop()
+	// 断线重连：Last-Event-ID 之后的消息先补齐，再进入实时流
+	if last := r.Header.Get("Last-Event-ID"); last != "" {
+		for _, e := range h.ring.Since(last) {
+			writeEvent(w, e)
+		}
+		flusher.Flush()
+	}
+
+	heartbeat := time.NewTicker(15 * time.Second) // 小于常见 60s 空闲超时
+	defer heartbeat.Stop()
 
 	for {
 		select {
+		case e := <-c.ch:
+			writeEvent(w, e)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprint(w, ": ping\n\n") // 注释行心跳，不触发 onmessage
+			flusher.Flush()
 		case <-r.Context().Done():
 			return
-		case <-c.gone:
+		case <-h.shutdown:
+			writeEvent(w, Event{Type: "closing", Data: "服务重启，请重连"})
+			flusher.Flush()
 			return
-		case b := <-c.ch:
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
-		case <-ticker.C:
-			fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
 		}
 	}
+}
+
+func writeEvent(w io.Writer, e Event) {
+	// id 必须写，否则客户端重连时带不上 Last-Event-ID
+	fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", e.ID, e.Type, e.Data)
+}
+```
+`main.go`
+```go
+// 优雅退出：先把 shutdown 广播给所有连接，再等 hub 清空，最后才退出进程
+// （直接 os.Exit 会让客户端只看到「连接被重置」，重连风暴）
+func main() {
+	hub := NewHub()
+	srv := &http.Server{Addr: ":8080", Handler: routes(hub)}
+
+	go srv.ListenAndServe()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	<-sig
+
+	hub.Close()                      // ① 通知所有 SSE 连接
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	srv.Shutdown(ctx)                // ② 停止接新请求，等已有请求结束
 }
 ```
 :::

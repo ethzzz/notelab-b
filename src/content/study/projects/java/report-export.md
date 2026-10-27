@@ -62,29 +62,117 @@ CREATE TABLE export_task (
 
 ## 参考实现
 
-:::solution 分批读 + 流式写
+:::solution 关键实现：游标分页流式写 + 原子落盘 + 进度落库 + 可重试
+`ExportJob.java`
 ```java
-public void export(long taskId, ExportParams p) {
-    Path file = tempFile(taskId);
-    long done = 0;
-    try (SXSSFWorkbook wb = new SXSSFWorkbook(200);          // 内存里只留 200 行
-         OutputStream out = Files.newOutputStream(file)) {
-        Sheet sheet = wb.createSheet("orders");
-        long lastId = 0;
-        while (true) {
-            List<Order> batch = orderMapper.pageById(lastId, 2000);  // 游标：id > lastId
-            if (batch.isEmpty()) break;
-            for (Order o : batch) appendRow(sheet, o);
-            lastId = batch.get(batch.size() - 1).getId();
-            done += batch.size();
-            exportMapper.updateProgress(taskId, done);
-        }
-        wb.write(out);
-        exportMapper.markDone(taskId, file.toString());
-    } catch (Exception e) {
-        Files.deleteIfExists(file);                           // 不留半截文件
-        exportMapper.markFailed(taskId, e.getMessage());
+/** 导出用到的行：只留需要的四列，避免 SELECT * 把大字段带进内存。
+ *  包级可见（非 public）—— 同一个文件里只能有一个 public 类型，正好与 ExportJob 同文件 */
+record ExportRow(long id, String orderNo, long amount, java.time.LocalDateTime createdAt) {}
+
+@Service
+public class ExportJob {
+    private final DataSource ds;
+    private final JdbcClient db;
+    private final ExecutorService pool = Executors.newFixedThreadPool(2);
+
+    /** 提交即返回 jobId：导出是异步任务，不能占着 HTTP 连接 */
+    public long submit(ExportReq req, long userId) {
+        KeyHolder keys = new GeneratedKeyHolder();
+        db.sql("""
+                INSERT INTO export_job (user_id, status, total_rows, processed_rows)
+                VALUES (?, 'PENDING', 0, 0)
+                """).param(userId).update(keys);
+        long jobId = keys.getKey().longValue();
+        pool.submit(() -> run(jobId, req));
+        return jobId;
     }
+
+    /**
+     * 核心：不用 OFFSET 翻页（越翻越慢），用 id 游标；
+     * 边查边写，任何时刻内存里只有一批数据。
+     */
+    private void run(long jobId, ExportReq req) {
+        Path tmp = Path.of("/data/exports", jobId + ".csv.tmp");
+        Path out = Path.of("/data/exports", jobId + ".csv");
+        long lastId = 0;
+        long written = 0;
+        try {
+            db.sql("UPDATE export_job SET status='RUNNING' WHERE id=?").param(jobId).update();
+            long total = db.sql("SELECT COUNT(*) FROM orders WHERE created_at >= ?")
+                    .param(req.from()).query(Long.class).single();
+            db.sql("UPDATE export_job SET total_rows=? WHERE id=?").params(total, jobId).update();
+
+            try (BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                w.write("order_no,amount,created_at\n");
+                while (true) {
+                    // 每批 2000 行；ID 游标让每批都是索引区间扫描
+                    List<Row> batch = db.sql("""
+                            SELECT id, order_no, amount, created_at FROM orders
+                             WHERE created_at >= ? AND id > ?
+                             ORDER BY id LIMIT 2000
+                            """).params(req.from(), lastId).query(ExportRow.class).list();
+                    if (batch.isEmpty()) break;
+
+                    for (ExportRow r : batch) {
+                        w.write(csvLine(r));
+                    }
+                    lastId = batch.get(batch.size() - 1).id();
+                    written += batch.size();
+                    // 每完成 5% 更新一次进度（每次都写库会拖慢导出）
+                    if (written * 20 / Math.max(1, total) != (written - batch.size()) * 20 / Math.max(1, total)) {
+                        db.sql("UPDATE export_job SET processed_rows=? WHERE id=?")
+                                .params(written, jobId).update();
+                    }
+                }
+            }
+            // 原子落盘：先写 .tmp 再 rename，避免用户下到半截文件
+            Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            db.sql("UPDATE export_job SET status='DONE', processed_rows=?, file_path=? WHERE id=?")
+                    .params(written, out.toString(), jobId).update();
+        } catch (Exception e) {
+            log.error("[export] job {} 失败", jobId, e);
+            // 失败要清理半截文件，并把状态置 FAILED（可重试）
+            try { Files.deleteIfExists(tmp); } catch (IOException ignored) { }
+            db.sql("UPDATE export_job SET status='FAILED', last_error=? WHERE id=?")
+                    .params(truncate(e.getMessage(), 500), jobId).update();
+        }
+    }
+}
+```
+`ExportController.java`
+```java
+/** 三条接口：提交、查进度、下载。下载要校验归属，避免越权拿别人的报表。 */
+@PostMapping("/api/exports")
+public Map<String, Object> submit(@RequestBody ExportReq req, HttpServletRequest request) {
+    Map<String, Object> me = AuthUtil.user(request);
+    long jobId = job.submit(req, ((Number) me.get("id")).longValue());
+    return Map.of("jobId", jobId, "status", "PENDING");
+}
+
+@GetMapping("/api/exports/{id}")
+public Map<String, Object> progress(@PathVariable long id, HttpServletRequest request) {
+    Map<String, Object> me = AuthUtil.user(request);
+    Map<String, Object> job = db.sql("""
+            SELECT id, status, total_rows, processed_rows, last_error FROM export_job
+             WHERE id = ? AND user_id = ?
+            """).params(id, ((Number) me.get("id")).longValue()).query().listOfRows()
+            .stream().findFirst().orElseThrow(() -> new BizException(404, "任务不存在"));
+    return job;
+}
+```
+`ExportCleanupJob.java`
+```java
+/** 过期清理：文件留 3 天，任务记录留 7 天（记录是审计，不能跟文件一起删） */
+@Scheduled(cron = "0 0 4 * * *")
+public void cleanup() {
+    db.sql("SELECT id, file_path FROM export_job WHERE status='DONE' AND created_at < NOW() - INTERVAL 3 DAY")
+      .query().listOfRows().forEach(row -> {
+          try { Files.deleteIfExists(Path.of(String.valueOf(row.get("file_path")))); } catch (IOException ignored) { }
+          db.sql("UPDATE export_job SET status='EXPIRED', file_path=NULL WHERE id=?")
+            .param(row.get("id")).update();
+      });
+    db.sql("DELETE FROM export_job WHERE created_at < NOW() - INTERVAL 7 DAY").update();
 }
 ```
 :::
