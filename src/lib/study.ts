@@ -54,6 +54,16 @@ export const STUDY_DOCS: Record<string, StudyDoc> = {
 		track: "typescript",
 		trackLabel: "TypeScript 课程（打底）",
 	},
+	// Agent 前端（2026-10-27）：面向「AI Agent 产品前端」岗位，6 周冲刺、目标 P6。
+	// 与 react/nextjs 的分工：那两条讲渲染与框架，这条讲**流式链路 / 多会话状态 / 过程可视化**。
+	agent: {
+		lang: "agent",
+		title: "Agent 前端 · 冲刺路线",
+		subtitle: "6 周：流式链路、增量渲染、状态建模、过程可视化、性能与表达",
+		icon: "🤖",
+		track: "typescript",
+		trackLabel: "TypeScript 课程（打底）",
+	},
 }
 
 export const STUDY_LANGS = Object.keys(STUDY_DOCS)
