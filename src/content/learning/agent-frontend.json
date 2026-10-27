@@ -1,0 +1,685 @@
+{
+  "code": "agent-frontend",
+  "name": "AI Agent 前端",
+  "icon": "🤖",
+  "desc": "照着 AI Agent 前端 JD 长的课：流式链路 → 对话状态 → 过程可视化 → 编排画布与性能，每节都停在「能跑出问题」和「能证明改对了」之间。",
+  "runner": "worker",
+  "stages": [
+    {
+      "id": "af-stream",
+      "name": "流式链路",
+      "goal": "把「服务端一次性算完再返回」换成「边算边到」：自己解析 SSE 帧、处理半包与多字节字符、把 token 到屏幕的链路做成批量提交，并且能在取消、重连、断点续写这些真实事故里不丢不重。",
+      "lessons": [
+        {
+          "id": "af-01",
+          "title": "SSE 不是 EventSource：用 fetch + ReadableStream 手搓一条可靠的流",
+          "minutes": 50,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n第一版基本都是这么写的：\n\n```ts\nconst es = new EventSource('/api/chat?q=' + encodeURIComponent(q))\nes.onmessage = (e) => append(e.data)\n```\n\n本地跑得通，上线三件事同时爆。第一，问题一长就 414（URL 太长），因为 EventSource 只能 GET，把 prompt 塞进 query 是唯一办法。第二，要带 `Authorization` 头、要带 traceId、要按用户限流，全都做不到 —— EventSource 不支持自定义请求头。第三，也是最隐蔽的：网络抖动一下，浏览器会自动重连，**而且默认从断开处重放**，服务端如果没实现 `Last-Event-ID`，用户会看到回复从头再来一遍，或者两段回复拼成一句鬼话。\n\n第二个场景是「乱码」。有人把 `fetch` 的流读出来了，但中文偶尔变成 `锟斤拷`：\n\n```ts\nconst reader = res.body!.getReader()\nlet text = ''\nwhile (true) {\n  const { done, value } = await reader.read()\n  if (done) break\n  text += new TextDecoder().decode(value)   // ← 少了一个参数\n}\n```\n\n少的是 `{ stream: true }`。UTF-8 里一个汉字占 3 字节，网络分片不会照顾字符边界，一个 chunk 很可能在汉字中间被切断。`decode` 默认认为「这段字节是完整的」，遇到残字节直接替换成 U+FFFD，而且**残字节被丢掉**，下一片接着解就永远补不回来了。\n\n第三个场景是「半包」。有人按 chunk 直接 `JSON.parse`：\n\n```ts\nconst { value } = await reader.read()\nhandleEvent(JSON.parse(new TextDecoder().decode(value)))\n```\n\n一次 `read()` 拿到的可能是「半个事件」，也可能是「一个半事件」。SSE 的边界是**空行**，不是 chunk。\n\n## 二、原理：它到底怎么运作\n\n第一，`text/event-stream` 是一个**行协议**。一个事件由若干 `field: value` 行组成，以空行结束。`data` 可以出现多次，按出现顺序用 `\\n` 拼接；`event` 指定事件名；`id` 写入重连游标；`retry` 给重连间隔毫秒；以 `:` 开头的是注释行（常用来发心跳，防止中间层 60 秒空闲断连）。所以解析器的正确姿势是**维护一个缓冲区，按 `\\n\\n` 切帧，切不开就留着等下一片**。\n\n第二，`ReadableStream` 的 `read()` 返回的是**字节块**，不是事件。`TextDecoder({ stream: true })` 的作用是让解码器保留跨块的不完整字节序列，下一块到来时接上。别忘了最后 `decode()` 一次（不带 stream）把残余字节冲出来。\n\n第三，浏览器对 `fetch` 流的可读性有一个门槛：响应头必须有 `Content-Type: text/event-stream`，并且中间层不能缓冲。nginx 默认会对上游响应做缓冲，表现为「服务端日志显示已经吐了 20 个事件，浏览器一次收到全部」—— 必须 `proxy_buffering off;`（本站 SSE 已配）。同理 CDN、压缩中间件也可能整段缓冲，这层排查不能只盯前端。\n\n第四，取消要用 `AbortController`。`controller.abort()` 之后 `read()` 会抛 `AbortError`，**这是正常路径不是异常**，要单独识别，否则「用户点了停止」会弹一个红色报错。\n\n第五，重连不是免费的。EventSource 的自动重连语义是「重放」，对你的 token 流来说等于重复计费、重复追加。生产做法是自建：记住最后一个已提交的 `seq`，重连时带上 `?after=<seq>` 或 `Last-Event-ID`，服务端从那里续发；做不到续发就必须**整段重来并清空旧内容**，绝不能两段拼一起。\n\n## 三、代码逐行\n\n下面的 `parseSSEStream` 把上面几条都落到代码里，`main` 里用「故意在多字节字符中间切断」的分片模拟真实网络，验证不会出乱码、不会把半个事件当事件。\n\n关键行说明：\n\n第一，`new TextDecoder('utf-8')` 只创建一次。每次 `read` 都新建解码器会丢状态，跨块字节接不上。\n\n第二，`decoder.decode(value, { stream: true })` —— 这个参数是「允许不完整」的开关，漏了就出替换字符。\n\n第三，`buffer += chunk` 后 `while ((idx = buffer.indexOf('\\n\\n')) >= 0)`。用 `while` 不是 `if`：一次 read 可能带来 3 个事件；用 `if` 会让后两个滞留到下一次 read，表现为「回复一顿一顿」。\n\n第四，`line.startsWith('data:')` 时取 `line.slice(5).replace(/^ /, '')`。SSE 规定字段名后可以有一个空格，去掉一个就好，不要 `trim()` —— 否则数据里的行首空格（markdown 缩进、代码块）会被吃掉。\n\n第五，`finish()` 里再调一次 `decoder.decode()` 把尾部字节冲出来，并处理没有空行结尾的最后一个事件。流被服务端正常关闭时，最后一条往往不带结尾空行。\n\n## 四、三个常见误区\n\n### 误区一：EventSource 更省事，先用着\n\n现象是上线后加不上鉴权头、改不成 POST、重连重放。它在「公开的、只读的、GET 能表达全部参数」的场景确实更省事，但对话式产品三条全踩。判断标准很简单：需要 POST 或需要自定义头，就别考虑它。\n\n### 误区二：`JSON.parse` 包一层就安全了\n\n现象是偶发 `Unexpected end of JSON input`。SSE 的 `data` 是文本，不是 JSON —— 服务端如果把多个 JSON 塞进一个 data，或者你的框架自动拼接了 data 行，解析位置就会错。协议层（分帧）和载荷层（你的 JSON）必须分开解：先切帧，再解载荷，解不开就是服务端 bug，要能报出来而不是 catch 掉。\n\n### 误区三：把 `reader.read()` 的 done 当作「回复结束」\n\n`done` 只表示连接关了。回复结束是**业务语义**，应该由服务端发一个显式的结束事件（`event: done`，或 data 里带 `finish_reason`）。否则代理超时、服务端异常退出、用户断网，三种情况在客户端长得一模一样，你无法区分「说完了」和「说到一半断了」。\n\n## 五、边界与代价\n\n自己解析 SSE 的代价是你要管所有边界：心跳间隔（建议 15 秒，小于常见 60 秒空闲超时）、退避重连（1s → 2s → 4s，上限 30s，且要在用户可见的位置提示「正在重连」）、连接复用（多次对话别每次新建 TCP，`keepalive` 或复用连接池）、以及代理层的缓冲。\n\n性能上，`buffer += chunk` 在超长回复（几万字）下会退化成 O(n²) 拷贝。真实实现里缓冲区应该用数组收集再 join，或者一旦切出完整帧就把 buffer 截断 —— 上面代码每轮都截断，所以只在「单帧跨很多 chunk」时才慢，可以接受。\n\n反例：如果你的场景就是「一次请求一个完整 JSON」（比如摘要生成，用户不看中间过程），别硬上流式。多出的解析、取消、重连成本换不来体验提升，还会让错误处理复杂一倍。\n\n## 六、动手任务\n\n在仓库里新建 `stream.ts`，完成三件事：\n\n第一，把示例里的 `parseSSEStream` 抄下来，改成接受 `Response` 的 `body`，并统计收到的帧数。\n\n第二，构造一个 5 个事件、每个 data 含中文的字符串，用「每 3 个字节切一刀」的方式喂给你的解析器，断言输出与原文完全一致。这一步专门抓 `TextDecoder` 漏参数。\n\n第三，故意在最后不发空行，验证 `finish()` 能把最后一个事件补出来。\n\n## 七、一句话总结\n\n- SSE 是行协议：按 `\\n\\n` 切帧，缓冲区留残包，chunk 不是事件。\n- `TextDecoder` 必须 `{ stream: true }`，结束再冲一次，否则中文必乱。\n- 要 POST / 要认证头，就用 `fetch` + `ReadableStream`，别用 EventSource。\n- 取消走 `AbortController`，`AbortError` 是正常路径；重连必须能续发，不能续就整段重来。\n- 「结束」是业务事件，不是 TCP 的 `done`。\n",
+          "code": "// af-01 可运行示例：手写 SSE 解析器 + 故意在多字节字符中间切断的分片\n// 运行方式：tsx af-01.ts（无依赖，浏览器里也能跑）\n\ntype Frame = { event: string; data: string; id?: string }\n\n/** 把字节流切成完整的 SSE 帧；跨块的残包留在闭包里 */\nfunction createSSEParser(onFrame: (f: Frame) => void) {\n  const decoder = new TextDecoder('utf-8')\n  let buffer = ''\n\n  const emit = (raw: string) => {\n    if (!raw.trim()) return\n    let event = 'message'\n    let id: string | undefined\n    const dataLines: string[] = []\n    for (const line of raw.split('\\n')) {\n      if (!line || line.startsWith(':')) continue // 空行与注释（心跳）\n      const colon = line.indexOf(':')\n      const field = colon === -1 ? line : line.slice(0, colon)\n      // 只去掉字段名后的一个空格，绝不 trim（会吃掉 markdown 缩进）\n      const value = colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '')\n      if (field === 'data') dataLines.push(value)\n      else if (field === 'event') event = value\n      else if (field === 'id') id = value\n    }\n    if (dataLines.length) onFrame({ event, data: dataLines.join('\\n'), id })\n  }\n\n  return {\n    push(chunk: Uint8Array) {\n      buffer += decoder.decode(chunk, { stream: true })\n      let idx = buffer.indexOf('\\n\\n')\n      while (idx >= 0) {\n        emit(buffer.slice(0, idx))\n        buffer = buffer.slice(idx + 2)\n        idx = buffer.indexOf('\\n\\n')\n      }\n    },\n    finish() {\n      buffer += decoder.decode() // 冲出残余字节\n      emit(buffer)               // 处理没有结尾空行的最后一帧\n      buffer = ''\n    },\n  }\n}\n\n// ---- 验证：把同一段流按 3 字节一切，模拟跨块切断 ----\nconst raw = [\n  'event: token\\ndata: 你好\\n\\n',\n  'event: token\\ndata: 世界\\n\\n',\n  'event: done\\ndata: {\"reason\":\"stop\"}\\n\\n',\n].join('')\n\nconst bytes = new TextEncoder().encode(raw)\nconst frames: Frame[] = []\nconst parser = createSSEParser((f) => frames.push(f))\nfor (let i = 0; i < bytes.length; i += 3) {\n  parser.push(bytes.slice(i, i + 3))\n}\nparser.finish()\n\nconsole.log(frames.map((f) => f.data).join('|'))\n// 你好|世界|{\"reason\":\"stop\"}\nconsole.log('帧数', frames.length) // 3\n",
+          "quiz": [
+            {
+              "q": "下面这段代码在中文回复里偶尔出现 U+FFFD 替换字符，最可能的原因是？\n\n```ts\nwhile (true) {\n  const { done, value } = await reader.read()\n  if (done) break\n  text += new TextDecoder().decode(value)\n}\n```",
+              "options": [
+                "每个 chunk 都新建了 TextDecoder，跨块的字符状态丢了",
+                "decode 需要传 { stream: true }，让解码器保留不完整字节",
+                "应该先把 value 转成 ArrayBuffer 再解码",
+                "服务端发的不是合法 UTF-8，客户端无能为力"
+              ],
+              "answer": 1,
+              "explain": "UTF-8 一个汉字 3 字节，网络分片会在字符中间切断。decode 默认认为字节序列完整，遇到残字节会替换成 U+FFFD 并丢弃残字节，下一块就接不回来；{ stream: true } 让解码器保留尾巴。第一个选项不是主因：本段代码每次新建解码器确实也不好，但即使复用同一个实例，不传 stream 也一样出错（无状态调用照样截断）。转 ArrayBuffer 不解决边界问题。服务端若真发了非法 UTF-8，那是全量与稳定复现，不会「偶尔」。"
+            },
+            {
+              "q": "客户端按 chunk 直接 `JSON.parse(decode(value))`，最典型的故障是什么？",
+              "options": [
+                "解析速度太慢，导致界面卡顿",
+                "一个 chunk 可能是半个事件或一个半事件，解析会在中间失败",
+                "浏览器不允许在流中调用 JSON.parse",
+                "只能解析 ASCII，中文会抛错"
+              ],
+              "answer": 1,
+              "explain": "SSE 的事件边界是空行，不是 chunk 边界；一次 read 可能是半帧也可能是多帧。正确做法是维护缓冲区、按 \\n\\n 切帧后再解析载荷。性能不是根因（每秒几十次 parse 微不足道）。JSON.parse 完全不限制调用位置，也不限制字符集 —— 后两个选项是凭感觉编的。"
+            },
+            {
+              "q": "用户点了「停止生成」，控制台报 `AbortError: The user aborted a request`。正确处理方式是？",
+              "options": [
+                "当作异常上报，弹一个错误提示",
+                "静默吞掉所有错误，一律不提示",
+                "单独识别 AbortError，按「用户主动停止」处理并保留已收到的内容",
+                "立即清空该条消息，避免留下半截内容"
+              ],
+              "answer": 2,
+              "explain": "abort 是用户主动行为，属于正常路径：既不该报错，也不该清空 —— 用户通常希望保留已经生成的部分。把它当异常上报会污染监控；一律静默吞掉又会掩盖真实的网络错误。判断方式是区分 error.name === 'AbortError' 与其它错误。"
+            },
+            {
+              "q": "SSE 流被中间层「整段延迟」再一次性吐给浏览器，最先应该检查什么？",
+              "options": [
+                "客户端的 TextDecoder 是否漏了参数",
+                "nginx / CDN 是否对上游响应做了缓冲（proxy_buffering 等）",
+                "浏览器是否支持 ReadableStream",
+                "事件是否缺少 id 字段"
+              ],
+              "answer": 1,
+              "explain": "「服务端在吐、浏览器收到全部」是典型的代理层缓冲特征，nginx 需要 proxy_buffering off，CDN 也可能整段缓存。TextDecoder 漏参数会出乱码而不是延迟；ReadableStream 不支持会直接不可用，不是「延迟到最后一起到」；id 影响续传，不影响到达时机。"
+            }
+          ]
+        },
+        {
+          "id": "af-02",
+          "title": "增量渲染：token 到屏幕之间要过几道闸",
+          "minutes": 48,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n第一个版本通常是「收到一个 token 就 setState」：\n\n```ts\nonFrame((f) => setMessages((prev) => updateLast(prev, (m) => m.text + f.data)))\n```\n\n一个 800 字的回复，服务端吐 1200 个 token，于是 1200 次状态更新。React 会把它们批处理，但**批处理只合并同一事件循环内的更新**——流式回调是异步的，一次一个宏任务，于是你得到 1200 次提交。每次提交都要重新跑一遍整棵对话树的 render，其中包含 Markdown 解析和语法高亮。中端安卓上表现为：字一个个往外蹦，同时整个页面滚动卡成 PPT。\n\n第二个场景更难看：**半截 Markdown 把整页样式带崩**。回复里正在输出一段代码块：\n\n```\n这里是说明文字\n\n```ts\nconst a = 1\n```\n\n后面的解释……\n```\n\n当流到 ```` ```ts ```` 而还没到收尾的 ```` ``` ```` 时，整段后续内容都被当成代码块 —— 页面突然变成一大块等宽灰底，等流完再「啪」地恢复。如果这时用户正在往上看历史消息，布局高度已经变了，滚动位置会跳。\n\n第三个场景是「滚动打架」。有人每帧 `scrollToBottom()`：用户往上翻想看前面的内容，每来一个 token 就被拽回底部，完全无法阅读。\n\n## 二、原理：它到底怎么运作\n\n第一，**渲染频率应该由帧率决定，而不是由 token 频率决定**。屏幕 60Hz，人眼在 16ms 内看不到差别。把 token 先收进缓冲区，用 `requestAnimationFrame` 或 16~50ms 的定时器合并提交，1200 次更新压到 20~75 次，视觉上反而更连贯（真实产品的打字机效果本来也是匀速的，不是跟着 token 抖）。\n\n第二，**Markdown 要区分「稳定前缀」与「尾部」。** 一段正在增长的 markdown，只有到最后一个空行为止的部分是稳定的；尾部可能正处于一个未闭合的代码块/表格/链接里。成熟做法是只对稳定前缀做完整解析，尾部按纯文本渲染（或用轻量行内解析），流结束后再整体解析一次。这样既不会样式崩，也不会每帧全量 re-parse。\n\n第三，**增量解析的复杂度是有代价的。** 有人干脆每帧把整段文本重新 `md.render()` 一次，文本长到几千字后每次都要几十毫秒 —— 一帧就没了。要么做稳定前缀缓存（记住「前 N 个字符的解析结果」），要么只在稳定前缀变长时才重算。\n\n第四，**自动滚动要区分「用户是否在底部」。** 判据是 `scrollHeight - scrollTop - clientHeight < 阈值`（比如 40px）。在底部才跟随；用户一旦往上翻就锁定，并显示「有新内容，点此回到底部」。这句话比任何性能优化都更能提升体感。\n\n第五，**流式 JSON 是另一类问题。** 如果服务端流的是结构化输出（JSON），你不能等流完再 parse —— 要用增量解析器，或者用「按行 NDJSON」把大 JSON 拆成可独立解析的小块。试图用正则修补 JSON 是死路。\n\n## 三、代码逐行\n\n下面实现一个 `TokenMerger`：把任意频率的 token 收进缓冲，按固定节流窗口合并提交，并且提供「稳定前缀」切分函数。示例用 `setTimeout` 模拟屏幕帧，浏览器里换成 `requestAnimationFrame` 即可。\n\n关键行说明：\n\n第一，`pending` 累积、`flush` 一次性提交并清空。**提交的是增量而不是全量**，订阅方自己决定怎么拼 —— 这样即使是 React 外部 store 也能做细粒度更新。\n\n第二，`schedule()` 里用 `timer === null` 做去重，保证一帧只排一次 flush；否则每个 token 都排一个定时器，等于没节流。\n\n第三，`stablePrefix()` 找最后一个 `\\n\\n` 作为稳定边界，并额外检查「未闭合的代码围栏」：数一下前缀里 ```` ``` ```` 出现次数，奇数说明还在代码块里，把边界回退到那个围栏之前。这一步是「样式不崩」的关键。\n\n第四，`pendingChars` 暴露给 UI 用于显示「正在输入」，但它不应该触发重渲染 —— 放在 ref 里，只在 flush 时连同文本一起提交。\n\n## 四、三个常见误区\n\n### 误区一：用 debounce 做节流\n\ndebounce 的语义是「等安静下来再执行」，流式输出永远不会安静，于是表现为「一直不显示，最后一次性刷出来」。要的是**节流（throttle）**：固定窗口内最多执行一次，且窗口结束时一定执行（trailing）。\n\n### 误区二：把 Markdown 解析写在 render 里\n\n`const html = useMemo(() => md.render(text), [text])` 看起来已经优化了，但 `text` 每帧都变，memo 每次失效。真正的优化是**降低 text 的变化频率**（节流），或者**只解析稳定前缀**（缓存），二者都不做的话，任何 memo 都只是心理安慰。\n\n### 误区三：每帧强制滚到底\n\n现象是用户上翻读历史时被不断拽回底部。正确做法是「粘底」策略：只在用户处于底部时跟随，并提供一个「回到底部」的入口。顺带一提，`scrollTo({ behavior: 'smooth' })` 在流式场景里会互相打断，一般直接用 `scrollTop = scrollHeight` 更稳。\n\n## 五、边界与代价\n\n节流窗口不是越小越好。16ms 会让 React 每秒提交 60 次，长对话里仍然重；50ms（20fps）在打字机效果下已经足够流畅，而且提交次数降到 1/3。建议把窗口做成可调（低端设备 60~80ms，桌面 16~32ms）。\n\n稳定前缀解析的代价是代码复杂度：你要处理围栏、表格、脚注等「可能跨行闭合」的结构。折中方案是只对代码围栏做特殊处理（最常见、破坏性最大），其它结构交给流结束后的整体解析。\n\n反例：如果回复通常只有一两句话（比如表单填写的建议文案），整套节流 + 稳定前缀就是过度设计，直接把最后一个 chunk 设成 state 反而更简单。判断标准是「单次回复是否会长到影响帧率」。\n\n## 六、动手任务\n\n第一，把 `TokenMerger` 接上一个假的 token 源（每 5ms 吐一个随机汉字，共 800 个），统计 flush 次数与总字符数，确认字符不丢不重。\n\n第二，写 `stablePrefix()` 的单测：输入「文字 + 未闭合代码块」，断言返回的稳定部分不含未闭合围栏。\n\n第三，实现「粘底」判定函数 `isNearBottom(el, threshold)`，并用三个场景验证：在底部、距底部 20px、上翻一屏。\n\n## 七、一句话总结\n\n- 渲染频率跟屏幕走，不跟 token 走：节流合并，别 debounce。\n- Markdown 只解析稳定前缀，未闭合围栏要回退，流完再整体解析一次。\n- 自动滚动是「粘底」不是「锁底」，用户上翻就别抢。\n- 结构化输出用增量解析或 NDJSON，别用正则修 JSON。\n- 节流窗口要按设备可调，16ms 不一定比 50ms 更流畅。\n",
+          "code": "// af-02 可运行示例：token 合并器 + Markdown 稳定前缀切分\n// 运行方式：tsx af-02.ts\n\ntype Listener = (delta: string, full: string) => void\n\n/** 把高频 token 合并成低频提交；提交的是增量 */\nfunction createTokenMerger(intervalMs = 50) {\n  let pending = ''\n  let full = ''\n  let timer: ReturnType<typeof setTimeout> | null = null\n  const listeners = new Set<Listener>()\n\n  const flush = () => {\n    timer = null\n    if (!pending) return\n    const delta = pending\n    pending = ''\n    full += delta\n    for (const fn of listeners) fn(delta, full)\n  }\n\n  return {\n    push(token: string) {\n      pending += token\n      if (timer === null) timer = setTimeout(flush, intervalMs)\n    },\n    /** 流结束：立刻把残留提交掉 */\n    end() {\n      if (timer !== null) clearTimeout(timer)\n      flush()\n    },\n    subscribe(fn: Listener) {\n      listeners.add(fn)\n      return () => listeners.delete(fn)\n    },\n    get text() {\n      return full\n    },\n  }\n}\n\n/**\n * 稳定前缀：最后一个空行为界；若前缀里代码围栏为奇数，回退到围栏之前。\n * 返回 { stable, tail }，stable 可以整体解析 markdown，tail 只当纯文本渲染。\n */\nfunction stablePrefix(text: string): { stable: string; tail: string } {\n  let cut = text.lastIndexOf('\\n\\n')\n  if (cut < 0) return { stable: '', tail: text }\n  cut += 2\n  const head = text.slice(0, cut)\n  const fences = (head.match(/^```/gm) || []).length\n  if (fences % 2 === 1) {\n    const lastFence = head.lastIndexOf('```')\n    // 回退到围栏所在行的行首\n    const lineStart = head.lastIndexOf('\\n', lastFence - 1) + 1\n    return { stable: text.slice(0, lineStart), tail: text.slice(lineStart) }\n  }\n  return { stable: head, tail: text.slice(cut) }\n}\n\n// ---- 演示一：稳定前缀（同步，先输出）----\nconst partial = '说明文字\\n\\n```ts\\nconst a = 1\\n'\nconsole.log(stablePrefix(partial))\n// { stable: '说明文字\\n\\n', tail: '```ts\\nconst a = 1\\n' }\n\n// ---- 演示二：token 合并（异步，稍后输出）----\nconst merger = createTokenMerger(50)\nlet flushes = 0\nmerger.subscribe((_delta, full) => {\n  flushes++\n  if (flushes <= 3) console.log('flush#', flushes, '长度', full.length)\n})\n\nconst tokens = Array.from({ length: 800 }, (_, i) => String.fromCharCode(0x4e00 + (i % 200)))\nconst t0 = Date.now()\ntokens.forEach((tk, i) => setTimeout(() => merger.push(tk), i * 5))\nsetTimeout(() => {\n  merger.end()\n  console.log('总字符', merger.text.length, '期望 800', 'flush 次数', flushes, '耗时约', Date.now() - t0, 'ms')\n}, tokens.length * 5 + 200)\n",
+          "quiz": [
+            {
+              "q": "流式回复时用 debounce（而非 throttle）合并渲染，最典型的现象是？",
+              "options": [
+                "内容一直不出现，直到流结束才一次性刷出来",
+                "内容出现得太快，用户看不清",
+                "重复渲染，同一条消息出现两次",
+                "内存泄漏，越聊越卡"
+              ],
+              "answer": 0,
+              "explain": "debounce 等「安静」才执行，而 token 流持续不断，定时器被反复重置，结果就是整段流期间几乎不刷新、结束时才一起显示。要的是 throttle：固定窗口最多一次且窗口末尾必执行。速度太快是另一种问题（不节流）；重复渲染与去重逻辑有关；内存泄漏与两者无关。"
+            },
+            {
+              "q": "为什么只对「稳定前缀」做 Markdown 解析？",
+              "options": [
+                "因为 Markdown 解析器不支持中文标点",
+                "因为尾部可能处于未闭合的代码块/表格中，解析结果会让整段样式崩掉",
+                "因为稳定前缀更长，解析更快",
+                "因为没有稳定前缀就无法做语法高亮"
+              ],
+              "answer": 1,
+              "explain": "流式文本的尾部可能停在半个代码围栏或半行表格里，整体解析会把后续内容都吞进代码块，样式瞬间崩坏、高度跳变。稳定前缀（到最后一个空行为界且围栏成对）解析是安全的，尾部当纯文本渲染，流完再整体解析一次。与中文、长度、高亮能力都无关。"
+            },
+            {
+              "q": "实现「跟随新内容」的自动滚动，正确的判据是？",
+              "options": [
+                "每次收到 token 都 scrollToBottom，保证总在底部",
+                "每隔 500ms 无条件滚到底部一次",
+                "判断 scrollHeight - scrollTop - clientHeight 小于阈值时才跟随，用户上翻则停止跟随",
+                "监听 scroll 事件，只要用户滚动过就永久停止跟随"
+              ],
+              "answer": 2,
+              "explain": "正确做法是「粘底」：只在用户处于底部附近时跟随，一旦用户主动上翻就锁定，并给出「回到底部」的入口。无条件跟随会把正在读历史的用户拽回去；定时滚同样打扰；「永久停止」则让用户回到别处后新内容完全不显示，属于另一种失败。"
+            },
+            {
+              "q": "服务端流式返回结构化数据（JSON），前端应如何解析？",
+              "options": [
+                "等流结束后一次性 JSON.parse",
+                "累积字符串，每收到一片就整体 JSON.parse 一次",
+                "用增量 JSON 解析器，或让服务端改成按行 NDJSON 分块下发",
+                "用正则把不完整的 JSON 补齐后再 parse"
+              ],
+              "answer": 2,
+              "explain": "等流结束就丧失了流式的意义（用户看不到过程）；每片整体 parse 必然在中间失败；正则补 JSON 无法覆盖嵌套与转义，是死路。可行的是能容错的增量解析器，或者把大对象拆成一行一个的小对象（NDJSON），每行独立可解。"
+            }
+          ]
+        },
+        {
+          "id": "af-03",
+          "title": "竞态、取消与断点续写：让一条流只属于一个请求",
+          "minutes": 45,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n用户在同一个问题上连点了两次「重新生成」。你的代码很朴素：每次点击 `abort()` 上一个请求，然后开新的。结果是新回复的开头几个字被**旧请求的尾巴**覆盖了：\n\n```\n用户看到：这个问题的答这个问题的答案是……\n```\n\n原因：`abort()` 是异步的 —— 调用之后，已经进入事件队列的 chunk 回调仍会执行一次。如果回调里只做 `append(text)`，最后一次旧数据会追加到新消息上。\n\n第二个场景是「切会话」。左栏有两个会话同时在流，用户切到会话 B，会话 A 的流继续往「当前选中的会话」写 —— 因为写状态时读的是 `selectedSessionId`，而不是发起请求时的那个 id。A 的内容就长到 B 的对话框里了。\n\n第三个场景是「刷新丢半截」。回复到一半刷新页面，服务端其实还在生成，但前端重连后从头开始 —— 用户看到重复内容，且账单算了两遍。\n\n## 二、原理：它到底怎么运作\n\n第一，**每次请求必须有一个不可变的身份**。`requestId`（或 `streamId`）在发起时生成，一路带到每个回调里。所有写入都必须先断言「我的 requestId 还是当前的」，不是就直接 return。这比「靠 abort 保证不再回调」可靠得多，因为 abort 只是信号，不是同步屏障。\n\n第二，**「停止」与「失败」是两种终态**。状态机要区分 `aborted`（用户主动）与 `error`（网络/服务端）。前者保留内容、不报错、允许重试；后者要标记消息为错误态并给出重试入口。混在一起会导致「用户点停止后弹红色错误框」。\n\n第三，**续写靠游标，不靠猜**。服务端给每个 token 事件带递增 `seq`（或 `offset`）。客户端提交时记录已提交的 `seq`；重连时用 `?after=<seq>` 或 `Last-Event-ID` 让服务端续发。客户端收到 `seq <= lastSeq` 的事件时必须丢弃 —— 这是幂等性的最后一道防线（重连、双标签页、服务端重试都可能重复发送）。\n\n第四，**多标签页是同一个用户的并发写入**。两个标签同时打开同一会话并发送，服务端要么按会话加锁（后发者被拒），要么在消息里带 `clientId + seq` 做去重。纯前端无法解决，但前端至少要能做到「发现别处已更新就重新拉取」，而不是互相覆盖。\n\n第五，**乐观更新的临时 id 要能对上号。** 用户消息先本地插入（id 形如 `tmp-xxx`），服务端返回真实 id 后要做一次映射替换。如果直接改 id，React 的 key 会变、输入框焦点会丢 —— 稳妥做法是保留 `clientId` 作为 key，服务端 id 只作为属性。\n\n## 三、代码逐行\n\n下面实现 `createStreamSession`：每次 `send()` 生成 requestId，用 `AbortController` 取消上一个，并且用 seq 游标拒绝重复与过期事件。示例用假的服务端（一个会乱序、会重发的生成器）验证守卫是否生效。\n\n关键行说明：\n\n第一，`const my = ++current` —— 用自增序号而不是时间戳，避免同一毫秒内两次请求撞号。\n\n第二，`isStale()` 同时检查 `my !== current` 与 `controller.signal.aborted`。前者防「新请求已开始但旧回调还在队列里」，后者防「自己已被取消但仍有一次回调」。\n\n第三，`if (ev.seq <= lastSeq) return` —— 去重。注意用 `<=` 而不是 `<`：重复发送的正是「等于上一次」的那条。\n\n第四，`catch` 里区分 `err.name === 'AbortError'`：主动取消走 `onStop`，其它走 `onError`。\n\n第五，`finally` 里不要无条件把全局状态设成 idle —— 只有当 `my === current` 时才设，否则会把新请求的状态给清掉。这个 bug 非常常见：切会话时旧请求的 finally 把新会话的 loading 关掉。\n\n## 四、三个常见误区\n\n### 误区一：`abort()` 之后就安全了\n\n现象是偶发的内容错位。abort 只是通知，不是同步等待；已经 resolve 的 promise 回调、已入队的微任务都会继续跑。必须靠 requestId 守卫。\n\n### 误区二：用 messageId 做唯一键\n\n「重新生成」是同一个 messageId 产生不同内容；两个并发请求的 messageId 相同，你就无法区分。唯一键应该是 `requestId`，messageId 是「这段内容属于哪条消息」的归属关系。\n\n### 误区三：把 seq 当成「一定会连续」\n\n网络重连、服务端并行 worker、负载均衡都可能让 seq 跳号或重复。客户端能做的只有：丢弃重复、容忍跳号（不要期待 seq+1 一定来）、并在发现缺口时选择「继续累计」或「重新拉全量」，不能假设连续。\n\n## 五、边界与代价\n\nrequestId 守卫的成本是每个回调都要带上下文，写起来啰嗦；但它换来的是「任何情况下内容不会串」这条硬保证，值得。\n\n续写需要服务端配合：服务端要把已生成的内容按 seq 缓存一段时间（内存或 Redis），过期后只能整段重来。做缓存要设上限（比如 5 分钟 / 单用户 3 个并发流），否则是内存泄漏源。\n\n多标签页的完整方案通常要服务端会话锁或广播（WebSocket）。如果只做前端，至少要在 `storage` 事件里监听其它标签页的写入并提示「会话已在别处更新」。\n\n反例：单轮、无状态、不允许并发的场景（比如一次性的文本润色），不需要 requestId + seq 这套，一个全局 `loading` 就够了。判断标准是「同一个 UI 位置是否可能被两次请求写」。\n\n## 六、动手任务\n\n第一，把示例跑一遍，确认在「旧请求延迟回调 + 新请求已开始」时不会串内容。\n\n第二，故意让假服务端重复发送同一个 seq，验证客户端丢弃了它（打印丢弃计数）。\n\n第三，把「用户停止」与「网络错误」两条路径分别实现，要求前者不产生 error 状态、后者产生可重试的错误态，并写出两者的状态转换断言。\n\n## 七、一句话总结\n\n- 每个请求一个 requestId，所有写入先断言身份，别指望 abort 能当同步屏障。\n- 停止 ≠ 失败：前者保留内容不报错，后者要可重试。\n- 去重用 `seq <= lastSeq`，续写用游标，服务端要给缓存与上限。\n- finally 里改全局状态前，先确认自己还是当前请求。\n- 唯一键用 requestId + clientId，messageId 只表示归属。\n",
+          "code": "// af-03 可运行示例：requestId 守卫 + seq 去重 + 取消/错误分流\n// 运行方式：tsx af-03.ts（用假服务端模拟乱序、重复、延迟回调）\n\ntype Ev = { seq: number; delta: string }\ntype FakeServer = (signal: AbortSignal, emit: (e: Ev) => void) => Promise<void>\n\n/** 假服务端：先发 1、2，然后故意重复发 2，再发 3，最后延迟结束 */\nconst fakeServer: FakeServer = async (signal, emit) => {\n  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))\n  emit({ seq: 1, delta: 'A' })\n  await wait(10)\n  emit({ seq: 2, delta: 'B' })\n  await wait(10)\n  emit({ seq: 2, delta: 'B' }) // 重复\n  await wait(10)\n  emit({ seq: 3, delta: 'C' })\n  await wait(30)\n  if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' })\n}\n\nfunction createStreamSession(handlers: {\n  onDelta: (text: string) => void\n  onStop: () => void\n  onError: (msg: string) => void\n  onDone: () => void\n}) {\n  let current = 0\n  let controller: AbortController | null = null\n  let lastSeq = 0\n  let text = ''\n\n  return {\n    get text() {\n      return text\n    },\n    send() {\n      controller?.abort()\n      controller = new AbortController()\n      const my = ++current\n      lastSeq = 0\n      text = ''\n      const signal = controller.signal\n      const isStale = () => my !== current || signal.aborted\n\n      fakeServer(signal, (ev) => {\n        // ① 身份守卫：旧请求的迟到回调必须丢弃\n        if (isStale()) return\n        // ② seq 去重：重复/过期事件丢弃（注意是 <=）\n        if (ev.seq <= lastSeq) return\n        lastSeq = ev.seq\n        text += ev.delta\n        handlers.onDelta(ev.delta)\n      })\n        .then(() => {\n          if (isStale()) return\n          handlers.onDone()\n        })\n        .catch((err: Error) => {\n          if (isStale()) return\n          if (err.name === 'AbortError') handlers.onStop()\n          else handlers.onError(err.message)\n        })\n    },\n    stop() {\n      controller?.abort()\n    },\n  }\n}\n\n// ---- 演示：连点两次，验证内容不会串 ----\nconst s = createStreamSession({\n  onDelta: (d) => console.log('delta', d),\n  onStop: () => console.log('stopped'),\n  onError: (m) => console.log('error', m),\n  onDone: () => console.log('done, text =', s.text),\n})\ns.send()\nsetTimeout(() => s.send(), 5) // 第二个请求在第一个还没结束时开始\nsetTimeout(() => console.log('final text =', s.text, '（应为 ABC，不带重复 B）'), 200)\n",
+          "quiz": [
+            {
+              "q": "用户连点两次「重新生成」，出现新旧回复内容交叠。最有效的防线是？",
+              "options": [
+                "点击时禁用按钮 300ms",
+                "每次请求生成 requestId，所有回调写入前断言自己仍是当前请求",
+                "把 abort() 改成 stopPropagation()",
+                "把消息数组改成不可变结构"
+              ],
+              "answer": 1,
+              "explain": "abort 是异步信号，已入队的回调仍会执行，所以必须靠 requestId 做身份断言。禁用按钮只挡住「短时间内的第二次点击」，防不住重连、切会话等路径；stopPropagation 与取消网络请求无关；不可变结构只保证更新方式，不解决「该不该写」的问题。"
+            },
+            {
+              "q": "客户端收到 `seq` 小于等于本地已提交游标的事件，应该？",
+              "options": [
+                "照常追加，服务端不会发错",
+                "直接丢弃，保证幂等",
+                "报错并断开连接",
+                "清空本地内容后重新开始"
+              ],
+              "answer": 1,
+              "explain": "重连、服务端重试、多标签页都会造成重复下发，`seq <= lastSeq` 的事件必须丢弃，这是幂等的最后防线。照常追加会出现重复文本；报错断连过于激进（重复是正常现象）；清空重来会让用户丢失已看到的内容。"
+            },
+            {
+              "q": "旧请求的 `finally` 里把全局 `loading` 置为 false，会导致什么问题？",
+              "options": [
+                "没有任何影响，loading 本来就是布尔值",
+                "会把新请求的 loading 状态误关掉，表现为「还在生成但按钮已经可点」",
+                "会让 abort 失效",
+                "会导致 seq 重复"
+              ],
+              "answer": 1,
+              "explain": "切会话或快速重发时，旧请求的 finally 晚于新请求开始执行，无条件置 false 就把新请求的加载态关掉了。正确做法是先判断「我还是当前请求」再改共享状态。这与 abort、seq 都无关。"
+            },
+            {
+              "q": "「用户主动停止生成」与「网络错误」的产品处理差异，哪条是对的？",
+              "options": [
+                "两者都算失败，都弹错误提示并丢弃内容",
+                "停止保留已生成内容且不报错；网络错误标记为可重试的错误态",
+                "两者都静默处理，不打扰用户",
+                "停止要清空内容，网络错误要保留内容"
+              ],
+              "answer": 1,
+              "explain": "停止是用户的主动意图，保留内容、不报错、允许继续；网络错误是异常，需要明确的状态与重试入口。都当失败会污染监控并让用户误以为出问题；都静默则掩盖真实故障；停止后清空与用户预期相反。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "af-state",
+      "name": "对话状态建模",
+      "goal": "把「一个 messages 数组 + 一个 loading 布尔」升级成能支撑多轮、多会话、并发流的状态模型：消息拆成 part、会话各自一台状态机、订阅粒度细到单条消息，让流式高频写入不再拖垮整棵树。",
+      "lessons": [
+        {
+          "id": "af-04",
+          "title": "消息模型：把一条消息拆成 part，而不是一坨字符串",
+          "minutes": 46,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n最常见的起点是 `messages: { role, content: string }[]`。第一个 tool call 需求来了，于是把工具结果塞进 content：\n\n```ts\n{ role: 'assistant', content: '我来查一下天气\\n[调用 get_weather]\\n{...结果 JSON...}\\n所以今天多云' }\n```\n\n三个月后你会发现四件事全做不了。第一，工具卡片没法折叠 —— 它只是字符串的一部分。第二，无法重放某一次工具调用（重试单个工具），因为参数和结果都被拍平在文本里。第三，流式时没法「先展示工具调用的骨架、再填结果」，只能等全部到齐。第四，国际化 / 复制 / 导出全部要正则拆字符串。\n\n第二个场景是「消息不可变」被破坏。有人直接改对象：\n\n```ts\nmsg.content += token   // 就地改\n```\n\nReact 看到引用没变，不重渲染；于是你补一句 `setMessages([...messages])`，但数组里的对象还是同一批被就地改过的，浅比较一个都没发现变化 —— 结果一半更新一半不更新，非常难查。\n\n## 二、原理：它到底怎么运作\n\n第一，**消息是容器，part 是内容单元。** 一条 assistant 消息由若干 part 顺序组成：`text`（文本片段）、`tool_call`（工具调用，含 name/args/状态）、`tool_result`（结果，含引用 id）、`thinking`（推理摘要）、`citation`（检索引用）、`image` 等。这样工具卡片、折叠、重试、导出都变成「按 part 渲染」，而不是字符串处理。\n\n第二，**流式只追加/更新最后一个 part。** 一段文本流对应一个 text part，token 到来时只改那个 part 的 `text` 字段（创建新对象），消息本身的 part 数组换一项。这样中间过程永远是「结构稳定、内容增长」，UI 不需要猜测。\n\n第三，**消息要不可变，但结构要共享。** 更新一条消息 = 生成新的 message 对象 + 新的 messages 数组，未改动的消息保持同一引用。这样按消息 memo 的组件只重渲染变化的那条 —— 这是长对话不卡的根基。\n\n第四，**状态要显式。** 每条消息带 `status: 'pending' | 'streaming' | 'done' | 'error' | 'stopped'`，part 里的 tool 带 `status: 'calling' | 'ok' | 'failed'`。不要用「内容是否为空」「是否有 loading」去反推状态 —— 反推逻辑一旦有两处，必然不同步。\n\n第五，**part 的 id 要稳定。** 流式时不断新建 part 会让 React key 变化、动画重放、输入框失焦。做法是「流开始时创建一个 text part 并复用」，直到遇到工具调用才结束它、开新的 part。\n\n## 三、代码逐行\n\n下面实现一套最小但完整的消息模型：`Message`/`Part` 类型、`applyDelta`（只更新最后一个 text part）、`upsertToolResult`（按 toolCallId 关联结果），并验证「未改动消息引用不变」。\n\n关键行说明：\n\n第一，`applyDelta` 里先找到最后一条 assistant 消息；如果它没有 text part 就追加一个。**注意是最后一条**，不是「id 匹配的那条」—— 流式期间用户可能已经发了新消息，用 id 匹配反而绕。\n\n第二，`parts.map` 时只有命中的那个 part 换新对象，其余保持引用。这让「按 part 做 memo」成为可能。\n\n第三，`upsertToolResult` 用 `toolCallId` 关联而不是数组下标。工具可能并发（一次返回多个 call），下标会错位。\n\n第四，示例末尾打印了「旧消息引用是否相等」，用来验证结构共享真的生效 —— 这类不变量最适合写成断言，改动模型时立刻能发现退化。\n\n## 四、三个常见误区\n\n### 误区一：content 用 `string | Part[]` 兼容两种\n\n看起来平滑迁移，实际每个渲染点都要判断两种形状，三个月后代码里到处是 `typeof content === 'string'`。正确做法是一次性迁移（写一个 `fromLegacy()` 转换函数），内部统一 Part[]，边界处才处理老数据。\n\n### 误区二：把「工具结果」挂到消息顶层\n\n`message.toolResults: Record<string, Result>` 看着省事，但它丢了顺序与分组：一次回复里「先搜 A、再搜 B、最后总结」的时间线无法还原。结果应该作为 part 出现在时间线的正确位置。\n\n### 误区三：用数组下标当 key\n\n`key={index}` 在追加时看似没事，一旦「重试某条消息导致它被替换」或「删掉中间一条」，后面所有组件的 state（比如展开态、滚动位置）都会错位到邻居身上。key 用消息 id 或 clientId。\n\n## 五、边界与代价\n\nPart 模型会让状态体积变大（每条消息多一层数组与状态字段）。在「一周几百条消息」的量级下无所谓，但要考虑持久化：localStorage 有 5MB 上限，Part 模型 + 工具结果很容易超。做法是只持久化「终态」并对工具结果做截断（比如长文本只留前 2KB + 摘要），别把整段原始响应存进去。\n\n另一个代价是迁移成本：老会话的历史数据是老格式，需要一次转换并记住版本号（`schemaVersion`），否则以后每次改模型都要猜。\n\n反例：如果产品就是「一问一答纯文本，没有工具、没有附件」，Part 模型是过度设计 —— 一个 `string` 足够，别为了「将来可能」付现在的复杂度。判断标准是「是否有非文本内容或需要单独重试的单元」。\n\n## 六、动手任务\n\n第一，实现 `applyDelta(msgs, delta)` 与 `upsertToolResult(msgs, callId, result)`，保证不修改入参。\n\n第二，写三个断言：未改动消息引用不变；连续 append 三次 delta 只产生一个 text part；工具结果按 callId 正确挂到对应 part。\n\n第三，给消息加 `schemaVersion`，写一个 `migrate()` 把老的 `{role, content}` 转成 Part 模型，并验证转换后渲染顺序不变。\n\n## 七、一句话总结\n\n- 消息是容器，part 是内容单元：文本、工具调用、结果、引用各自成 part。\n- 流式只动最后一个 part，消息与数组保持不可变，未改动的引用必须不变。\n- 状态显式化（消息 status + part status），不要靠内容反推。\n- 工具结果用 toolCallId 关联，不用下标。\n- key 用 id，别用 index；持久化只存终态并截断大字段。\n",
+          "code": "// af-04 可运行示例：Part 模型 + 只更新最后一个 text part + 结构共享\n// 运行方式：tsx af-04.ts\n\ntype PartStatus = 'streaming' | 'ok' | 'failed'\ntype TextPart = { type: 'text'; id: string; text: string; status: PartStatus }\ntype ToolCallPart = { type: 'tool_call'; id: string; name: string; args: unknown; status: 'calling' | 'ok' | 'failed' }\ntype ToolResultPart = { type: 'tool_result'; id: string; callId: string; result: unknown }\ntype Part = TextPart | ToolCallPart | ToolResultPart\n\ntype MsgStatus = 'streaming' | 'done' | 'error' | 'stopped'\ntype Message = { id: string; role: 'user' | 'assistant'; parts: Part[]; status: MsgStatus }\n\nconst lastAssistant = (msgs: Message[]) => {\n  for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'assistant') return i\n  return -1\n}\n\n/** 追加文本：只动最后一条 assistant 的最后一个 text part，其它消息引用不变 */\nfunction applyDelta(msgs: Message[], delta: string): Message[] {\n  const index = lastAssistant(msgs)\n  if (index < 0) return msgs\n  const msg = msgs[index]\n  const parts = [...msg.parts]\n  const tail = parts[parts.length - 1]\n  if (tail && tail.type === 'text') {\n    parts[parts.length - 1] = { ...tail, text: tail.text + delta }\n  } else {\n    parts.push({ type: 'text', id: `t-${msg.parts.length}`, text: delta, status: 'streaming' })\n  }\n  const next = [...msgs]\n  next[index] = { ...msg, parts }\n  return next\n}\n\n/** 工具结果按 callId 挂到对应位置，并把调用状态改成 ok */\nfunction upsertToolResult(msgs: Message[], callId: string, result: unknown): Message[] {\n  return msgs.map((m) => {\n    const hit = m.parts.some((p) => p.type === 'tool_call' && p.id === callId)\n    if (!hit) return m // 未命中：保持引用，让 memo 生效\n    const parts: Part[] = []\n    for (const p of m.parts) {\n      if (p.type === 'tool_call' && p.id === callId) parts.push({ ...p, status: 'ok' })\n      else parts.push(p)\n    }\n    parts.push({ type: 'tool_result', id: `r-${callId}`, callId, result })\n    return { ...m, parts }\n  })\n}\n\n// ---- 验证结构共享与顺序 ----\nconst user: Message = { id: 'u1', role: 'user', parts: [{ type: 'text', id: 't0', text: '今天天气？', status: 'ok' }], status: 'done' }\nconst a1: Message = { id: 'a1', role: 'assistant', parts: [], status: 'streaming' }\nlet msgs = [user, a1]\n\nmsgs = applyDelta(msgs, '我查一下')\nmsgs = applyDelta(msgs, '。')\nmsgs = [...msgs.slice(0, 1), { ...msgs[1], parts: [...msgs[1].parts, { type: 'tool_call', id: 'c1', name: 'get_weather', args: { city: '深圳' }, status: 'calling' }] }]\nmsgs = upsertToolResult(msgs, 'c1', { temp: 26, text: '多云' })\nmsgs = applyDelta(msgs, '今天多云，26 度。')\n\nconsole.log(msgs[1].parts.map((p) => p.type).join(' → '))\n// text → tool_call → tool_result → text\nconsole.log('用户消息引用未变:', msgs[0] === user) // true\nconsole.log('文本内容:', (msgs[1].parts[0] as TextPart).text) // 我查一下。\n",
+          "quiz": [
+            {
+              "q": "把工具调用结果塞进 assistant 消息的 `content` 字符串，最直接的代价是？",
+              "options": [
+                "会显著增加 token 消耗",
+                "工具卡片无法折叠/重试，只能靠正则拆字符串，流式过程也无法分阶段展示",
+                "会导致 SSE 无法解析",
+                "会让消息 id 冲突"
+              ],
+              "answer": 1,
+              "explain": "拍平成文本后，工具参数与结果不再是结构化的可寻址单元：没法单独重试某次调用、没法折叠、没法先展示调用骨架再填结果，导出与复制也要做字符串解析。token 消耗取决于发给模型的内容，与前端结构无关；SSE 解析在协议层；id 冲突是另一件事。"
+            },
+            {
+              "q": "流式追加 token 时正确更新一条消息的方式是？",
+              "options": [
+                "`msg.content += token` 就地修改，然后 setState 触发渲染",
+                "`setMessages([...messages])` 复制数组，对象仍然就地改",
+                "生成新的 text part（或新的 part 数组）与新 message 对象，未改动的消息保持原引用",
+                "每次都重新构造整个 messages 数组并深拷贝所有消息"
+              ],
+              "answer": 2,
+              "explain": "就地修改会让依赖浅比较的渲染完全失效（引用没变）；只复制数组而对象被就地改，浅比较同样发现不了。全量深拷贝能工作但代价大，长对话里每次 token 都深拷贝会明显掉帧。正确做法是结构共享：只有变化的那条（及其 part）换新对象。"
+            },
+            {
+              "q": "一次回复里出现多个并发的工具调用，结果应该怎么关联？",
+              "options": [
+                "按数组下标关联，第 1 个结果给第 1 个调用",
+                "按 toolCallId 关联，并作为 part 插入时间线对应位置",
+                "全部挂到消息顶层的 toolResults 字段",
+                "拼接成一个字符串追加到文本末尾"
+              ],
+              "answer": 1,
+              "explain": "并发工具的返回顺序不保证与调用顺序一致，下标关联会错位；toolCallId 是服务端给的稳定关联键。挂到顶层字段会丢失时间线顺序（先搜 A 再搜 B 最后总结无法还原）；拼字符串则是把结构化数据拍平，后续无法单独渲染或重试。"
+            },
+            {
+              "q": "渲染消息列表时把 `key` 写成数组下标，会在什么情况下出问题？",
+              "options": [
+                "永远不会出问题，下标也是稳定的",
+                "重试/删除中间某条消息导致后续项移动时，组件内部状态（展开态、输入内容）会错位到邻居",
+                "只在服务端渲染时报错",
+                "只影响 CSS 动画"
+              ],
+              "answer": 1,
+              "explain": "React 用 key 判断「哪个组件对应哪条数据」。用下标时，删除或替换会让同一个 key 指向不同数据，组件 state 就跟着错位 —— 典型表现是展开态跳到别的消息上、输入框内容跑到另一行。用消息 id（或 clientId）可避免。"
+            }
+          ]
+        },
+        {
+          "id": "af-05",
+          "title": "会话各自一台状态机：多会话并发流怎么不串味",
+          "minutes": 45,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n产品加上左栏多会话之后，一个全局 `loading` 布尔立刻不够用了：\n\n```ts\nconst [loading, setLoading] = useState(false)\n```\n\n会话 A 在流，用户切到会话 B 再发一句 —— A 的流还在跑，`loading` 是 true，B 的发送按钮被禁用；等 A 结束把 `loading` 置 false，B 的流其实还在跑，按钮却亮了。更糟的是「切回 A 时会发现 A 的内容还在长，但界面上的停止按钮消失了」。\n\n第二个场景是「切走再切回，流断了」。有人把流交给组件持有（`useEffect` 里发起，`return` 时 abort），切会话组件卸载 → 流被取消 → 回来只剩半截内容，且无法续。\n\n第三个场景是「刷新后彻底乱」。持久化时把 `loading: true` 也存进了 localStorage，刷新后界面永远显示「正在生成」，实际没有请求在跑。\n\n## 二、原理：它到底怎么运作\n\n第一，**把「会话」当成状态的所有者**。每个会话有自己的：消息列表、流状态（idle/streaming/awaiting_tool/error）、当前 requestId、错误信息、草稿。全局只放 UI 态：当前选中哪个会话、侧栏展开、输入框是否聚焦、全局提示。判断标准是「切会话时它该不该跟着变」—— 该变的就是全局态，不该变的是会话态。\n\n第二，**流不属于组件，属于会话。** 请求应该在「发送动作」里发起并挂到会话上，组件只订阅。这样切会话不会取消流；回来接着看即可。组件卸载时只解订阅。\n\n第三，**持久化只存终态。** `streaming` 是过程态，刷新后无法自动恢复（请求已经死了）。正确做法：持久化时把 `streaming` 归一成 `stopped`（或 `incomplete`），并在 UI 上给「重新生成」入口。存 `loading: true` 是纯 bug。\n\n第四，**并发有上限。** 用户可能同时开 3 个会话在流。前端要限制并发（比如最多 2 个），并在超限时给出明确提示；否则既拖垮浏览器连接池，也让服务端限流触发。\n\n第五，**「正在流」的状态要能派生。** `isStreaming = session.status === 'streaming'`，不要用 `pendingRequestId !== null` 之类间接判断。派生一次，全 UI 一致。\n\n## 三、代码逐行\n\n下面用一台「按会话分片」的小 store 演示：`sessions` 是 Record，`activeId` 是全局态；发送时只动目标会话，切走再回来流继续。\n\n关键行说明：\n\n第一，`state.sessions[id]` 是唯一真相，`activeId` 只决定「看哪个」。渲染侧用 `activeId` 选数据，写入侧用请求发起时的 `id` 定位 —— 这两个 id 必须分开，混用就是串味的根源。\n\n第二，`send(id, text)` 里所有写入都用参数 `id`，绝不在回调里读 `activeId`。这一条如果写错，现象是「切到 B 后 A 的内容长在 B 上」。\n\n第三，`patch(id, fn)` 生成新对象时只替换目标会话，其它会话引用不变 —— 配合按会话 memo，切会话不重渲染别的会话。\n\n第四，持久化用 `seriali ze()` 把 `streaming` 归一成 `incomplete`，并在读取时校验版本。\n\n## 四、三个常见误区\n\n### 误区一：用「当前选中会话」当写入目标\n\n这是最贵的一个。所有异步回调里都必须用「发起时的会话 id」，而不是「现在的选中会话」。判断方法：把网络调慢，然后在流式期间疯狂切会话，看内容会不会跑到别的框里。\n\n### 误区二：把流放在组件里\n\n`useEffect(() => { start(); return () => abort() }, [sessionId])` 看着很 React，实际把「流的生命周期」绑到了「挂载」。切会话卸载就取消，用户丢失正在生成的内容。流应该放在 store/服务层，组件只订阅。\n\n### 误区三：全局只用一个 error\n\n会话 A 报错，用户切到 B 也能看到 A 的红条。错误应该挂在会话上（`session.error`），只有全局性错误（比如登录过期）才放全局。\n\n## 五、边界与代价\n\n按会话分片会让 store 结构变深，选择器写起来更啰嗦（`s => s.sessions[id].messages`），但换来的是天然的隔离与细粒度订阅。\n\n并发上限要和服务端的限流对齐，否则前端放行、服务端 429，用户看到的是「突然失败」而不是「请稍等」。建议前端主动限流并在 UI 上排队显示。\n\n持久化的量要控制：多会话 × Part 模型 × 工具结果很容易撑爆 localStorage。实践是「只持久化最近 N 个会话的终态 + 每个会话最多 M 条消息」，更早的按需从服务端拉。\n\n反例：如果产品只允许一个会话（比如单文档助手），整套分片是浪费 —— 一个 `session` 对象足够，别提前抽象。\n\n## 六、动手任务\n\n第一，实现 `send(sessionId, text)`，要求流式期间切换会话后再切回，内容仍然连续（写一个脚本模拟：send('a') → 立刻 activeId='b' → 等 50ms → activeId='a'，断言 a 的消息完整）。\n\n第二，实现持久化与恢复：写入时把 `streaming` 转成 `incomplete`，读取后 UI 显示「上次生成被中断，点击继续」。\n\n第三，加并发上限（2 个），超限时返回明确的错误对象而不是静默排队，并写出断言。\n\n## 七、一句话总结\n\n- 会话拥有状态，全局只放 UI 态；判断标准是「切会话该不该跟着变」。\n- 流挂在会话上，不挂在组件上；组件只订阅，卸载只解订阅。\n- 写入永远用「发起时的会话 id」，不要读「当前选中」。\n- 持久化只存终态，`streaming` 要归一成「未完成」，别存 loading。\n- 并发要有上限，并和 服务端限流对齐。\n",
+          "code": "// af-05 可运行示例：按会话分片的 store，切走再回来流继续\n// 运行方式：tsx af-05.ts\n\ntype StreamStatus = 'idle' | 'streaming' | 'incomplete' | 'error'\ntype Session = { id: string; title: string; messages: string[]; status: StreamStatus; reqId: number }\n\ntype State = { sessions: Record<string, Session>; activeId: string }\n\nconst makeSession = (id: string): Session => ({ id, title: id, messages: [], status: 'idle', reqId: 0 })\n\nlet state: State = { sessions: { a: makeSession('a'), b: makeSession('b') }, activeId: 'a' }\nconst listeners = new Set<() => void>()\nconst emit = () => listeners.forEach((l) => l())\n\n/** 只替换目标会话，其它会话引用不变（切会话不重渲染别的会话） */\nfunction patch(id: string, fn: (s: Session) => Session) {\n  state = { ...state, sessions: { ...state.sessions, [id]: fn(state.sessions[id]) } }\n  emit()\n}\n\nfunction setActive(id: string) {\n  state = { ...state, activeId: id }\n  emit()\n}\n\n/** 假服务端：每 15ms 吐一个字 */\nfunction fakeStream(onToken: (t: string) => void): Promise<void> {\n  const chars = '这是会话内容还在继续生成'.split('')\n  return new Promise((resolve) => {\n    let i = 0\n    const timer = setInterval(() => {\n      if (i >= chars.length) {\n        clearInterval(timer)\n        resolve()\n        return\n      }\n      onToken(chars[i++])\n    }, 15)\n  })\n}\n\nfunction send(sessionId: string, text: string) {\n  const reqId = state.sessions[sessionId].reqId + 1\n  patch(sessionId, (s) => ({ ...s, messages: [...s.messages, `用户：${text}`], status: 'streaming', reqId }))\n\n  // ⚠️ 所有写入都用参数 sessionId，绝不读 state.activeId\n  let acc = ''\n  fakeStream((t) => {\n    if (state.sessions[sessionId].reqId !== reqId) return // 身份守卫\n    acc += t\n    patch(sessionId, (s) => ({ ...s, messages: [...s.messages.slice(0, -1), `助手：${acc}`] }))\n  }).then(() => {\n    if (state.sessions[sessionId].reqId === reqId) patch(sessionId, (s) => ({ ...s, status: 'idle' }))\n  })\n}\n\n// ---- 演示：a 在流时切到 b，再切回 a ----\nsend('a', '你好')\nsetTimeout(() => setActive('b'), 20)\nsetTimeout(() => setActive('a'), 60)\nsetTimeout(() => {\n  console.log('active =', state.activeId)\n  console.log('a 的消息：', state.sessions.a.messages)\n  console.log('a 的状态：', state.sessions.a.status) // idle（流正常跑完）\n  console.log('b 未被污染：', state.sessions.b.messages.length === 0) // true\n}, 500)\n",
+          "quiz": [
+            {
+              "q": "多会话产品里，异步回调里应该用哪个会话 id 定位写入？",
+              "options": [
+                "当前选中的会话 id（state.activeId）",
+                "发起请求时捕获的会话 id",
+                "服务端返回的 sessionId",
+                "两者的并集，写两个会话"
+              ],
+              "answer": 1,
+              "explain": "必须用发起时捕获的 id。用 activeId 会导致「用户在流式期间切会话，内容长到别的会话里」——这是最常见也最贵的串味 bug。服务端 id 可作为校验，但不能替代发起时的定位（首轮对话时可能还没有服务端 id）。"
+            },
+            {
+              "q": "为什么「流」不应该由组件的 useEffect 持有？",
+              "options": [
+                "React 不允许在 useEffect 里发请求",
+                "组件卸载会触发清理函数，切会话就取消了正在进行的流，用户丢失内容",
+                "useEffect 无法访问 store",
+                "会导致内存泄漏"
+              ],
+              "answer": 1,
+              "explain": "把流绑到组件生命周期上，切会话（组件卸载）就会 abort，回来后只剩半截且无法续。流应挂在会话/服务层，组件只订阅。React 完全可以在 effect 里发请求，问题在于生命周期归属。"
+            },
+            {
+              "q": "持久化会话状态时，`streaming` 应该怎么处理？",
+              "options": [
+                "原样存，刷新后自动继续显示「正在生成」",
+                "存成 loading: true，等用户点击再恢复",
+                "归一成「未完成/已中断」状态，并提供重新生成入口",
+                "直接丢弃该会话"
+              ],
+              "answer": 2,
+              "explain": "刷新后请求已死，`streaming` 不可能自动恢复，原样存会让 UI 永远卡在生成中。归一成 incomplete 既诚实地反映事实，又给出可操作入口。丢弃会话则丢失了已经生成的部分。"
+            },
+            {
+              "q": "关于并发流，下列说法正确的是？",
+              "options": [
+                "前端不需要限制，服务端会排队",
+                "前端应有并发上限并与服务端限流对齐，超限时给出明确提示",
+                "并发越多体验越好，应该全部放开",
+                "并发流会破坏 SSE 协议"
+              ],
+              "answer": 1,
+              "explain": "浏览器连接池、服务端限流、用户账单都有限制，前端主动限流并明确提示，能把「莫名失败」变成「请稍等」。不限制会让 429 直接冒到用户面前；「越多越好」显然不成立；协议本身不禁止并发。"
+            }
+          ]
+        },
+        {
+          "id": "af-06",
+          "title": "订阅粒度：为什么你的流式一卡一卡",
+          "minutes": 47,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n用 Zustand 之后的典型写法：\n\n```ts\nconst messages = useChatStore((s) => s.messages)\nconst lastText = useChatStore((s) => s.messages[s.messages.length - 1].text)\n```\n\n第二个选择器每次返回一个**新的字符串**（内容在变），看起来没问题。真正的坑在第一个：`s.messages` 每次追加都换新数组，凡是订阅了 `messages` 的组件都会重渲染 —— 包括每一条历史消息的容器、每一条工具卡片、侧栏的会话列表。\n\n1200 个 token 意味着 1200 次全列表重渲染。对话到 200 条时，每次重渲染要跑 200 个子组件；中端机上一秒内做不完 20 次，于是你看到「字一顿一顿地出」。\n\n第二个场景是「选择器返回新对象」：\n\n```ts\nconst { messages, status } = useChatStore((s) => ({ messages: s.messages, status: s.status }))\n```\n\nZustand v4 的默认比较是 `Object.is`，每次选择器都返回新对象 → 永远判定为「变了」→ 每次 store 更新都重渲染，哪怕你只关心 status。这是新手最常撞的一枪。\n\n第三个场景是「在 store 里做派生计算」：\n\n```ts\nuseChatStore((s) => s.messages.filter((m) => m.role === 'user'))\n```\n\n每次调用都 filter 一遍新数组 —— 既贵又永远不稳定。派生应该在 selector 外做缓存，或用 `useShallow`。\n\n## 二、原理：它到底怎么运作\n\n第一，**订阅的粒度决定重渲染的范围。** 理想状态是：流式写入只让「正在增长的那条消息」重渲染。要做到这一点，渲染单位必须细到消息（甚至 part），并且订阅必须精确到 `s.messages[id]`，而不是整个数组。\n\n第二，**选择器必须返回稳定引用或原始值。** 返回对象/数组会破坏相等比较。Zustand 提供 `useShallow` 做浅比较；或者干脆拆成多个原子选择器（一个字段一个 hook），让每个订阅只关心一个原始值。\n\n第三，**高频写入源最好走外部 store。** React 的状态更新要经过调度，8Hz~60Hz 的流式写入用 `useState` 会不断触发调度。React 官方的建议是用 `useSyncExternalStore` 订阅外部数据源 —— 它就是为「高频、外部、可变的源」设计的。本站仪表盘的时间轴就是这么做（`usePlayFlags` 只订阅「是否播放 + 倍速」，避免 8Hz 重渲染）。\n\n第四，**memo 不是万能的。** `React.memo` 只在 props 浅相等时跳过；如果父组件每次传新回调（`onRetry={() => ...}`），memo 直接失效。要么把回调用 `useCallback` 稳定下来，要么把回调下移到子组件内部订阅。\n\n第五，**流式期间要避免「全量派生」。** 比如未读计数、最后一条摘要、会话列表排序 —— 这些在每次 token 时都重算，成本随消息数线性增长。做法是节流（比如 500ms 或流结束时算一次），或者把派生结果也做成可订阅的切片。\n\n## 三、代码逐行\n\n下面用最小实现演示三种订阅粒度带来的重渲染次数差异：整数组订阅、拆字段订阅、按消息 id 订阅。\n\n关键行说明：\n\n第一，`createStore` 用 `Set` 存监听器，`set` 时全量通知 —— 这就是真实 store 的行为。要点不在 store 实现，而在**订阅方怎么挑数据**。\n\n第二，`subscribeArray` 每次写入都通知（数组换新引用）；`subscribeById` 只在目标 id 变化时通知。演示里能看到 100 次 token 下前者 100 次、后者 100 次（因为都在写同一条）—— 所以真正省的是「其它消息不重渲染」，示例通过「其它 id 的监听器零触发」来体现。\n\n第三，`emit` 里遍历监听器时先复制一份，避免监听器内部再订阅/退订导致遍历错乱（真实 store 里很常见的崩溃点）。\n\n## 四、三个常见误区\n\n### 误区一：选择器返回对象/数组，指望 Zustand 帮你比较\n\nv5 已把默认浅比较移除，返回新对象必然每次重渲染。要么 `useShallow`，要么拆成多个原子选择器。这一条几乎每个项目都会踩一次。\n\n### 误区二：把所有状态塞进一个 store\n\n`{ messages, sessions, ui, settings }` 一个 store，任何写入都通知所有订阅者，靠选择器兜底。可行的前提是每个订阅都精确；一旦有人写了个宽选择器，整页跟着抖。更好的做法是按域分 store（会话域 / UI 域 / 设置域），从结构上限制爆炸半径。\n\n### 误区三：用 memo 优化，但 props 里有新函数\n\n现象是「加了 memo 完全没效果」。用 React DevTools 的 Profiler 看「why did this render」，十次有八次是回调 prop 每次新建。稳定回调或把回调放进 store（用 `store.getState().actions` 拿稳定引用）。\n\n## 五、边界与代价\n\n细粒度订阅的代价是代码更啰嗦：每个消息组件自己订阅自己那条数据，父组件不再传 text。这在 200 条消息的列表里是值得的，但在 5 条消息的弹窗里是负担。\n\n另一个代价是可调试性：数据流散落在各处，出问题时要沿着订阅链排查。折中是「按组件边界订阅」：列表容器订阅 id 数组（稳定引用，只在增删时变），每条消息订阅自己的内容。\n\n反例：如果你的消息数恒定很少（比如只有一个当前回复），整棵子树重渲染完全无感，别为了「性能」把代码拆散。\n\n## 六、动手任务\n\n第一，把示例跑一遍，记录「流式 100 次 token」时各订阅方式的通知次数，并解释差异。\n\n第二，改用 `useShallow` 重写一个返回对象的选择器，用断言验证「status 不变时不触发重渲染」。\n\n第三，给一个 200 条消息的列表做性能对比：整数组订阅 vs 按 id 订阅，用 `performance.now()` 包住渲染函数统计总耗时。\n\n## 七、一句话总结\n\n- 订阅粒度 = 重渲染范围：能订阅单条就别订阅数组。\n- 选择器返回对象/数组必然破坏相等比较，用 `useShallow` 或拆原子选择器。\n- 高频外部数据源用 `useSyncExternalStore`，别用 `useState` 硬顶。\n- memo 遇到「每次新建的回调」会直接失效，先查 props 再看 memo。\n- 全量派生（计数、排序、摘要）要节流或放到流结束。\n",
+          "code": "// af-06 可运行示例：三种订阅粒度下的通知次数差异\n// 运行方式：tsx af-06.ts\n\ntype Msg = { id: string; text: string }\ntype State = { messages: Msg[] }\n\nfunction createStore(initial: State) {\n  let state = initial\n  const listeners = new Set<() => void>()\n  return {\n    get: () => state,\n    set(next: State) {\n      state = next\n      // 复制一份再遍历：监听器内部可能订阅/退订\n      for (const l of [...listeners]) l()\n    },\n    subscribe(l: () => void) {\n      listeners.add(l)\n      return () => listeners.delete(l)\n    },\n  }\n}\n\nconst store = createStore({ messages: [] })\n\n// ① 订阅整个数组：任何写入都通知\nlet arrayHits = 0\nstore.subscribe(() => arrayHits++)\n\n// ② 订阅单条消息：只有那条变了才通知（这里用 id 过滤模拟选择器）\nfunction subscribeById(id: string, fn: () => void) {\n  let prev = ''\n  return store.subscribe(() => {\n    const msg = store.get().messages.find((m) => m.id === id)\n    const text = msg?.text ?? ''\n    if (text !== prev) {\n      prev = text\n      fn()\n    }\n  })\n}\nlet a1Hits = 0\nlet oldHits = 0\nsubscribeById('a1', () => a1Hits++)\nsubscribeById('old', () => oldHits++) // 一条不变的历史消息\n\n// 初始化：一条历史消息 + 一条正在流的消息\nstore.set({\n  messages: [\n    { id: 'old', text: '这是一条很早的历史消息' },\n    { id: 'a1', text: '' },\n  ],\n})\n\n// 模拟 100 次 token 写入（每次都换新的 messages 与新对象，模拟不可变更新）\nfor (let i = 0; i < 100; i++) {\n  const msgs = store.get().messages\n  const next = msgs.map((m) => (m.id === 'a1' ? { ...m, text: m.text + '字' } : m))\n  store.set({ messages: next })\n}\n\nconsole.log('数组订阅通知次数', arrayHits)   // 101（含初始化那次）\nconsole.log('流式消息通知次数', a1Hits)      // 100\nconsole.log('历史消息通知次数', oldHits)     // 0  ← 这就是细粒度订阅的价值\n",
+          "quiz": [
+            {
+              "q": "`useStore((s) => ({ messages: s.messages, status: s.status }))` 每次 store 更新都重渲染，原因是？",
+              "options": [
+                "messages 数组太大",
+                "选择器每次返回新对象，默认的 Object.is 比较永远判定为变了",
+                "status 是原始值，不能放进对象",
+                "React 不支持返回对象的 hook"
+              ],
+              "answer": 1,
+              "explain": "Zustand 默认用 Object.is 比较选择器返回值，对象字面量每次都是新引用，所以必然「变了」。解法是 useShallow 做浅比较，或拆成两个原子选择器各取一个字段。与数组大小、字段类型、React 能力都无关。"
+            },
+            {
+              "q": "流式场景下订阅「整个 messages 数组」的组件，主要浪费在哪里？",
+              "options": [
+                "网络请求变多",
+                "每次 token 都让所有依赖该数组的组件重渲染，成本随消息条数线性增长",
+                "会导致状态丢失",
+                "会破坏不可变更新"
+              ],
+              "answer": 1,
+              "explain": "数组引用每帧都变，订阅它的组件全部重渲染；消息越多越慢，表现为「字一顿一顿」。它不影响网络、不丢状态、也不破坏不可变（恰恰是遵守了不可变才会换引用）。"
+            },
+            {
+              "q": "加了 `React.memo` 却没有减少重渲染，最可能的原因是？",
+              "options": [
+                "memo 只对 class 组件有效",
+                "父组件每次渲染都传入新建的函数/对象 props，浅比较必然不等",
+                "memo 需要配合 useMemo 才能用",
+                "组件内部有 useState"
+              ],
+              "answer": 1,
+              "explain": "memo 比较 props 的浅相等，新建的回调或对象字面量每次都不同，memo 直接失效。应把回调 useCallback 稳定化，或把回调从 store 的 actions 拿稳定引用。memo 对函数组件有效（第一个选项错）；内部 useState 不影响 memo 生效。"
+            },
+            {
+              "q": "对于 8Hz~60Hz 的外部流式数据源，React 官方更推荐的接入方式是？",
+              "options": [
+                "useState + useEffect 里定时 setState",
+                "useSyncExternalStore 订阅外部数据并自行控制通知频率",
+                "把数据直接挂在 window 上，render 时读取",
+                "用 context 包一层，每次更新都广播"
+              ],
+              "answer": 1,
+              "explain": "useSyncExternalStore 正是为「外部、可变、高频」的数据源设计：订阅与快照分离，且能配合 getServerSnapshot 避免水合不一致。useState 高频写入会持续触发调度；挂 window 上读取在并发渲染下不安全；context 广播会让所有消费者重渲染。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "af-viz",
+      "name": "过程可视化",
+      "goal": "把 Agent 的中间状态做成一等公民：思考、工具调用、检索结果各有自己的事件与渲染器，用户能看懂它在做什么、为什么这么做，也能在关键节点中断或批准。",
+      "lessons": [
+        {
+          "id": "af-07",
+          "title": "事件协议：别把过程塞进正文",
+          "minutes": 44,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n第一版把过程直接写进正文：\n\n```\n正在思考...\n[调用 search_docs(query=\"退款政策\")]\n[结果] 共 3 条，第一条是……\n根据以上资料，退款需要 7 个工作日。\n```\n\n上线后三个问题冒出来。第一，用户复制这段回复粘到工单里，会带着一堆内部 JSON。第二，产品要「思考过程默认折叠、只留一行摘要」，字符串没法折叠。第三，某次工具调用失败要单独重试，字符串里没有任何可寻址的东西，只能整段重生成，并再花一次钱。\n\n第二个场景是「流式里混了两种负载」。正文 token 和工具事件走同一个 `data:` 字段，客户端只能靠正则 `/^\\[(调用|结果)\\]/` 去猜。某天工具名里带了方括号，正则直接崩，页面把 JSON 当正文渲染出来。\n\n## 二、原理：它到底怎么运作\n\n第一，**过程是事件流，不是文本。** 服务端应该把「模型输出」和「Agent 动作」放在不同的事件类型里：`text.delta`、`thinking.delta`、`tool.start`、`tool.end`、`retrieval.result`、`run.finish`。前端按事件类型分派到不同渲染器，正文只承载模型说的话。\n\n第二，**每个动作都有生命周期。** 工具调用有 `start`（参数已完整）→ `progress`（可选）→ `end`（结果或错误）。只发结束事件的话，用户在前 5 秒什么都看不到；只发开始事件则永远转圈。生命周期让 UI 能显示「运行中 3.2s」。\n\n第三，**事件要可归约（reducible）。** 给定一串事件，重放必须能得到同样的界面状态。这要求事件带 `seq` 与稳定的 id（`runId` / `toolCallId`）。可归约带来两个好处：刷新后可以从事件日志重建；出问题时能复现用户看到的东西。\n\n第四，**折叠策略是产品决策，但结构必须支持。** 默认展开最新的动作、历史动作收成一行摘要（「搜索了 3 次文档 · 2.1s」）。这要求每个事件有「摘要字段」（可读的一句话），而不是让前端去截断 JSON。\n\n第五，**可访问性。** 过程区频繁更新，如果全部 `aria-live=\"polite\"`，读屏用户会被淹没。正确做法是只对「最终结果」与「需要用户决策」的内容播报，中间过程区设 `aria-live=\"off\"`，并用 `role=\"log\"` 标记它是日志区。\n\n## 三、代码逐行\n\n下面实现一个事件归约器：把混合类型的事件流归约成可渲染的「时间线」，并演示折叠摘要的生成。\n\n关键行说明：\n\n第一，`reduce(state, ev)` 是纯函数：同样的输入必然同样的输出。这样既能做单元测试，也能在服务端复用（服务端算一遍摘要，前端只渲染）。\n\n第二，`case 'tool.start'` 时**先插入一个 running 项**，再等 `tool.end` 更新它 —— 而不是等结束后才插入。这是「过程可见」的关键：用户在看到结果的几秒里，至少知道在跑什么。\n\n第三，`summary` 由事件自身提供（服务端写人话），前端只在缺失时兜底。让前端猜「这一步干了什么」永远不准。\n\n第四，`collapseBefore` 保留最近 N 个动作展开、更早的折叠成摘要行。注意折叠的是**渲染**，不是丢弃数据 —— 用户点开还要能看。\n\n## 四、三个常见误区\n\n### 误区一：用 message role 表达一切\n\n`role: 'tool'` 看起来很优雅，但工具不是「说话的人」，它是「被调用的动作」，还需要参数、耗时、状态、重试。把工具塞进 role 会让消息模型变成万能垃圾桶。\n\n### 误区二：思考过程全量透传\n\n直接把 reasoning token 全发到前端，既浪费带宽也让界面变噪音。产品上通常只显示「思考中…」加一句摘要；真要展示全文，也应该在折叠区里按需加载。\n\n### 误区三：工具错误当成聊天错误\n\n工具失败（比如 API 超时）通常**不该**让整条回复失败 —— Agent 可以换一个工具或直接说明。前端要把「工具错误」渲染成卡片内的错误态 + 「重试这一步」，而不是把整条消息标红。\n\n## 五、边界与代价\n\n事件协议需要服务端配合，前端单方面做不了。过渡办法是「适配层」：把服务端现有的混合文本用保守规则解析成事件，同时推动后端改造。适配层要可丢弃，别让它变成长期架构。\n\n时间线的渲染成本随动作数增长，一个长任务可能有几十个工具调用。要虚拟化或折叠（见阶段四），否则滚动会越来越钝。\n\n反例：如果产品是「纯问答，不接工具」，事件协议是多余的 —— 一个 text 流就够。\n\n## 六、动手任务\n\n第一，实现 `reduce()` 与三个事件类型的处理，写单测：乱序到达（先 end 后 start）时要能自愈或明确报错。\n\n第二，写一个 `summarize(timeline)` 生成「搜索 3 次 · 读取 2 篇 · 耗时 8.4s」这类一行摘要。\n\n第三，给过程区加 `aria-live=\"off\"` 与 `role=\"log\"`，并只对最终结果设 `polite`，用屏幕阅读器验证（或至少检查属性渲染）。\n\n## 七、一句话总结\n\n- 过程用事件表达（text/thinking/tool/retrieval），正文只放模型说的话。\n- 每个动作有 start→end 生命周期，先插 running 项再更新，过程才可见。\n- 事件要可归约：带 seq 与稳定 id，重放能得到同样的界面。\n- 折叠是渲染策略不是数据丢弃；摘要由服务端写人话。\n- 工具错误是卡片内错误态，不要把整条回复标红。\n",
+          "code": "// af-07 可运行示例：事件流 → 可渲染时间线（纯函数归约 + 折叠摘要）\n// 运行方式：tsx af-07.ts\n\ntype Ev =\n  | { type: 'text.delta'; seq: number; delta: string }\n  | { type: 'tool.start'; seq: number; callId: string; name: string; summary: string }\n  | { type: 'tool.end'; seq: number; callId: string; ok: boolean; result: unknown; ms: number }\n  | { type: 'run.finish'; seq: number; reason: 'stop' | 'error' }\n\ntype Item =\n  | { kind: 'text'; text: string }\n  | { kind: 'tool'; callId: string; name: string; summary: string; status: 'running' | 'ok' | 'failed'; result?: unknown; ms?: number }\n\ntype Timeline = { items: Item[]; finished: boolean; reason?: string }\n\nconst initial: Timeline = { items: [], finished: false }\n\nfunction reduce(state: Timeline, ev: Ev): Timeline {\n  switch (ev.type) {\n    case 'text.delta': {\n      const items = [...state.items]\n      const last = items[items.length - 1]\n      if (last && last.kind === 'text') items[items.length - 1] = { ...last, text: last.text + ev.delta }\n      else items.push({ kind: 'text', text: ev.delta })\n      return { ...state, items }\n    }\n    case 'tool.start':\n      // 先插入 running，过程立刻可见，而不是等结果回来才出现\n      return {\n        ...state,\n        items: [...state.items, { kind: 'tool', callId: ev.callId, name: ev.name, summary: ev.summary, status: 'running' }],\n      }\n    case 'tool.end': {\n      const items = state.items.map((it) =>\n        it.kind === 'tool' && it.callId === ev.callId\n          ? { ...it, status: ev.ok ? ('ok' as const) : ('failed' as const), result: ev.result, ms: ev.ms }\n          : it,\n      )\n      return { ...state, items }\n    }\n    case 'run.finish':\n      return { ...state, finished: true, reason: ev.reason }\n    default:\n      return state\n  }\n}\n\n/** 一行摘要：给折叠态用（真实项目里由服务端给，这里演示口径） */\nfunction summarize(t: Timeline): string {\n  const tools = t.items.filter((i) => i.kind === 'tool')\n  const ms = tools.reduce((s, i) => s + (i.kind === 'tool' ? i.ms ?? 0 : 0), 0)\n  const failed = tools.filter((i) => i.kind === 'tool' && i.status === 'failed').length\n  if (!tools.length) return `思考 ${t.items.filter((i) => i.kind === 'text').length} 段`\n  return `${tools.length} 次工具调用${failed ? `（${failed} 失败）` : ''} · ${(ms / 1000).toFixed(1)}s`\n}\n\n// ---- 演示：一次带工具调用的完整过程 ----\nconst events: Ev[] = [\n  { type: 'text.delta', seq: 1, delta: '我先查一下文档。' },\n  { type: 'tool.start', seq: 2, callId: 'c1', name: 'search_docs', summary: '搜索文档：退款政策' },\n  { type: 'tool.end', seq: 3, callId: 'c1', ok: true, result: { hits: 3 }, ms: 1200 },\n  { type: 'text.delta', seq: 4, delta: '查到了：退款需要 7 个工作日。' },\n  { type: 'run.finish', seq: 5, reason: 'stop' },\n]\n\nconst final = events.reduce(reduce, initial)\nconsole.log(final.items.map((i) => (i.kind === 'text' ? `text(${i.text.length})` : `${i.name}:${i.status}`)).join(' | '))\n// text(8) | search_docs:ok | text(16)\nconsole.log('摘要：', summarize(final))\nconsole.log('是否结束：', final.finished, final.reason)\n",
+          "quiz": [
+            {
+              "q": "把工具调用与结果拼进正文文本，最主要的损失是？",
+              "options": [
+                "模型会重复输出",
+                "过程不可折叠、不可单步重试、不可复制时剔除，只能靠正则拆",
+                "会导致 SSE 断连",
+                "会让 Markdown 渲染变慢"
+              ],
+              "answer": 1,
+              "explain": "拍平成文本后失去了可寻址的结构单元：折叠、单步重试、复制时剔除内部信息、按类型渲染都做不到，只能字符串处理且极易被内容里的符号破坏。与模型行为、连接稳定性、渲染性能无直接关系。"
+            },
+            {
+              "q": "工具调用只发 `end` 事件（不发 `start`），用户会看到什么？",
+              "options": [
+                "实时看到参数与运行状态",
+                "调用期间界面毫无反馈，几秒后结果突然出现",
+                "页面报错",
+                "工具结果丢失"
+              ],
+              "answer": 1,
+              "explain": "没有 start 就没有 running 项可渲染，用户在等待期看不到任何东西，长任务会被当成卡死。start/end 生命周期是「过程可见」的基础。结果不会丢，也不会报错——只是体验上像卡住。"
+            },
+            {
+              "q": "「事件可归约（reducible）」指的是？",
+              "options": [
+                "事件必须按顺序到达，乱序就报错",
+                "给定同一串事件，重放能得到同样的界面状态",
+                "事件必须合并成一条大消息",
+                "事件只能由前端生成"
+              ],
+              "answer": 1,
+              "explain": "可归约意味着状态是事件的纯函数结果，这让「刷新后可重建」「问题可复现」「服务端与前端算一遍得到同样结果」都成立，因此要求事件带 seq 与稳定 id。它并不要求严格顺序（能自愈更好），也不是合并或只由前端生成。"
+            },
+            {
+              "q": "过程区频繁更新时的可访问性处理，正确的是？",
+              "options": [
+                "整个过程区设 aria-live=polite，让读屏实时播报",
+                "过程区设 aria-live=off 与 role=log，只对最终结果或需要用户决策的内容播报",
+                "去掉所有 ARIA 属性，避免干扰",
+                "用 aria-live=assertive 保证第一时间播报"
+              ],
+              "answer": 1,
+              "explain": "逐 token 播报会让读屏用户完全无法使用（每几毫秒打断一次）。正确做法是把高频过程区静音，只对「结束」「需要批准」这类关键节点播报。assertive 更糟，会立即打断当前朗读。"
+            }
+          ]
+        },
+        {
+          "id": "af-08",
+          "title": "工具卡片：JSON Schema 到表单，结果到渲染器",
+          "minutes": 46,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n每接一个工具就写一套表单组件：\n\n```tsx\nif (tool.name === 'send_email') return <EmailForm ... />\nif (tool.name === 'query_db') return <SqlForm ... />\nif (tool.name === 'create_ticket') return <TicketForm ... />\n```\n\n工具从 3 个长到 20 个后，这个文件 2000 行，每个工具的表单校验规则还不一样；产品要「工具参数改成由后端 schema 驱动」时，你发现根本没有 schema，只有一堆手写表单。\n\n第二个场景是结果渲染。工具返回 `image/png` 时你把 base64 塞进 `<pre>`，用户看到一坨乱码；返回 diff 时你渲染成纯文本，用户得自己找哪行变了。\n\n第三个场景是「危险操作没有闸门」。工具 `delete_records` 的参数由模型生成，用户只看到一行「正在执行 delete_records」，然后数据没了。\n\n## 二、原理：它到底怎么运作\n\n第一，**参数表单应该由 JSON Schema 生成。** `{type:'object', properties:{...}, required:[...]}` 能覆盖 80% 的工具参数：string/number/boolean/enum/array。为每个字段注册一个控件（文本/数字/开关/下拉/多行），复杂字段（如文件、代码）用 `ui:widget` 扩展。这样加工具 = 加 schema，不加页面。\n\n第二，**校验分两层。** 客户端按 schema 做「形状校验」（必填、类型、范围），服务端必须再校验一次（信任边界）。前端校验的价值是即时反馈，不是安全。\n\n第三，**结果渲染用注册表按类型分派。** `mime/type → renderer`：`text/markdown` 走 Markdown，`application/json` 走可折叠 JSON 树，`image/*` 走图片，`text/x-diff` 走 diff 视图，`text/csv` 走表格。取不到渲染器时退回「可复制的等宽文本 + 类型标注」，永远不要白屏。\n\n第四，**危险操作要显式确认。** 判据不要依赖工具名里的动词猜，而是让工具声明 `danger: true`（或按 schema 里的 `x-risk` 标注）。确认框要展示「将要执行什么 + 影响范围」，用户点确认才发执行请求。\n\n第五，**表单状态属于「待执行的调用」，不属于工具。** 同一次回复里可能有两次 `send_email`，各自有自己的参数草稿。用 `callId` 做 key，才不会互相覆盖。\n\n## 三、代码逐行\n\n下面实现 `renderField(schema, value, onChange)` 的控件映射表，以及 `pickRenderer(type)` 的结果分派，并演示「未知类型必须降级」。\n\n关键行说明：\n\n第一，`enum` 优先于 `type` 判断。JSON Schema 里 `{type:'string', enum:[...]}` 如果先看 type 就会渲染成文本框，用户可随便输。\n\n第二，`required` 数组只表示必填，不在每个 property 里，所以控件需要外部传入 `required` 标志。\n\n第三，`pickRenderer` 用「主类型 + 兜底」的顺序匹配，`image/svg+xml` 也要能命中 `image/*`。\n\n第四，`fallback` 一定要包含**原始文本**与复制按钮 —— 未知类型在生产里一定会出现（服务端加了新工具、前端没发版）。\n\n## 四、三个常见误区\n\n### 误区一：表单受控值直接写进 store 的消息对象\n\n用户每敲一个字都触发整条消息的不可变更新，长对话里非常贵。草稿应该放在局部 state 或用 `callId` 分片的轻量 store，提交时才写回。\n\n### 误区二：结果一律 JSON.stringify 展示\n\n看着「通用」，实际把图片、diff、表格全降级成噪音。产品上这是最容易被吐槽的一处 —— 用户需要的是「看懂」，不是「看到原始数据」。\n\n### 误区三：确认框做成「确定/取消」两个按钮\n\n没有上下文。用户不知道要删多少行、发给谁。确认框必须展示关键参数（脱敏后）与影响范围，必要时要求二次输入（如输入资源名）。\n\n## 五、边界与代价\n\nSchema 驱动表单的代价是「复杂字段难受」：文件上传、富文本、代码编辑器都需要 `ui:widget` 扩展，而且布局（两列、分组）schema 表达力有限。实践是「80% 用 schema，20% 允许工具注册自定义组件」。\n\n结果渲染器的数量会随集成方增长，需要一份注册表与约定（谁维护、如何降级、超时）。否则半年后会有一堆渲染器没人知道是干什么的。\n\n反例：如果只有 2 个内部工具、参数都是简单字符串，手写表单更快更清楚。判断标准是「工具数量是否会增长到 10 个以上」。\n\n## 六、动手任务\n\n第一，实现 `renderField` 的五个基础控件（string/number/boolean/enum/textarea），并用一份真实工具的 schema 生成表单。\n\n第二，实现 `pickRenderer`，要求 `image/svg+xml` 命中 `image/*`，未知类型返回 fallback，并写断言。\n\n第三，给一个「危险工具」加确认流程：展示关键参数 + 输出「将影响 N 条记录」的预估，确认后才执行。\n\n## 七、一句话总结\n\n- 工具表单由 JSON Schema 生成，加工具只加 schema，不加页面。\n- 校验两层：前端给即时反馈，服务端才是安全边界。\n- 结果按类型分派渲染器，未知类型必须降级为可复制文本，不能白屏。\n- 危险操作靠工具声明 risk，不靠工具名猜；确认框要展示影响范围。\n- 草稿按 callId 隔离，别直接写进消息对象。\n",
+          "code": "// af-08 可运行示例：JSON Schema → 控件映射 + 结果渲染器分派 + 未知类型降级\n// 运行方式：tsx af-08.ts\n\ntype Field = {\n  type?: 'string' | 'number' | 'boolean' | 'array'\n  enum?: string[]\n  title?: string\n  minimum?: number\n  maximum?: number\n  items?: Field\n}\n\ntype Control = { kind: 'text' | 'number' | 'switch' | 'select' | 'list'; options?: string[]; hint: string }\n\n/** schema 字段 → 控件描述（真实项目里这里返回 React 元素，逻辑一致） */\nfunction renderField(name: string, f: Field, required: boolean): Control {\n  // enum 优先：{type:'string', enum:[...]} 若先看 type 会退化成文本框\n  if (f.enum?.length) return { kind: 'select', options: f.enum, hint: `${name}（必选 ${f.enum.length} 项之一）` }\n  switch (f.type) {\n    case 'number':\n      return { kind: 'number', hint: `${name}：${f.minimum ?? '-∞'} ~ ${f.maximum ?? '+∞'}` }\n    case 'boolean':\n      return { kind: 'switch', hint: `${name}（开关）` }\n    case 'array':\n      return { kind: 'list', hint: `${name}（列表，元素类型 ${f.items?.type ?? 'unknown'}）` }\n    default:\n      return { kind: 'text', hint: `${name}${required ? '（必填）' : ''}` }\n  }\n}\n\n/** 形状校验：只做前端即时反馈，服务端必须再校验一次 */\nfunction validate(schema: { properties: Record<string, Field>; required?: string[] }, value: Record<string, unknown>): string[] {\n  const errs: string[] = []\n  for (const key of schema.required ?? []) {\n    const v = value[key]\n    if (v === undefined || v === null || v === '') errs.push(`${key} 必填`)\n  }\n  for (const [key, f] of Object.entries(schema.properties)) {\n    const v = value[key]\n    if (v === undefined) continue\n    if (f.type === 'number' && typeof v === 'number') {\n      if (f.minimum !== undefined && v < f.minimum) errs.push(`${key} 不能小于 ${f.minimum}`)\n      if (f.maximum !== undefined && v > f.maximum) errs.push(`${key} 不能大于 ${f.maximum}`)\n    }\n    if (f.enum && typeof v === 'string' && !f.enum.includes(v)) errs.push(`${key} 必须是 ${f.enum.join(' / ')}`)\n  }\n  return errs\n}\n\n/** 结果渲染器分派：主类型 + 通配，未知类型必须降级 */\nconst RENDERERS: Record<string, string> = {\n  'text/markdown': 'Markdown 渲染',\n  'application/json': '可折叠 JSON 树',\n  'text/x-diff': 'Diff 视图',\n  'text/csv': '表格',\n  'image/png': '图片',\n  'image/jpeg': '图片',\n  'image/svg+xml': '图片',\n}\n\nfunction pickRenderer(mime: string): string {\n  if (RENDERERS[mime]) return RENDERERS[mime]\n  const major = mime.split('/')[0] + '/*'\n  if (RENDERERS[major]) return RENDERERS[major]\n  // 兜底：永远给可复制的原始文本 + 类型标注，绝不白屏\n  return `未知类型 ${mime}：等宽文本 + 复制按钮`\n}\n\n// ---- 演示 ----\nconst schema = {\n  properties: {\n    channel: { type: 'string' as const, enum: ['email', 'sms', 'inbox'] },\n    retries: { type: 'number' as const, minimum: 0, maximum: 5 },\n    dryRun: { type: 'boolean' as const },\n    tags: { type: 'array' as const, items: { type: 'string' as const } },\n  },\n  required: ['channel'],\n}\nconsole.log(renderField('channel', schema.properties.channel, true))\nconsole.log(validate(schema, { channel: 'email', retries: 9 }))  // [ 'retries 不能大于 5' ]\nconsole.log(validate(schema, { retries: 1 }))                    // [ 'channel 必填' ]\nconsole.log([pickRenderer('image/svg+xml'), pickRenderer('application/pdf')])\n// [ '图片', '未知类型 application/pdf：等宽文本 + 复制按钮' ]\n",
+          "quiz": [
+            {
+              "q": "JSON Schema 里 `{type:'string', enum:['a','b']}` 生成控件时，为什么要先判断 enum？",
+              "options": [
+                "因为 enum 的优先级在规范里更高",
+                "先判 type 会渲染成自由文本框，用户可以输入枚举外的值",
+                "否则无法显示默认值",
+                "enum 字段没有 type"
+              ],
+              "answer": 1,
+              "explain": "这类字段的 type 仍是 string，先按 type 分派就变成文本框，枚举约束就丢了。先判 enum 才能渲染下拉。规范里 type 与 enum 是并列约束，不存在优先级问题；默认值与控件类型无关。"
+            },
+            {
+              "q": "工具返回 `application/x-protobuf` 这类前端没有渲染器的类型，正确做法是？",
+              "options": [
+                "白屏并上报错误",
+                "降级为可复制的等宽文本 + 类型标注",
+                "强行用 JSON 渲染器解析",
+                "丢弃该结果不展示"
+              ],
+              "answer": 1,
+              "explain": "未知类型在生产里必然出现（服务端加工具、前端未发版），必须降级展示原始内容并标明类型，让用户至少能复制求助。白屏或丢弃会让工具调用「看起来失败」；强行 JSON 解析会抛错。"
+            },
+            {
+              "q": "危险工具（如 delete_records）的确认闸门，判据应该来自？",
+              "options": [
+                "工具名里是否包含 delete/drop 等动词",
+                "工具/schema 里显式的 risk 标记",
+                "参数数量是否超过 3 个",
+                "模型是否在文本里说了「这会删除数据」"
+              ],
+              "answer": 1,
+              "explain": "靠名字猜动词既漏（clear、purge、reset）又误伤（get_deleted_count），必须由工具声明 risk（或 schema 上的扩展字段）。参数数量、模型自述都不可靠，模型的话尤其不能作为安全判据。"
+            },
+            {
+              "q": "同一次回复里两次调用同一工具，参数草稿为什么必须按 callId 存？",
+              "options": [
+                "因为工具名可能重复",
+                "否则两次调用的草稿互相覆盖，用户改 A 会把 B 改掉",
+                "callId 是服务端主键，必须一致",
+                "为了让 React key 稳定"
+              ],
+              "answer": 1,
+              "explain": "按工具名或消息 id 存草稿时，同一工具的两次调用共享一份状态，编辑会互相污染。callId 是每次调用的唯一标识，天然隔离。key 稳定是附带好处，不是主因。"
+            }
+          ]
+        },
+        {
+          "id": "af-09",
+          "title": "信任与控制：中断、批准、耗时与归因",
+          "minutes": 45,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\nAgent 跑一个多步任务，第一个工具调用花 12 秒。界面只有一个转圈，用户在第 5 秒就点了两次「停止」，然后关掉页面 —— 之后产品侧看到「完成率 40%」，其实是没人知道它还在跑。\n\n第二个场景是「无法打断」。用户看到 Agent 已经走错方向（在查一个不相关的文档），只能干等到它跑完，再重新提问 —— 这次调用已经烧掉了几万 token。\n\n第三个场景是「不知道贵在哪」。月底账单涨了三倍，产品问「哪个环节贵」，前端只有总 token，没有按步骤的归因。\n\n## 二、原理：它到底怎么运作\n\n第一，**可中断是协议能力，不是前端按钮。** 客户端的「停止」要能真正让服务端停止（或至少停止后续步骤）。协议上要有一个 `runId` + `interrupt` 接口，服务端在步骤边界检查取消标志。只在本地 `abort()` 断流，服务端会继续跑完并计费。\n\n第二，**批准（approve）是两段式。** 危险动作前，服务端发 `tool.pending` 事件并挂住；前端展示参数与影响范围，用户点「批准」后发 `approve(toolCallId)`，服务端才执行。注意超时策略：无人批准要能自动过期，不能永远挂着。\n\n第三，**耗时与成本要按步骤归因。** 每个步骤（模型思考 / 工具执行 / 检索）记录 `startAt/endAt` 与 token 用量，聚合出「本次共 8.4s，其中检索 5.1s」。这不只是给用户看的，也是你自己排查性能的唯一依据。\n\n第四，**错误要「可读化」到用户能行动。** 三层：原始错误（日志）→ 人类可读原因（配额用尽 / 工具超时 / 网络中断）→ 可执行动作（重试 / 换工具 / 联系管理员）。只给第一层的产品等于没有错误处理。\n\n第五，**状态要能「说人话」。** `streaming` 对用户没有意义，「正在检索文档（第 2 次）」才有。状态文案应该由事件摘要驱动，而不是前端硬编码几句。\n\n## 三、代码逐行\n\n下面实现一个 `runTracker`：记录步骤耗时与 token、支持 interrupt 与 approve 的挂起/唤醒，并输出一段可读的执行报告。\n\n关键行说明：\n\n第一，`steps` 用 `runId` 分组，每次 `begin/end` 成对出现；`end` 找不到对应 `begin` 时要记录异常而不是静默 —— 这能在协议不一致时立刻暴露问题。\n\n第二，`awaitApproval()` 返回一个可 resolve 的 promise，同时启动超时定时器。用户批准走 resolve('approve')，超时走 resolve('timeout')，两者都要清定时器（否则内存里留一堆待触发的 timer）。\n\n第三，`report()` 只做聚合，不做格式化 —— 格式化交给 i18n 层，否则多语言时到处是模板字符串。\n\n## 四、三个常见误区\n\n### 误区一：前端 abort 就等于停止\n\n服务端如果不配合，前端断流后它继续跑完、继续计费。必须在协议层有 cancel 语义，并在 UI 上区分「已停止」与「停止中」。\n\n### 误区二：把 token 也算在前端\n\n前端拿不到准确 token（分词在服务端/模型侧）。前端应该展示服务端下发的用量，自己只做「展示与归因」，别试图估算 —— 估算值一旦与账单对不上就是信任危机。\n\n### 误区三：审批弹窗阻塞整个界面\n\n用全屏 modal 阻塞会让用户无法查看上下文（他需要看参数才能决定）。审批应该是一个可并存的卡片/侧栏，允许用户滚动查看完整调用链后再决定。\n\n## 五、边界与代价\n\n中断的实现代价在服务端：要在每个步骤边界检查取消标志，长事务还要能回滚部分副作用。做不到「真中断」时，至少要在 UI 上诚实标注「已请求停止，正在收尾」。\n\n归因数据会增加事件体积，建议只保留聚合值（每步 ms + tokens），不要把原始 payload 全存。\n\n反例：如果产品是单步问答（一问一答，无工具），这套中断/审批是多余的 —— 有「停止生成」就够了。\n\n## 六、动手任务\n\n第一，实现 `runTracker`，写一个脚本模拟「思考 2s → 检索 5s → 生成 1.4s」，输出报告与总耗时。\n\n第二，实现审批流程：`pending` 后 10 秒无人批准自动过期，断言定时器被清理（用 fake timer 或检查 activeHandles）。\n\n第三，把三类错误（配额、超时、网络）分别映射到「原因 + 建议动作」的文案，并写出映射表。\n\n## 七、一句话总结\n\n- 中断是协议能力：前端 abort 只是断流，服务端要能真停。\n- 审批两段式：pending 挂住 → 用户批准 → 执行，并且必须能超时。\n- 耗时与 token 按步骤归因，既给用户看也给自己排查。\n- 错误三层：原始 / 可读原因 / 可执行动作。\n- 审批不要用阻塞式全屏 modal，用户需要看上下文才能决策。\n",
+          "code": "// af-09 可运行示例：步骤耗时与用量归因 + 审批挂起/超时\n// 运行方式：tsx af-09.ts\n\ntype Step = { id: string; kind: 'think' | 'tool' | 'answer'; label: string; ms: number; tokens: number }\n\nfunction createRunTracker() {\n  const started = new Map<string, number>()\n  const steps: Step[] = []\n\n  return {\n    begin(id: string, kind: Step['kind'], label: string) {\n      started.set(id, Date.now())\n      return { id, kind, label }\n    },\n    end(id: string, tokens = 0) {\n      const t0 = started.get(id)\n      if (t0 === undefined) {\n        // 协议不一致要暴露，不要静默\n        console.warn('end 未匹配到 begin:', id)\n        return\n      }\n      started.delete(id)\n      const meta = steps.find((s) => s.id === id)\n      if (!meta) return\n      meta.ms = Date.now() - t0\n      meta.tokens = tokens\n    },\n    register(id: string, kind: Step['kind'], label: string) {\n      const s: Step = { id, kind, label, ms: 0, tokens: 0 }\n      steps.push(s)\n      return s\n    },\n    report() {\n      const total = steps.reduce((s, x) => s + x.ms, 0)\n      return {\n        steps: steps.map((s) => ({ ...s })),\n        totalMs: total,\n        tokens: steps.reduce((s, x) => s + x.tokens, 0),\n        slowest: steps.slice().sort((a, b) => b.ms - a.ms)[0],\n      }\n    },\n  }\n}\n\n/** 审批：返回 promise，支持批准与超时，且清理定时器 */\nfunction awaitApproval(timeoutMs = 2000): Promise<'approve' | 'reject' | 'timeout'> {\n  return new Promise((resolve) => {\n    const timer = setTimeout(() => resolve('timeout'), timeoutMs)\n    // 真实项目里把 resolve 存起来，供 approve(callId) / reject(callId) 调用\n    const done = (v: 'approve' | 'reject') => {\n      clearTimeout(timer)\n      resolve(v)\n    }\n    ;(globalThis as unknown as { __approve: typeof done }).__approve = done\n  })\n}\n\n// ---- 演示：三步任务 + 归因 ----\nconst tracker = createRunTracker()\n\nasync function run() {\n  const s1 = tracker.register('s1', 'think', '规划步骤')\n  tracker.begin('s1', 'think', '规划步骤')\n  await new Promise((r) => setTimeout(r, 60))\n  tracker.end('s1', 320)\n\n  const s2 = tracker.register('s2', 'tool', '检索文档')\n  tracker.begin('s2', 'tool', '检索文档')\n  await new Promise((r) => setTimeout(r, 120))\n  tracker.end('s2', 80)\n\n  // 危险动作前挂住等审批；这里演示超时分支\n  const verdict = await awaitApproval(50)\n  console.log('审批结果：', verdict)\n\n  const s3 = tracker.register('s3', 'answer', '生成回答')\n  tracker.begin('s3', 'answer', '生成回答')\n  await new Promise((r) => setTimeout(r, 80))\n  tracker.end('s3', 640)\n\n  const rep = tracker.report()\n  console.log('总耗时', rep.totalMs, 'ms / token', rep.tokens, '/ 最慢步骤', rep.slowest.label)\n  console.log(rep.steps.map((s) => `${s.label}:${s.ms}ms`).join(' | '))\n}\n\nrun()\n",
+          "quiz": [
+            {
+              "q": "用户点「停止」后，前端 `abort()` 断流，服务端仍在继续跑。后果是？",
+              "options": [
+                "没有任何后果，连接已断",
+                "服务端继续执行并计费，用户却以为已经停止",
+                "会导致前端崩溃",
+                "会让 SSE 协议失效"
+              ],
+              "answer": 1,
+              "explain": "断流只是关掉客户端连接，服务端任务仍在跑、仍然消耗 token 与工具配额。中断必须在协议层有 cancel 语义（服务端在步骤边界检查取消标志），UI 上也要区分「已停止」与「停止中」。"
+            },
+            {
+              "q": "危险工具执行前的审批流程，正确的是？",
+              "options": [
+                "前端拿到参数后自己弹窗，确认后直接执行",
+                "服务端挂住并下发 pending，前端展示参数与影响，用户批准后服务端执行，且必须支持超时",
+                "让模型在文本里询问用户是否继续",
+                "执行后如果错了再回滚"
+              ],
+              "answer": 1,
+              "explain": "审批是服务端状态机的一部分（挂住—批准—执行），必须有超时与过期策略。前端自行确认无法阻止其它入口调用；让模型用自然语言询问不可靠且无法强约束；「先做后回滚」对不可逆操作不成立。"
+            },
+            {
+              "q": "前端展示 token 用量时应该？",
+              "options": [
+                "用字符数估算，误差可接受",
+                "展示服务端下发的真实用量，前端只做归因与展示",
+                "按 1 汉字 = 1 token 计算",
+                "不展示，避免用户焦虑"
+              ],
+              "answer": 1,
+              "explain": "分词在模型侧，前端估不准。估算值与账单对不上会引发信任问题。正确做法是服务端在事件里带 usage，前端按步骤聚合展示。不展示则让用户无法判断成本，也不利于产品决策。"
+            },
+            {
+              "q": "审批弹窗用全屏 modal 阻塞交互，主要问题是什么？",
+              "options": [
+                "性能开销大",
+                "用户需要查看上下文（完整调用链、参数）才能决策，阻塞式弹窗反而妨碍判断",
+                "modal 无法接收键盘事件",
+                "移动端不支持 modal"
+              ],
+              "answer": 1,
+              "explain": "审批本质是「基于信息的决策」，用户往往要往上翻看这次调用前发生了什么。全屏阻塞把上下文挡掉，只能盲选。用可并存的卡片/侧栏更合适。性能、键盘、移动端都不是关键问题。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "af-canvas",
+      "name": "编排画布与性能",
+      "goal": "把「拖拽式工作流设计器」拆成三件可验证的事：坐标与命中测试、节点图与撤销、长列表与渲染调度；并用性能预算与流式 E2E 让这些优化有数可依。",
+      "lessons": [
+        {
+          "id": "af-10",
+          "title": "画布地基：三层坐标、缩放平移与命中测试",
+          "minutes": 46,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n第一版拖拽是这样的：`onMouseMove` 里用 `e.clientX` 直接设置节点位置。\n\n```ts\nnode.x = e.clientX\nnode.y = e.clientY\n```\n\n画布缩放到 50% 时，节点跑得比鼠标快一倍；缩放到 200% 时跟不上；平移之后整体偏移。用户第一句反馈是「拖不准」。\n\n第二个场景是「所有节点都跟着抖」。为了省事，把节点位置放在**屏幕坐标**里，缩放时遍历所有节点重算。100 个节点每次缩放都要写 100 次状态，滚轮一滚就掉帧。\n\n第三个场景是「点不中」。用 DOM 元素做节点时，命中测试靠浏览器；一旦改成 canvas 渲染，`click` 只给一个坐标，你必须自己判断点到了哪个节点、哪个端口 —— 没写这个逻辑，点击就完全没反应。\n\n## 二、原理：它到底怎么运作\n\n第一，**必须区分三层坐标**：屏幕坐标（事件给的 clientX/Y）、画布视口坐标（含平移缩放）、图坐标（节点自身的逻辑位置）。三者之间用一次仿射变换换算：`world = (screen - offset) / scale`。所有节点位置**只存图坐标**，渲染时再变换 —— 这样缩放平移只改 offset/scale 两个数，不动业务数据。\n\n第二，**变换要写成可逆的一对函数**：`screenToWorld(p)` 与 `worldToScreen(p)`。所有交互入口（拖拽、框选、双击、连线端点）都必须先转成图坐标再算，这是「拖得准」的唯一前提。\n\n第三，**缩放要以指针为锚点。** 简单按中心缩放会让人「追不上」节点：正确做法是让指针下的那个图坐标点在缩放前后保持不动 —— 解一下 `screen = world * scale + offset` 即可。\n\n第四，**渲染层选型取决于规模与交互。** SVG/DOM：节点几百个以内，天然支持命中和无障碍、样式用 CSS；Canvas：上千节点/连线，自己写命中测试与重绘；WebGL：上万。别一上来就 canvas —— 可访问性与调试成本会翻倍。\n\n第五，**命中测试从粗到细。** 先用包围盒粗筛（O(n) 也能接受，几千个节点仍够快），再对候选做精确判定；连线的判定用「点到线段距离 < 阈值」。端口（连接点）比节点小得多，要单独放大命中半径（视觉 6px，命中 14px），否则移动端根本连不上。\n\n## 三、代码逐行\n\n下面实现 `Viewport`（offset + scale）与三层坐标换算，以及以指针为锚点的缩放、包围盒命中测试。\n\n关键行说明：\n\n第一，`screenToWorld` 里先减 offset 再除 scale，顺序不能反（矩阵乘法的顺序决定结果）。\n\n第二，`zoomAt(point, nextScale)` 先算出指针处的世界坐标，缩放后再反解 offset，保证该点在屏幕上不动。示例里用断言验证误差 < 0.01。\n\n第三，`hitTest` 返回最上层（数组末尾优先）的命中项。绘制顺序是从下往上，命中就要从上往下找。\n\n第四，`nodeRect` 用图坐标算包围盒，**不要**用屏幕坐标，否则缩放后判定全错。\n\n## 四、三个常见误区\n\n### 误区一：把 scale 应用到节点坐标上\n\n`node.x *= 1.2` 这种写法在缩放两次之后就回不去了。缩放只应该改视口（offset/scale），节点数据始终是图坐标。\n\n### 误区二：`clientX` 与 `offsetX` 混用\n\n`offsetX` 是相对事件目标元素的，一旦事件目标变成子元素（比如节点内部的文字），值就跳。统一用 `clientX` 减去画布容器的 `getBoundingClientRect().left`。\n\n### 误区三：用 CSS transform 做缩放，但用未变换的坐标算命中\n\n视觉上缩放生效了，命中测试还用原始坐标 —— 表现为「看得见点不中」。要么在命中前统一换算，要么不用 CSS transform（直接算布局）。\n\n## 五、边界与代价\n\n变换矩阵用一个对象 `{x, y, k}` 就够（只做平移与等比缩放）；一旦要支持旋转，就得换成 3×3 矩阵并且命中测试要逆变换，复杂度显著上升 —— 工作流编辑器通常不需要旋转。\n\ncanvas 方案要自己处理 DPR（`devicePixelRatio`）与重绘失效，文字渲染要手动换行。这些成本要在选型时算进去。\n\n反例：如果画布只有十几个节点、只读展示（比如展示一次运行的执行图），用 SVG + CSS 动画最省事，别上 canvas。\n\n## 六、动手任务\n\n第一，实现 `screenToWorld` / `worldToScreen`，写往返断言：任意点经过两次转换误差 < 0.001。\n\n第二，实现 `zoomAt`，验证「指针处的世界坐标在缩放前后不变」。\n\n第三，实现 `hitTest`（节点 + 线段），并给端口设置比视觉更大的命中半径，用三个边界点（正中心、边缘、刚好在半径外）验证。\n\n## 七、一句话总结\n\n- 三层坐标要分清：屏幕 / 视口 / 图；节点只存图坐标。\n- 缩放平移只改 offset 与 scale，不动业务数据。\n- 缩放以指针为锚点，先算世界坐标再反解 offset。\n- 命中测试从包围盒到精确判定，端口命中半径要放大。\n- 规模决定渲染层：几十上百用 SVG/DOM，上千再上 canvas。\n",
+          "code": "// af-10 可运行示例：三层坐标换算 + 指针锚点缩放 + 命中测试\n// 运行方式：tsx af-10.ts\n\ntype Pt = { x: number; y: number }\ntype Viewport = { x: number; y: number; k: number } // 平移 + 缩放\ntype Node = { id: string; x: number; y: number; w: number; h: number }\n\n/** 屏幕坐标 → 图坐标（先减平移，再除缩放） */\nconst screenToWorld = (p: Pt, v: Viewport): Pt => ({ x: (p.x - v.x) / v.k, y: (p.y - v.y) / v.k })\n\n/** 图坐标 → 屏幕坐标 */\nconst worldToScreen = (p: Pt, v: Viewport): Pt => ({ x: p.x * v.k + v.x, y: p.y * v.k + v.y })\n\n/** 以指针为锚点缩放：指针下的世界坐标保持不动 */\nfunction zoomAt(p: Pt, nextK: number, v: Viewport): Viewport {\n  const world = screenToWorld(p, v)\n  return { k: nextK, x: p.x - world.x * nextK, y: p.y - world.y * nextK }\n}\n\n/** 包围盒命中：从上层往下找（数组末尾优先） */\nfunction hitTest(nodes: Node[], world: Pt): Node | null {\n  for (let i = nodes.length - 1; i >= 0; i--) {\n    const n = nodes[i]\n    if (world.x >= n.x && world.x <= n.x + n.w && world.y >= n.y && world.y <= n.y + n.h) return n\n  }\n  return null\n}\n\n// ---- 验证 ----\nconst v0: Viewport = { x: 40, y: 20, k: 1 }\n\n// 1) 往返一致\nconst w = screenToWorld({ x: 300, y: 220 }, v0)\nconst s = worldToScreen(w, v0)\nconsole.log('往返误差', Math.abs(s.x - 300), Math.abs(s.y - 220))\n\n// 2) 指针锚点缩放：缩放前后指针处的世界坐标不变\nconst anchor = { x: 300, y: 220 }\nconst before = screenToWorld(anchor, v0)\nconst v1 = zoomAt(anchor, 1.8, v0)\nconst after = screenToWorld(anchor, v1)\nconsole.log('锚点漂移', Math.abs(after.x - before.x), Math.abs(after.y - before.y), '新视口', v1)\n\n// 3) 命中测试（注意用图坐标）\nconst nodes: Node[] = [\n  { id: 'n1', x: 0, y: 0, w: 120, h: 60 },\n  { id: 'n2', x: 100, y: 40, w: 120, h: 60 },\n]\nconsole.log(hitTest(nodes, { x: 110, y: 50 })?.id) // n2（后绘制在上层）\nconsole.log(hitTest(nodes, { x: 10, y: 10 })?.id)  // n1\nconsole.log(hitTest(nodes, { x: 400, y: 400 }))    // null\n",
+          "quiz": [
+            {
+              "q": "画布缩放后拖拽位置错乱，最可能的原因？",
+              "options": [
+                "事件没有 preventDefault",
+                "把屏幕坐标直接当成图坐标使用，没有除以 scale 并减去平移量",
+                "节点数量太多",
+                "CSS transform 无法与 JS 事件配合"
+              ],
+              "answer": 1,
+              "explain": "clientX/Y 是屏幕坐标，缩放平移后与图坐标不再一致，必须经 screenToWorld 换算。节点数量影响性能不影响准度；CSS transform 与事件可以配合（只是要注意坐标系）；preventDefault 与位置错乱无关。"
+            },
+            {
+              "q": "以指针为锚点做缩放，正确的算法是？",
+              "options": [
+                "直接改 scale，节点位置按比例缩放",
+                "先用旧视口把指针换成世界坐标，再用新 scale 反解 offset，使该点在屏幕上不动",
+                "把画布中心作为缩放原点即可",
+                "缩放时禁用拖拽"
+              ],
+              "answer": 1,
+              "explain": "锚点缩放的本质是「让指针下的世界点保持在同一屏幕位置」，所以要解 offset = p - world * k。按中心缩放会让用户觉得「追不上」；按比例改节点位置会破坏数据；禁用拖拽不解决问题。"
+            },
+            {
+              "q": "关于节点渲染层选型，下面判断合理的是？",
+              "options": [
+                "一律用 canvas，性能最好",
+                "几十到几百个节点优先 SVG/DOM，可访问性与样式成本低；上千再考虑 canvas",
+                "一律用 WebGL，未来不会落后",
+                "用 DOM 就一定比 canvas 快"
+              ],
+              "answer": 1,
+              "explain": "SVG/DOM 天然支持命中、焦点、屏幕阅读器与 CSS 样式，几百节点完全够用；canvas 需要自己实现命中与重绘，可访问性几乎为零，规模上千才划算。WebGL 只在极端规模有意义，开发成本最高。"
+            },
+            {
+              "q": "连线/端口的命中测试，下面哪条最重要？",
+              "options": [
+                "端口命中半径要显著大于视觉半径，否则移动端几乎点不中",
+                "连线必须用 SVG path 才能命中",
+                "命中测试必须先做全量精确判定，不用包围盒粗筛",
+                "连线判定应该用直线距离而不是点到线段距离"
+              ],
+              "answer": 0,
+              "explain": "端口视觉 6px 时手指几乎点不中，命中半径要放大到 12~16px。全量精确判定在大图上是浪费（先包围盒粗筛）；连线多是折线/贝塞尔，必须用点到线段（或分段）距离；用直线距离会误判。"
+            }
+          ]
+        },
+        {
+          "id": "af-11",
+          "title": "节点图与撤销：环检测、类型校验、命令模式",
+          "minutes": 47,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n用户把 A 的输出连到 B 的输入，又把 B 的输出连回 A —— 保存成功，运行的时候死循环，服务端 30 秒超时。前端本该在连线时就拦住。\n\n第二个场景是类型不匹配：图片节点的输出去连了「文本」输入口。运行时报 `Cannot read property 'split' of object`，用户完全不知道哪里错了。\n\n第三个场景是撤销。用「每次操作前深拷贝整个图」实现撤销：20 个节点时还行，节点里有大字段（prompt 模板、示例数据）时每次拖拽都拷几 MB，撤销栈 50 步直接吃掉 100MB+。\n\n## 二、原理：它到底怎么运作\n\n第一，**图就是两个集合：节点 + 边。** 边存 `{from: {nodeId, port}, to: {nodeId, port}}`，不存坐标。所有布局信息在节点上，所有语义在边上 —— 混在一起后序列化与校验都会很难。\n\n第二，**环检测用 DFS 三色标记或拓扑排序。** 每次「准备添加边」时先假设已添加，跑一次环检测；有环就拒绝并提示「这条连线会形成循环」。用拓扑排序的好处是顺带能给出执行顺序。\n\n第三，**端口类型校验靠声明。** 每个端口带 `type`（text/image/json/any），连接时校验 `any` 兼容一切、其余必须相等。校验放在「连线前」，而不是运行时。\n\n第四，**撤销用命令模式，不用快照。** 每个操作是一个 `{do, undo}` 对：`addNode` / `removeNode` / `moveNode`（合并连续拖拽）/ `connect` / `disconnect`。命令执行后压栈，撤销时调用 `undo` 并反向应用。这样内存与操作数成正比，与节点内容大小无关。\n\n第五，**序列化要带版本。** `{version: 3, nodes, edges}`，读取时按版本迁移。没有版本号的工作流文件，半年后必然出现「老文件打不开」。\n\n## 三、代码逐行\n\n下面实现 `canConnect(graph, edge)`（类型校验 + 环检测）与一个最小命令栈（含拖拽合并）。\n\n关键行说明：\n\n第一，`canConnect` 先做类型校验（便宜），再做环检测（贵）。顺序反了会让明显非法的连线也跑一遍图遍历。\n\n第二，`createsCycle` 从 `to.nodeId` 出发找 `from.nodeId`：如果已经能走到，说明新边闭合了一个环。**方向不能搞反** —— 新边是 from→to，所以要检查「从 to 能否到达 from」。\n\n第三，`mergeKey` 让连续拖拽合并成一条命令（否则一次拖动产生 200 条历史，撤销一次只退 1px）。\n\n第四，`apply` 与 `undo` 都返回新图（不可变），让 UI 的重渲染与历史记录都基于引用比较。\n\n## 四、三个常见误区\n\n### 误区一：在运行时才发现环\n\n现象是「保存成功、运行超时」。连线时刻校验是唯一正确的时机，因为那时用户还能理解为什么被拒。\n\n### 误区二：撤销用 JSON 深拷贝\n\n简单，但内存与性能都会崩。命令模式写的代码多一些，但可以只记录「哪些字段变了」。\n\n### 误区三：把画布坐标存进边\n\n边的两端本来只需要节点与端口 id；存坐标后节点移动就要同步改所有相关边，必然漏。\n\n## 五、边界与代价\n\n命令模式要处理「复合命令」：框选删除 10 个节点应该是一次撤销，而不是 10 次。做法是把它们打包成一个 `BatchCommand`。\n\n环检测在图很大时（上千节点、上千边）每次连线都跑一遍遍历，成本可接受（O(V+E) 毫秒级），但如果是拖拽过程中实时校验就要加缓存或防抖。\n\n反例：只读的执行图（展示一次运行）不需要撤销栈与环检测 —— 它不会变。\n\n## 六、动手任务\n\n第一，实现 `canConnect`，用三个用例验证：类型不匹配被拒、自环被拒、形成 A→B→A 的边被拒。\n\n第二，实现命令栈，要求连续拖拽合并为一条历史，框选删除合并为一条。\n\n第三，给图加 `version` 字段并写一个 `migrate()`，把 v1 的 `links` 字段名迁移到 v2 的 `edges`。\n\n## 七、一句话总结\n\n- 图 = 节点集合 + 边集合；边只存 id 与端口，不存坐标。\n- 连线前校验：先类型后环检测；环检测方向从 to 找 from。\n- 撤销用命令模式，连续拖拽与批量删除都要合并。\n- 序列化必须带版本号，否则老文件必然打不开。\n- 复合操作打包成 BatchCommand，一次撤销回到操作前。\n",
+          "code": "// af-11 可运行示例：连线校验（类型 + 环检测）+ 命令栈（拖拽合并）\n// 运行方式：tsx af-11.ts\n\ntype PortType = 'text' | 'image' | 'json' | 'any'\ntype Graph = { nodes: { id: string; inputs: Record<string, PortType>; outputs: Record<string, PortType> }[]; edges: Edge[] }\ntype Edge = { from: string; fromPort: string; to: string; toPort: string }\n\nconst nodeOf = (g: Graph, id: string) => g.nodes.find((n) => n.id === id)\n\n/** 新边是否会让图成环：从 to 出发能否回到 from */\nfunction createsCycle(g: Graph, e: Edge): boolean {\n  const adj = new Map<string, string[]>()\n  for (const x of g.edges) {\n    if (!adj.has(x.from)) adj.set(x.from, [])\n    adj.get(x.from)!.push(x.to)\n  }\n  const stack = [e.to]\n  const seen = new Set<string>()\n  while (stack.length) {\n    const cur = stack.pop()!\n    if (cur === e.from) return true\n    if (seen.has(cur)) continue\n    seen.add(cur)\n    for (const nx of adj.get(cur) ?? []) stack.push(nx)\n  }\n  return false\n}\n\n/** 先便宜的类型校验，再贵的环检测 */\nfunction canConnect(g: Graph, e: Edge): { ok: true } | { ok: false; reason: string } {\n  const from = nodeOf(g, e.from)\n  const to = nodeOf(g, e.to)\n  if (!from || !to) return { ok: false, reason: '节点不存在' }\n  if (e.from === e.to) return { ok: false, reason: '不能连到自身' }\n\n  const outType = from.outputs[e.fromPort]\n  const inType = to.inputs[e.toPort]\n  if (!outType || !inType) return { ok: false, reason: '端口不存在' }\n  if (outType !== 'any' && inType !== 'any' && outType !== inType) {\n    return { ok: false, reason: `类型不匹配：${outType} → ${inType}` }\n  }\n  if (createsCycle(g, e)) return { ok: false, reason: '会形成环' }\n  return { ok: true }\n}\n\n// ---- 命令栈：连续拖拽合并 ----\ntype Cmd = { key: string; label: string; apply: (g: Graph) => Graph; revert: (g: Graph) => Graph }\n\nfunction createHistory(initial: Graph) {\n  let graph = initial\n  const undoStack: Cmd[] = []\n  const redoStack: Cmd[] = []\n  return {\n    get graph() {\n      return graph\n    },\n    exec(cmd: Cmd) {\n      // 同一个 key 的连续操作合并成一条（拖拽）\n      const top = undoStack[undoStack.length - 1]\n      if (top && top.key === cmd.key) {\n        undoStack[undoStack.length - 1] = { ...cmd, revert: top.revert } // 保留最初的 revert\n      } else {\n        undoStack.push(cmd)\n      }\n      redoStack.length = 0\n      graph = cmd.apply(graph)\n    },\n    undo() {\n      const cmd = undoStack.pop()\n      if (!cmd) return\n      graph = cmd.revert(graph)\n      redoStack.push(cmd)\n    },\n    get depth() {\n      return undoStack.length\n    },\n  }\n}\n\n// ---- 验证 ----\nconst g: Graph = {\n  nodes: [\n    { id: 'A', inputs: { in: 'text' }, outputs: { out: 'text' } },\n    { id: 'B', inputs: { in: 'text' }, outputs: { out: 'json' } },\n    { id: 'C', inputs: { in: 'image' }, outputs: { out: 'image' } },\n  ],\n  edges: [],\n}\nconsole.log(canConnect(g, { from: 'A', fromPort: 'out', to: 'B', toPort: 'in' }))  // ok\nconsole.log(canConnect(g, { from: 'A', fromPort: 'out', to: 'C', toPort: 'in' }))  // 类型不匹配\nconsole.log(canConnect(g, { from: 'A', fromPort: 'out', to: 'A', toPort: 'in' }))  // 不能连自己\n\nconst g2: Graph = { ...g, edges: [{ from: 'A', fromPort: 'out', to: 'B', toPort: 'in' }] }\nconsole.log(canConnect(g2, { from: 'B', fromPort: 'out', to: 'A', toPort: 'in' }))  // 会形成环\n\nconst h = createHistory(g)\nfor (let i = 0; i < 50; i++) {\n  h.exec({ key: 'move:A', label: '拖动 A', apply: (x) => x, revert: (x) => x })\n}\nconsole.log('合并后撤销栈深度', h.depth) // 1\n",
+          "quiz": [
+            {
+              "q": "判断「添加一条新边是否成环」的正确做法是？",
+              "options": [
+                "从 from 出发看能否到达 to",
+                "从 to 出发看能否到达 from（能到达则新边闭合了环）",
+                "统计入度是否为 0",
+                "检查节点数量是否超过上限"
+              ],
+              "answer": 1,
+              "explain": "新边是 from→to，若图中已有路径 to→…→from，加上它就成环。从 from 找 to 恰恰是「正常连通」，判断反了会把合法连线拒掉。入度/节点数都与环无关。"
+            },
+            {
+              "q": "撤销栈用「每步深拷贝整个图」实现，主要问题是？",
+              "options": [
+                "撤销会丢数据",
+                "内存与操作数×图体积成正比，节点带大字段时会暴涨，拖拽也变慢",
+                "无法支持跨节点操作",
+                "必须配合服务端才能用"
+              ],
+              "answer": 1,
+              "explain": "快照的正确性没问题，问题在成本：50 步 × 几 MB 就是上百 MB，且每次操作都要拷贝。命令模式只记录「变了什么」，成本与操作数成正比。"
+            },
+            {
+              "q": "连续拖拽一个节点 200 次鼠标移动，撤销应该表现成？",
+              "options": [
+                "撤销 200 次才能回到拖动前",
+                "一次撤销回到拖动前（把连续拖拽合并成一条命令）",
+                "无法撤销",
+                "撤销后节点回到上一个节点位置"
+              ],
+              "answer": 1,
+              "explain": "用户心智里「一次拖动」是一个操作。不合并的话撤销一次只退 1px，体验崩坏。实现上给同类操作一个 key，同 key 连续操作保留最初的 revert、更新最终的 apply。"
+            },
+            {
+              "q": "工作流文件不带 schema 版本号，半年后最可能出现什么？",
+              "options": [
+                "文件体积变大",
+                "模型结构演进后老文件无法解析，或解析出来语义错乱",
+                "无法压缩",
+                "会导致环检测失效"
+              ],
+              "answer": 1,
+              "explain": "没有 version 就无法判断「这份数据该按哪套规则读」，老文件要么打不开、要么字段被误读（比如 links 被当成 edges）。带上版本并在读取时迁移是唯一可控的做法。"
+            }
+          ]
+        },
+        {
+          "id": "af-12",
+          "title": "长列表与渲染调度：把 1000 条消息做顺",
+          "minutes": 48,
+          "lang": "ts",
+          "content": "## 一、先看一个会出事的场景\n\n对话到 1000 条时，打开会话要 6 秒白屏 —— 因为一次性渲染了 1000 条消息，每条都带 Markdown 解析与代码高亮。\n\n上了虚拟化之后出现新问题：**跳**。滚动时列表高度不断变化（消息高度不等、图片加载后变高、流式消息在增长），滚动条乱跳，用户根本定位不到自己读到哪。\n\n第三个场景是「输入框打字掉帧」。流式回复还在跑，用户同时在输入框里打字，每次按键都卡 200ms —— 因为输入触发整棵列表重渲染，而高优先级（输入）与低优先级（列表更新）没有被区分。\n\n## 二、原理：它到底怎么运作\n\n第一，**虚拟化要解决的是「只渲染可见区」**，但难点全在「高度不定」。三种做法：预估值 + 测量回填（react-virtuoso 一类）、固定行高（对话产品常做「摘要 + 展开」强制等行高）、分段渲染（先渲染最近 50 条，往上滚再加载）。对话场景推荐第三种 + 第一种，因为「最近的内容」才是热数据。\n\n第二，**滚动锚定（scroll anchoring）**：当在底部时，内容增长要让视图保持在底部；当用户上翻时，内容增长不能移动当前阅读位置。做法是记录「锚点元素 + 相对偏移」，在高度变化后回填 `scrollTop`。\n\n第三，**渲染要分优先级。** React 的 `useDeferredValue` / `useTransition` 能把「不紧急的更新」降级：输入框的值是紧急的，列表的重新渲染可以延后。这不是玄学 —— 它把长任务切成小片，让输入先响应。\n\n第四，**开销要能定位。** 先用 React DevTools Profiler 找出「哪些组件在重渲染、花了多久」，再优化。没有测量的优化 90% 是错的 —— 你以为在优化 Markdown，实际瓶颈是某个每次新建的 context。\n\n第五，**要做性能预算。** 比如：首屏可交互 < 1.5s、流式期间帧时间 < 16ms（p95）、单条消息重渲染 < 2ms。把预算写成 E2E 断言（Playwright 里量 `performance.now()`），否则优化会随迭代慢慢退化。\n\n## 三、代码逐行\n\n下面实现一个「窗口化 + 高度缓存 + 锚点保持」的最小列表模型（不含 DOM），并演示「在底部时保持贴底、上翻时保持阅读位置」。\n\n关键行说明：\n\n第一，`heights` 用 Map 缓存「已测量的真实高度」，未测量的用 `estimate` 兜底。这解决「不等高」：只有渲染过的项才有真值。\n\n第二，`offsets` 每次由 heights 前缀和算出（或用 Fenwick 树做增量）。示例用简单前缀和，1000 项完全够。\n\n第三，`visibleRange(scrollTop, viewportH)` 二分查找起点，再顺序累计到超出视口。二分是必要的：线性扫描在快速滚动时会拖慢。\n\n第四，`keepAnchor(prev, next)` 在「用户不在底部」时，把「锚点项 + 偏移」映射回新的 scrollTop，避免跳动。\n\n## 四、三个常见误区\n\n### 误区一：虚拟化后仍把全部数据传给子组件\n\n`items={allMessages}` 传给虚拟列表容器，容器每次仍要遍历全部数据算偏移 —— 数据量一大照样卡。偏移要用缓存结构，不要每次 `reduce`。\n\n### 误区二：用 `useMemo` 缓存 Markdown 但依赖整条消息对象\n\n消息对象每帧都换新（流式），memo 必然失效。要依赖 `part.text` 这样的最小字段，或者按「稳定前缀」缓存解析结果。\n\n### 误区三：忽略图片/代码块的异步增高\n\n图片 `onLoad` 之后高度变了，如果没回填，滚动位置就会漂。必须监听尺寸变化（`ResizeObserver`）并更新 heights。\n\n## 五、边界与代价\n\n虚拟化的代价是「搜索 / 打印 / 全选」变麻烦：只渲染可见区时这些功能要额外实现（要么临时全量渲染，要么在数据层做）。\n\n窗口化 + 动态高度 + 流式增长三者叠加是这类产品最难的性能题，建议先做「分段渲染（最近 N 条）+ 折叠历史」，把 1000 条变成 50 条，再考虑虚拟化 —— 往往这时已经不需要虚拟化了。\n\n反例：消息数常年 < 100 的助手，虚拟化是纯负担（可访问性、Ctrl+F、复制都会退化）。\n\n## 六、动手任务\n\n第一，实现 `visibleRange`，用 1000 项、估算高度 80、视口 800 验证：可见区项数应在 12~16 之间。\n\n第二，实现「测量回填」：模拟前 20 项真实高度为 120，验证偏移表更新后可见区计算正确。\n\n第三，实现锚点保持：模拟用户在第 300px 处、上方插入一条高度 +100 的消息，验证 scrollTop 同步 +100（阅读位置不变）。\n\n## 七、一句话总结\n\n- 虚拟化的核心是「可见区 + 高度缓存 + 偏移索引」，难点在不等高。\n- 锚点保持：在底部就贴底，上翻就锁住阅读位置。\n- 输入与列表要分优先级，用 `useDeferredValue` / `useTransition`。\n- 先测量再优化：Profiler → 定位 → 改一处 → 复测。\n- 先做分段渲染与折叠历史，往往比上虚拟化更划算。\n",
+          "code": "// af-12 可运行示例：窗口化列表（高度缓存 + 二分定位 + 锚点保持）\n// 运行方式：tsx af-12.ts\n\ntype Range = { start: number; end: number }\n\nfunction createLayout(count: number, estimate: number) {\n  const heights = new Map<number, number>()\n  const heightOf = (i: number) => heights.get(i) ?? estimate\n\n  /** 前缀和偏移（示例用简单累计，几十万项时要换 Fenwick 树做增量） */\n  function offsets(): number[] {\n    const out = new Array<number>(count + 1)\n    out[0] = 0\n    for (let i = 0; i < count; i++) out[i + 1] = out[i] + heightOf(i)\n    return out\n  }\n\n  /** 二分找起点，再顺序累计到超出视口 */\n  function visibleRange(scrollTop: number, viewportH: number): Range {\n    const off = offsets()\n    let lo = 0\n    let hi = count - 1\n    while (lo < hi) {\n      const mid = (lo + hi + 1) >> 1\n      if (off[mid] <= scrollTop) lo = mid\n      else hi = mid - 1\n    }\n    let end = lo\n    while (end < count && off[end + 1] - scrollTop <= viewportH) end++\n    return { start: lo, end: Math.min(count, end) }\n  }\n\n  return {\n    heightOf,\n    offsets,\n    visibleRange,\n    measure(i: number, h: number) {\n      heights.set(i, h)\n    },\n    totalHeight() {\n      return offsets()[count]\n    },\n  }\n}\n\n// 1) 基本可见区\nconst L = createLayout(1000, 80)\nconsole.log(L.visibleRange(0, 800))       // { start: 0, end: 10 }\nconsole.log('总高', L.totalHeight())      // 80000\n\n// 2) 测量回填：前 20 项实际 120\nfor (let i = 0; i < 20; i++) L.measure(i, 120)\nconsole.log(L.visibleRange(0, 800))       // { start: 0, end: 6 } —— 每项更高，可见条数变少\nconsole.log('新总高', L.totalHeight())    // 20*120 + 980*80 = 80800\n\n// 3) 锚点保持：用户不在底部时，上方插入一条 +100 高度的消息，scrollTop 要 +100\nfunction keepAnchor(scrollTop: number, insertedHeight: number, atTop: boolean): number {\n  return atTop ? scrollTop + insertedHeight : scrollTop\n}\nconsole.log('上翻时保持阅读位置', keepAnchor(300, 100, true))   // 400\nconsole.log('在底部时贴底', keepAnchor(300, 100, false))        // 300（由贴底逻辑另行处理）\n",
+          "quiz": [
+            {
+              "q": "对话列表用了虚拟化之后，滚动条频繁跳动的最常见原因？",
+              "options": [
+                "虚拟化库有 bug",
+                "消息高度不定（图片加载、流式增长），未做测量回填与锚点保持",
+                "消息数量太多",
+                "没有使用 grid 布局"
+              ],
+              "answer": 1,
+              "explain": "动态高度是虚拟化最难的部分：没用真实测量就无法算准偏移，内容增长时若不做锚点保持，视图会漂。库本身通常没问题；数量多只是触发条件，不是根因；布局方式无关。"
+            },
+            {
+              "q": "流式回复期间用户同时在输入框打字，界面卡顿。最对症的处理是？",
+              "options": [
+                "给输入框加防抖",
+                "用 useDeferredValue / useTransition 把列表更新降级，优先保证输入响应",
+                "把消息列表改成 canvas 渲染",
+                "减少消息条数上限"
+              ],
+              "answer": 1,
+              "explain": "输入是高优先级交互，列表重渲染是低优先级，React 的并发特性正是用来分开这两类更新的。给输入防抖只会让用户觉得丢字；改 canvas 成本极高且不解决调度问题；砍条数是产品妥协而非技术解法。"
+            },
+            {
+              "q": "关于「先分段渲染还是先上虚拟化」，比较稳妥的顺序是？",
+              "options": [
+                "一律先上虚拟化，性能最好",
+                "先把 1000 条收敛成「最近 50 条 + 折叠历史」，往往已经够用，再按测量结果决定是否虚拟化",
+                "先做 canvas 渲染",
+                "先优化 Markdown 解析器"
+              ],
+              "answer": 1,
+              "explain": "分段 + 折叠能直接砍掉 95% 的渲染量，实现成本低、不牺牲可访问性与 Ctrl+F。虚拟化会带来搜索/打印/全选的额外成本，应该在测量证明「50 条也卡」之后再上。"
+            },
+            {
+              "q": "性能优化最可靠的做法是？",
+              "options": [
+                "照着别人的优化清单逐条做",
+                "先用 Profiler 等工具定位真实瓶颈，改一处、复测一处，并把预算写成可回归的断言",
+                "把所有组件都加 React.memo",
+                "把状态全部挪到 ref 里"
+              ],
+              "answer": 1,
+              "explain": "没有测量的优化大概率在优化错误的地方（常见瓶颈是 context 广播、新建回调、重复派生计算）。逐条照搬与全加 memo 都是盲目优化，还可能让代码更难维护、引入 bug。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
