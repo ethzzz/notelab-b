@@ -67,6 +67,8 @@ ThemePicker 保留（antd Modal 承载，写 /api/ui-config 的 background，即
 - 主要依赖：next 16.2.12 / react 19.2.4 / antd ^6.6.1 / @ant-design/nextjs-registry /
   @ant-design/icons / lucide-react / node-edge-tts / tailwindcss ^4（与 antd 共存，同 myapp）
 - 无新增环境变量（TTS 沿用默认 Kokoro `http://127.0.0.1:8880` + edge-tts 兜底）
+- 文档编辑用 [SuperDoc](https://www.superdoc.dev)（`superdoc` + `@superdoc/react`）做 DOCX 原生分页编辑，
+  社区版为 **AGPL-3.0**；本站为个人内部管理后台、不对外分发。正文以 `.docx` 字节存 `documents.content_docx`。
 
 ## 构建与启动
 
