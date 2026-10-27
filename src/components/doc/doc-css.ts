@@ -40,8 +40,19 @@ export const DOC_CSS = `
 .doc-mobile-aside{display:none;margin-bottom:18px;border:1px solid var(--doc-line);border-radius:10px;padding:8px 12px;background:var(--doc-card)}
 .doc-mobile-aside summary{cursor:pointer;font-size:13px;color:var(--doc-text)}
 .doc-mobile-aside-body{padding-top:10px}
+.doc-mobile-toc{margin-top:14px;padding-top:12px;border-top:1px solid var(--doc-line)}
+
+/* ---- 右栏：本页目录（实践项目详情专用；DocShell 传了 toc 才出现） ---- */
+.doc-toc{position:sticky;top:72px;flex:none;width:190px;max-height:calc(100vh - 88px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding-left:16px;border-left:1px solid var(--doc-line)}
+.doc-toc .doc-nav-section:last-child{margin-bottom:0}
+
+@media(max-width:1439px){
+  /* 1280–1439 这一档：三栏会把正文挤得太窄，右栏收窄而不是消失（否则这一档没有入口） */
+  .doc-toc{width:168px}
+}
 @media(max-width:1279px){
   .doc-aside{display:none}
+  .doc-toc{display:none}
   .doc-mobile-aside{display:block}
 }
 

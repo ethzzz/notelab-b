@@ -159,28 +159,30 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 		}
 	}, [current])
 
+	// 本页目录独立成右侧一栏（见 DocShell 的 toc）：它和项目目录挤在左列时，
+	// 两边都变窄、还各自要滚一遍；拆开后左列只管"选项目"，右列只管"跳章节"。
+	const tocNav =
+		current && current.toc.length > 1 ? (
+			<div className="doc-nav-section">
+				<div className="doc-nav-heading">本页目录</div>
+				<div className="doc-nav-list">
+					{current.toc.map((t) => (
+						<a
+							key={t.id}
+							href={`#${t.id}`}
+							className={`doc-nav-item is-sub${activeSection === t.id ? " is-active" : ""}`}
+							onClick={() => setActiveSection(t.id)}
+						>
+							<span className="doc-nav-text">{t.text}</span>
+						</a>
+					))}
+				</div>
+			</div>
+		) : null
+
 	const nav = (
 		<>
 			<div className="doc-nav-title">项目目录</div>
-
-			{/* 当前项目目录放在最上面：整库有 20+ 项，放到末尾要点进详情后先滚到底才看得见 */}
-			{current && current.toc.length > 1 && (
-				<div className="doc-nav-section">
-					<div className="doc-nav-heading">本页目录</div>
-					<div className="doc-nav-list">
-						{current.toc.map((t) => (
-							<a
-								key={t.id}
-								href={`#${t.id}`}
-								className={`doc-nav-item is-sub${activeSection === t.id ? " is-active" : ""}`}
-								onClick={() => setActiveSection(t.id)}
-							>
-								<span className="doc-nav-text">{t.text}</span>
-							</a>
-						))}
-					</div>
-				</div>
-			)}
 
 			<div className="doc-nav-section">
 				<div className="doc-nav-heading">索引</div>
@@ -221,7 +223,7 @@ export default function ProjectsView({ projects, pid }: { projects: StudyProject
 
 	if (current) {
 		return (
-			<DocShell aside={nav} asideTitle="项目目录">
+			<DocShell aside={nav} asideTitle="项目目录" toc={tocNav}>
 				<article>
 					<header className="doc-article-head">
 						<div className="doc-head-row">
