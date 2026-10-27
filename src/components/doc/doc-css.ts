@@ -43,8 +43,11 @@ export const DOC_CSS = `
 .doc-mobile-toc{margin-top:14px;padding-top:12px;border-top:1px solid var(--doc-line)}
 
 /* ---- 右栏：本页目录（实践项目详情专用；DocShell 传了 toc 才出现） ---- */
+.doc-layout.has-toc{gap:28px}
 .doc-toc{position:sticky;top:72px;flex:none;width:190px;max-height:calc(100vh - 88px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding-left:16px;border-left:1px solid var(--doc-line)}
 .doc-toc .doc-nav-section:last-child{margin-bottom:0}
+/* 右栏只有 190px：沿用左栏 24px 的缩进会把标题挤到只剩几个字 */
+.doc-toc .doc-nav-item.is-sub{padding-left:14px}
 
 @media(max-width:1439px){
   /* 1280–1439 这一档：三栏会把正文挤得太窄，右栏收窄而不是消失（否则这一档没有入口） */
