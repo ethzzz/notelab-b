@@ -83,6 +83,14 @@ export const MD_BODY_CSS = `
 .md-body hr{border:none;border-top:1px solid rgba(128,128,128,.3);margin:1em 0}
 .md-body a{color:#1677ff}
 .md-body input[type=checkbox]{margin-right:.4em}
+/* 选中文本：必须显式接管，不能交给浏览器默认。
+   深色主题下 Chrome 的默认高亮是中性灰（约 #6c6c6c），而本页的引用块 / 行内代码文字
+   本身就是中性灰（rgba(128,128,128,.95)）—— 两者叠在一起实测只有 1.85:1，选中后反而
+   读不出选中了哪些字。这里用主色半透明底 + 强制正文色：被选中的「次要灰字」回到正文色，
+   浅色 / 深色两套主题各自的对比度都在 9:1 以上。
+   ⚠️ 与编辑器无关：CodeMirror 的选中态由 md-editor-impl 的 CM_CSS 管（.cm-selectionBackground）。 */
+.md-body ::selection{background-color:rgba(99,102,241,.28);color:#18181b}
+.dark .md-body ::selection{background-color:rgba(129,140,248,.32);color:#f4f4f5}
 `
 
 /** 纯预览（查看态） */
