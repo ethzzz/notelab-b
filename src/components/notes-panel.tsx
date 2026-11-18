@@ -8,8 +8,9 @@
 //
 // 接口契约以 NoteController 为准：每个入口都带 type，跨类型读写会被后端判 404。
 import { useCallback, useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import { Card, Table, Button, Input, Space, Popconfirm } from "antd"
-import { Plus, ArrowLeft, Save, Eye, PenLine, Trash2, NotebookPen, Download, FileText } from "lucide-react"
+import { Plus, ArrowLeft, Save, Eye, PenLine, Trash2, NotebookPen, Download, FileText, ExternalLink } from "lucide-react"
 import { apiJson, postJson } from "@/lib/api"
 import { toast } from "@/lib/toast"
 // MdEditor 默认导出已是「仅客户端 + 懒加载」，页面不用再自己 dynamic 包装（见 components/md-editor.tsx）
@@ -90,7 +91,14 @@ function downloadViaForm(filename: string, contentMd: string) {
   setTimeout(() => form.remove(), 1000)
 }
 
-export default function NotesPanel({ type = "note" }: { type?: DocType }) {
+export default function NotesPanel({
+  type = "note",
+  initialOpenId,
+}: {
+  type?: DocType
+  /** 新标签页入口：URL ?open=<id> 由页面读出来后传入，首次渲染直接进查看态 */
+  initialOpenId?: number
+}) {
   const cfg = PANEL[type]
   const Icon = cfg.icon
   /** 类型参数统一从这里拼，避免某个入口漏传 type 导致跨类型读写 */
@@ -108,6 +116,8 @@ export default function NotesPanel({ type = "note" }: { type?: DocType }) {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [view, setView] = useState<View | null>(null)
   const [saving, setSaving] = useState(false)
+  const [opening, setOpening] = useState(Boolean(initialOpenId))
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; id: number; title: string } | null>(null)
 
   const fetchData = useCallback((p: number, s: number, kw: string) => {
     setLoading(true)
@@ -121,12 +131,38 @@ export default function NotesPanel({ type = "note" }: { type?: DocType }) {
 
   useEffect(() => { fetchData(page, pageSize, q) }, [page, pageSize, q, fetchData])
 
-  async function openView(id: number) {
+  const openView = useCallback(async (id: number) => {
     try {
       const d: NoteDetail = await apiJson(`/api/notes/${id}?${tq}`)
       setView({ id: d.id, title: d.title, md: d.content_md || "", updated_at: d.updated_at })
     } catch (e: any) { toast.error(e.message || `打开${cfg.entity}失败`) }
-  }
+  }, [tq, cfg.entity])
+
+  // 新标签页：?open=<id> 首帧直接拉详情，避免先闪一下列表
+  useEffect(() => {
+    if (!initialOpenId) return
+    setOpening(true)
+    void openView(initialOpenId).finally(() => setOpening(false))
+  }, [initialOpenId, openView])
+
+  // 右键菜单：点击任意处 / 滚动 / 缩放 / Esc / 再次右键都关闭
+  useEffect(() => {
+    if (!ctxMenu) return
+    const close = () => setCtxMenu(null)
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close() }
+    window.addEventListener("click", close)
+    window.addEventListener("contextmenu", close, true)
+    window.addEventListener("scroll", close, true)
+    window.addEventListener("resize", close)
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("click", close)
+      window.removeEventListener("contextmenu", close, true)
+      window.removeEventListener("scroll", close, true)
+      window.removeEventListener("resize", close)
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [ctxMenu])
 
   async function openEdit(id: number) {
     try {
@@ -177,7 +213,17 @@ export default function NotesPanel({ type = "note" }: { type?: DocType }) {
   function backToList() {
     setDraft(null)
     setView(null)
+    // 新标签页入口带 ?open=，返回列表时清掉，刷新不会再跳回那一篇
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("open")) {
+      window.history.replaceState(null, "", window.location.pathname)
+    }
     fetchData(page, pageSize, q)
+  }
+
+  /** 新标签页打开：复用当前页面路径，只带 ?open=<id>，不新增受页面守卫约束的路由 */
+  function openInNewTab(id: number) {
+    const url = `${window.location.pathname}?open=${encodeURIComponent(String(id))}`
+    window.open(url, "_blank", "noopener,noreferrer")
   }
 
   /** 单篇下载：直接走服务端导出端点（/api/notes/{id}/export），原生下载 */
@@ -224,6 +270,16 @@ export default function NotesPanel({ type = "note" }: { type?: DocType }) {
       ),
     },
   ]
+
+  // ---------------- 新标签页直达：拉详情期间只显示占位 ----------------
+  if (opening) {
+    return (
+      <Card
+        loading
+        title={<span className="inline-flex items-center gap-2"><Icon size={17} /> 正在打开{cfg.entity}…</span>}
+      />
+    )
+  }
 
   // ---------------- 编辑视图 ----------------
   if (draft) {
@@ -303,12 +359,46 @@ export default function NotesPanel({ type = "note" }: { type?: DocType }) {
         loading={loading}
         columns={columns}
         dataSource={items}
+        onRow={(record: NoteMeta) => ({
+          onContextMenu: (e) => {
+            e.preventDefault()
+            setCtxMenu({ x: e.clientX, y: e.clientY, id: record.id, title: record.title })
+          },
+        })}
         pagination={{
           current: page, pageSize, total, showSizeChanger: true,
           onChange: (p, s) => { setPage(p); setPageSize(s) },
         }}
         locale={{ emptyText: cfg.empty }}
       />
+
+      {ctxMenu && typeof document !== "undefined" && createPortal(
+        <div
+          id="note-context-menu"
+          role="menu"
+          className="fixed z-[1000] min-w-[208px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+          style={{
+            left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 216)),
+            top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 76)),
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div className="truncate px-2 py-1 text-xs text-zinc-400">{ctxMenu.title}</div>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            onClick={() => {
+              openInNewTab(ctxMenu.id)
+              setCtxMenu(null)
+            }}
+          >
+            <ExternalLink size={14} /> 从新标签页打开
+          </button>
+        </div>,
+        document.body,
+      )}
     </Card>
   )
 }
